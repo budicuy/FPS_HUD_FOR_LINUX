@@ -1,0 +1,27 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Compiled binaries and shared libraries
+*.so
+*.so.*
+*.a
+*.o
+*.obj
+fpshud_test
+
+# Generated files
+VkLayer_FPSHUD_overlay.json
+
+# IDE & Editor files
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+*.swp
+*~
+.DS_Store
+
+# Benchmark CSV outputs in workspace
+*.csv

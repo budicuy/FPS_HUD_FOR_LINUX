@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Wrapper script for FPSHUD (enables OpenGL LD_PRELOAD + Vulkan Layer automatically)
+
+if [ -z "$FPS_HUD" ]; then
+    export FPS_HUD=1
+fi
+
+export LD_PRELOAD="@FPSHUD_LIB_PATH@${LD_PRELOAD:+:$LD_PRELOAD}"
+exec "$@"
