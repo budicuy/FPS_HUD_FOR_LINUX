@@ -1,14 +1,12 @@
 #include "config.hpp"
 
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-
-namespace fs = std::filesystem;
+#include <cstring>
 
 namespace fpshud {
 
@@ -113,59 +111,86 @@ std::string get_custom_preset_file_path() {
     return get_config_dir() + "/custom_preset.ini";
 }
 
-bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
-    std::error_code ec;
-    fs::create_directories(fs::path(path).parent_path(), ec);
-
-    std::ofstream f(path);
-    if (!f.is_open()) return false;
-
-    f << "# " << header_comment << "\n";
-    f << "preset=" << cfg.active_preset << "\n";
-    f << "hud_visible=" << (cfg.hud_visible ? 1 : 0) << "\n";
-    f << "layout=" << static_cast<int>(cfg.layout) << "\n";
-    f << "arrangement=" << static_cast<int>(cfg.arrangement) << "\n";
-    f << "background=" << static_cast<int>(cfg.background) << "\n";
-    f << "font_family=" << static_cast<int>(cfg.font_family) << "\n";
-    f << "font_size_px=" << cfg.font_size_px << "\n";
-    f << "text_color="
-      << static_cast<int>(cfg.text_color.r) << ","
-      << static_cast<int>(cfg.text_color.g) << ","
-      << static_cast<int>(cfg.text_color.b) << "\n";
-    f << "text_opacity=" << cfg.text_opacity << "\n";
-    f << "bg_alpha=" << cfg.bg_alpha << "\n";
-    f << "outline_enabled=" << (cfg.outline_enabled ? 1 : 0) << "\n";
-    f << "outline_thickness=" << cfg.outline_thickness << "\n";
-    f << "shadow_enabled=" << (cfg.shadow_enabled ? 1 : 0) << "\n";
-    f << "shadow_offset=" << cfg.shadow_offset << "\n";
-    f << "shadow_opacity=" << cfg.shadow_opacity << "\n";
-    f << "category_colors_enabled=" << (cfg.category_colors_enabled ? 1 : 0) << "\n";
-    f << "thermal_warnings_enabled=" << (cfg.thermal_warnings_enabled ? 1 : 0) << "\n";
-    f << "hud_graph_enabled=" << (cfg.hud_graph_enabled ? 1 : 0) << "\n";
-    f << "key_toggle_gui=" << cfg.key_toggle_gui << "\n";
-    f << "key_toggle_hud=" << cfg.key_toggle_hud << "\n";
-    f << "key_benchmark=" << cfg.key_benchmark << "\n";
-
-    f << "metrics=";
-    for (size_t i = 0; i < cfg.metrics.size(); ++i) {
-        if (i > 0) f << ",";
-        f << metric_id_key(cfg.metrics[i]);
+void ensure_parent_dir(const std::string& file_path) {
+    auto slash = file_path.find_last_of('/');
+    if (slash == std::string::npos || slash == 0) return;
+    std::string dir = file_path.substr(0, slash);
+    std::string cur;
+    for (size_t i = 0; i < dir.size(); ++i) {
+        cur.push_back(dir[i]);
+        if (dir[i] == '/' && i > 0) {
+            ::mkdir(cur.c_str(), 0755);
+        }
     }
-    f << "\n";
+    ::mkdir(dir.c_str(), 0755);
+}
+
+bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
+    ensure_parent_dir(path);
+
+    std::string tmp_path = path + ".tmp";
+    FILE* fp = std::fopen(tmp_path.c_str(), "w");
+    if (!fp) {
+        fp = std::fopen(path.c_str(), "w");
+        if (!fp) return false;
+        tmp_path.clear();
+    }
+
+    std::fprintf(fp, "# %s\n", header_comment ? header_comment : "FPSHUD Config");
+    std::fprintf(fp, "preset=%s\n", cfg.active_preset.c_str());
+    std::fprintf(fp, "hud_visible=%d\n", cfg.hud_visible ? 1 : 0);
+    std::fprintf(fp, "layout=%d\n", static_cast<int>(cfg.layout));
+    std::fprintf(fp, "arrangement=%d\n", static_cast<int>(cfg.arrangement));
+    std::fprintf(fp, "background=%d\n", static_cast<int>(cfg.background));
+    std::fprintf(fp, "font_family=%d\n", static_cast<int>(cfg.font_family));
+    std::fprintf(fp, "font_size_px=%.2f\n", cfg.font_size_px);
+    std::fprintf(fp, "text_color=%d,%d,%d\n",
+                 static_cast<int>(cfg.text_color.r),
+                 static_cast<int>(cfg.text_color.g),
+                 static_cast<int>(cfg.text_color.b));
+    std::fprintf(fp, "text_opacity=%.3f\n", cfg.text_opacity);
+    std::fprintf(fp, "bg_alpha=%.3f\n", cfg.bg_alpha);
+    std::fprintf(fp, "outline_enabled=%d\n", cfg.outline_enabled ? 1 : 0);
+    std::fprintf(fp, "outline_thickness=%.2f\n", cfg.outline_thickness);
+    std::fprintf(fp, "shadow_enabled=%d\n", cfg.shadow_enabled ? 1 : 0);
+    std::fprintf(fp, "shadow_offset=%.2f\n", cfg.shadow_offset);
+    std::fprintf(fp, "shadow_opacity=%.2f\n", cfg.shadow_opacity);
+    std::fprintf(fp, "category_colors_enabled=%d\n", cfg.category_colors_enabled ? 1 : 0);
+    std::fprintf(fp, "thermal_warnings_enabled=%d\n", cfg.thermal_warnings_enabled ? 1 : 0);
+    std::fprintf(fp, "hud_graph_enabled=%d\n", cfg.hud_graph_enabled ? 1 : 0);
+    std::fprintf(fp, "key_toggle_gui=%d\n", cfg.key_toggle_gui);
+    std::fprintf(fp, "key_toggle_hud=%d\n", cfg.key_toggle_hud);
+    std::fprintf(fp, "key_benchmark=%d\n", cfg.key_benchmark);
+
+    std::fprintf(fp, "metrics=");
+    for (size_t i = 0; i < cfg.metrics.size(); ++i) {
+        if (i > 0) std::fputc(',', fp);
+        std::fputs(metric_id_key(cfg.metrics[i]), fp);
+    }
+    std::fputc('\n', fp);
+    std::fflush(fp);
+    std::fclose(fp);
+
+    if (!tmp_path.empty()) {
+        if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+            std::remove(tmp_path.c_str());
+            return false;
+        }
+    }
     return true;
 }
 
 bool load_ini_file(const std::string& path, HudConfig& cfg) {
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
+    FILE* fp = std::fopen(path.c_str(), "r");
+    if (!fp) return false;
 
     bool keep_enabled = cfg.enabled;
     bool keep_open = cfg.gui_open;
     bool parsed_any = false;
 
-    std::string line;
-    while (std::getline(f, line)) {
-        line = trim_copy(line);
+    char buf[1024];
+    while (std::fgets(buf, sizeof(buf), fp)) {
+        std::string line = trim_copy(buf);
         if (line.empty() || line[0] == '#') continue;
 
         auto eq = line.find('=');
@@ -250,19 +275,23 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             parsed_any = true;
         } else if (key == "metrics") {
             cfg.metrics.clear();
-            std::stringstream ss(val);
-            std::string item;
-            while (std::getline(ss, item, ',')) {
-                item = trim_copy(item);
+            size_t start = 0;
+            while (start <= val.size()) {
+                auto comma = val.find(',', start);
+                std::string item = trim_copy(
+                    (comma == std::string::npos) ? val.substr(start) : val.substr(start, comma - start));
                 MetricType m;
-                if (parse_metric_id_key(item, m)) {
+                if (!item.empty() && parse_metric_id_key(item, m)) {
                     add_unique_metric(cfg.metrics, m);
                 }
+                if (comma == std::string::npos) break;
+                start = comma + 1;
             }
             sort_canonical_metrics(cfg.metrics);
             parsed_any = true;
         }
     }
+    std::fclose(fp);
 
     if (!parsed_any) return false;
 

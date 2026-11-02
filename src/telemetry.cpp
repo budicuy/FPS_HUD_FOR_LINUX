@@ -113,12 +113,14 @@ bool lookup_pci_device_name(const char* vendor_hex, const char* device_hex, char
     };
 
     for (const char* db_path : pci_db_paths) {
-        std::ifstream f(db_path);
-        if (!f.is_open()) continue;
+        FILE* fp = std::fopen(db_path, "r");
+        if (!fp) continue;
 
         bool in_vendor = false;
-        std::string line;
-        while (std::getline(f, line)) {
+        char buf[512];
+        while (std::fgets(buf, sizeof(buf), fp)) {
+            std::string line(buf);
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
             if (line.empty() || line[0] == '#') continue;
 
             if (line[0] != '\t') {
@@ -142,10 +144,12 @@ bool lookup_pci_device_name(const char* vendor_hex, const char* device_hex, char
                         desc = desc.substr(lb + 1, rb - lb - 1);
                     }
                     clean_hardware_name(desc.c_str(), out, out_size);
+                    std::fclose(fp);
                     return true;
                 }
             }
         }
+        std::fclose(fp);
     }
     return false;
 }
@@ -205,18 +209,23 @@ void TelemetryCollector::init_cpu_sensors() {
 
     // 1. Detect CPU Model Name from /proc/cpuinfo (Works on Intel, AMD, & ARM)
     {
-        std::ifstream f(root_prefix_ + "/proc/cpuinfo");
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0) {
-                auto colon = line.find(':');
-                if (colon != std::string::npos) {
-                    std::string raw_name = line.substr(colon + 1);
-                    std::lock_guard<std::mutex> lock(data_mutex_);
-                    clean_hardware_name(raw_name.c_str(), hw_data_.cpu_name, sizeof(hw_data_.cpu_name));
-                    break;
+        std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
+        if (FILE* fp = std::fopen(cpuinfo_path.c_str(), "r")) {
+            char line_buf[256];
+            while (std::fgets(line_buf, sizeof(line_buf), fp)) {
+                std::string line(line_buf);
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+                if (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0) {
+                    auto colon = line.find(':');
+                    if (colon != std::string::npos) {
+                        std::string raw_name = line.substr(colon + 1);
+                        std::lock_guard<std::mutex> lock(data_mutex_);
+                        clean_hardware_name(raw_name.c_str(), hw_data_.cpu_name, sizeof(hw_data_.cpu_name));
+                        break;
+                    }
                 }
             }
+            std::fclose(fp);
         }
     }
 
@@ -727,10 +736,9 @@ void TelemetryCollector::stop_benchmark() {
 
     std::error_code ec;
     bool file_exists = fs::exists(csv_path, ec) && fs::file_size(csv_path, ec) > 0;
-    std::ofstream csv(csv_path, std::ios::app);
-    if (csv.is_open()) {
+    if (FILE* csv = std::fopen(csv_path.c_str(), "a")) {
         if (!file_exists) {
-            csv << "Timestamp,Duration_Sec,Frames,Avg_FPS,1Pct_Low_FPS,0.1Pct_Low_FPS,Min_FPS,Max_FPS,Max_GPU_Temp_C,Max_GPU_Watt,Max_CPU_Temp_C,Max_CPU_Watt\n";
+            std::fputs("Timestamp,Duration_Sec,Frames,Avg_FPS,1Pct_Low_FPS,0.1Pct_Low_FPS,Min_FPS,Max_FPS,Max_GPU_Temp_C,Max_GPU_Watt,Max_CPU_Temp_C,Max_CPU_Watt\n", csv);
         }
         std::time_t t = std::time(nullptr);
         std::tm tm_buf{};
@@ -738,15 +746,15 @@ void TelemetryCollector::stop_benchmark() {
         char ts[32];
         std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_buf);
 
-        char row[256];
-        std::snprintf(row, sizeof(row),
-                      "%s,%.1f,%zu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%.1f,%d,%.1f\n",
-                      ts, sum.duration_sec, n,
-                      sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low,
-                      sum.min_fps, sum.max_fps,
-                      sum.max_gpu_temp_c, sum.max_gpu_power_w,
-                      sum.max_cpu_temp_c, sum.max_cpu_power_w);
-        csv << row;
+        std::fprintf(csv,
+                     "%s,%.1f,%zu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%.1f,%d,%.1f\n",
+                     ts, sum.duration_sec, n,
+                     sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low,
+                     sum.min_fps, sum.max_fps,
+                     sum.max_gpu_temp_c, sum.max_gpu_power_w,
+                     sum.max_cpu_temp_c, sum.max_cpu_power_w);
+        std::fflush(csv);
+        std::fclose(csv);
     }
 
     last_bench_summary_ = sum;
@@ -1053,16 +1061,19 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         uint64_t raw = std::strtoull(buf, nullptr, 10);
         clock_mhz = drm_sclk_in_hz_ ? static_cast<int>((raw + 500000) / 1000000) : static_cast<int>(raw);
     } else if (!drm_pp_dpm_sclk_path_.empty()) {
-        std::ifstream f(drm_pp_dpm_sclk_path_);
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.find('*') != std::string::npos) {
-                auto colon = line.find(':');
-                if (colon != std::string::npos) {
-                    clock_mhz = static_cast<int>(std::strtol(line.c_str() + colon + 1, nullptr, 10));
-                    break;
+        if (FILE* fp = std::fopen(drm_pp_dpm_sclk_path_.c_str(), "r")) {
+            char line_buf[128];
+            while (std::fgets(line_buf, sizeof(line_buf), fp)) {
+                std::string line(line_buf);
+                if (line.find('*') != std::string::npos) {
+                    auto colon = line.find(':');
+                    if (colon != std::string::npos) {
+                        clock_mhz = static_cast<int>(std::strtol(line.c_str() + colon + 1, nullptr, 10));
+                        break;
+                    }
                 }
             }
+            std::fclose(fp);
         }
     }
 

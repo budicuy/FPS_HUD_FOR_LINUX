@@ -89,6 +89,11 @@ target_link_libraries(fpshud PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+target_link_options(fpshud PRIVATE
+    -Wl,--exclude-libs,ALL
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/manifest/libfpshud.version"
+)
+
 # Hide internal symbols except exported Vulkan Layer & OpenGL hook entrypoints
 set_target_properties(fpshud PROPERTIES
     CXX_VISIBILITY_PRESET hidden

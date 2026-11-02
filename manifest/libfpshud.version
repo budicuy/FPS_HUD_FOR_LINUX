@@ -1,0 +1,12 @@
+{
+    global:
+        vkNegotiateLoaderLayerInterfaceVersion;
+        vkGetInstanceProcAddr;
+        vkGetDeviceProcAddr;
+        glXSwapBuffers;
+        glXGetProcAddress;
+        glXGetProcAddressARB;
+        eglSwapBuffers;
+    local:
+        *;
+};
