@@ -60,6 +60,16 @@ struct TelemetryData {
 
     float ram_used_gb = 0.0f;
     float ram_total_gb = 0.0f;
+    float ram_used_pct = 0.0f;
+
+    // Extended memory sensors
+    float game_ram_gb = 0.0f;        // Resident memory (VmRSS) of the hooked game process
+    float swap_used_gb = 0.0f;       // Swap / ZRAM in use
+    float swap_total_gb = 0.0f;      // 0 = no swap configured
+    float mem_psi_some_pct = -1.0f;  // /proc/pressure/memory "some avg10" (-1 = kernel PSI unavailable)
+    int   ram_speed_mts = 0;         // Effective RAM speed in MT/s (0 = unknown / permission missing)
+    int   ram_modules = 0;           // Populated DIMM / memory device count
+    char  ram_type[12] = "RAM";      // DDR4, DDR5, LPDDR5, ...
 
     const char* render_api = "VULKAN";
     char cpu_name[48] = "CPU";
@@ -120,6 +130,9 @@ private:
     void init_sensors();
     void init_cpu_sensors();
     void init_gpu_sensors();
+    void init_ram_info();
+    bool load_ram_info_file(const std::string& path);
+    bool load_ram_info_dmi(const std::string& entries_dir);
     void shutdown_sensors();
 
     void poll_cpu_load();
@@ -127,6 +140,8 @@ private:
     void poll_cpu_temp();
     void poll_cpu_power();
     void poll_ram();
+    void poll_game_ram();
+    void poll_mem_pressure();
     void poll_gpu();
     void poll_nvidia_gpu();
     void poll_drm_sysfs_gpu();

@@ -30,9 +30,15 @@ constexpr MetricType kCanonicalMetricsOrder[] = {
     MetricType::CpuWatt,
     MetricType::CpuTemp,
     MetricType::Ram,
+    MetricType::GameRam,
+    MetricType::SwapRam,
+    MetricType::MemPressure,
+    MetricType::RamSpeed,
     MetricType::EngineApi,
     MetricType::SystemClock
 };
+static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0]) == kTotalMetricCount,
+              "kTotalMetricCount must match the number of MetricType entries");
 
 std::string trim_copy(std::string s) {
     auto not_space = [](unsigned char c) { return !std::isspace(c); };
@@ -77,6 +83,10 @@ const char* metric_id_key(MetricType m) {
         case MetricType::CpuWatt:      return "cpuwatt";
         case MetricType::CpuTemp:      return "cputemp";
         case MetricType::Ram:          return "ram";
+        case MetricType::GameRam:      return "gameram";
+        case MetricType::SwapRam:      return "swap";
+        case MetricType::MemPressure:  return "mempsi";
+        case MetricType::RamSpeed:     return "ramspeed";
         case MetricType::EngineApi:    return "api";
         case MetricType::SystemClock:  return "clock";
     }
@@ -449,6 +459,10 @@ const char* metric_name(MetricType m) {
         case MetricType::CpuWatt:      return "C.PWR";
         case MetricType::CpuTemp:      return "C.TMP";
         case MetricType::Ram:          return "RAM";
+        case MetricType::GameRam:      return "GAME.RAM";
+        case MetricType::SwapRam:      return "SWAP";
+        case MetricType::MemPressure:  return "MEM.PSI";
+        case MetricType::RamSpeed:     return "RAM.SPD";
         case MetricType::EngineApi:    return "API";
         case MetricType::SystemClock:  return "CLOCK";
     }

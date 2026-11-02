@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -25,6 +26,10 @@ enum class MetricType {
     CpuWatt,
     CpuTemp,
     Ram,
+    GameRam,      // Resident memory used by the game process itself
+    SwapRam,      // Swap / ZRAM usage
+    MemPressure,  // Linux PSI memory pressure (stutter indicator)
+    RamSpeed,     // RAM type + speed (MT/s)
     EngineApi,
     SystemClock
 };
@@ -58,6 +63,9 @@ enum class FontFamily {
 };
 
 constexpr float kAtlasBaseFontSizePx = 32.0f;
+
+// Total number of selectable HUD sensors (MetricType entries)
+constexpr std::size_t kTotalMetricCount = 23;
 
 struct ColorRGBA {
     uint8_t r = 255;
