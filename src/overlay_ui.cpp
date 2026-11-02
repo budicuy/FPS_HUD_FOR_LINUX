@@ -78,12 +78,12 @@ GroupCategory get_metric_category(MetricType m) noexcept {
             return GroupCategory::RAM;
         case MetricType::EngineApi:
         case MetricType::SystemClock:
-        default:
             return GroupCategory::SYS;
     }
+    return GroupCategory::FPS;
 }
 
-const char* get_group_label(GroupCategory cat) noexcept {
+const char* get_category_label(GroupCategory cat) noexcept {
     switch (cat) {
         case GroupCategory::FPS: return "FPS";
         case GroupCategory::GPU: return "GPU";
@@ -91,177 +91,179 @@ const char* get_group_label(GroupCategory cat) noexcept {
         case GroupCategory::RAM: return "RAM";
         case GroupCategory::SYS: return "SYS";
     }
-    return "HUD";
+    return "";
 }
 
-ImU32 get_category_color(GroupCategory cat, uint8_t alpha) noexcept {
-    switch (cat) {
-        case GroupCategory::FPS: return IM_COL32(110, 240, 130, alpha); // Crisp Mint Green
-        case GroupCategory::GPU: return IM_COL32(80, 210, 100, alpha);  // NVIDIA / Radeon Green
-        case GroupCategory::CPU: return IM_COL32(80, 185, 255, alpha);  // Sky Cyan / Intel / Ryzen Blue
-        case GroupCategory::RAM: return IM_COL32(255, 175, 60, alpha);  // Warm Orange Amber
-        case GroupCategory::SYS: return IM_COL32(200, 205, 215, alpha); // Platinum Gray
+ImU32 get_category_color(GroupCategory cat, const HudConfig& cfg, uint8_t alpha) noexcept {
+    if (!cfg.category_colors_enabled) {
+        return IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
     }
-    return IM_COL32(255, 255, 255, alpha);
+    switch (cat) {
+        case GroupCategory::FPS: return IM_COL32(255, 215, 0, alpha);   // Gold/Yellow
+        case GroupCategory::GPU: return IM_COL32(118, 225, 0, alpha);   // NVIDIA Green
+        case GroupCategory::CPU: return IM_COL32(0, 229, 255, alpha);   // Cyan
+        case GroupCategory::RAM: return IM_COL32(220, 135, 255, alpha); // Soft Purple
+        case GroupCategory::SYS: return IM_COL32(190, 210, 230, alpha); // Cool Silver
+    }
+    return IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
 }
 
-ImU32 get_thermal_color(uint32_t temp_c, uint8_t alpha) noexcept {
-    if (temp_c >= 90) return IM_COL32(255, 55, 55, alpha);   // Critical Red
-    if (temp_c >= 82) return IM_COL32(255, 140, 40, alpha);  // High Warm Orange
-    if (temp_c >= 74) return IM_COL32(255, 215, 60, alpha);  // Medium Yellow
-    return IM_COL32(255, 255, 255, alpha);                   // Normal White
+ImU32 get_metric_value_color(MetricType m, const TelemetryData& d, const HudConfig& cfg, uint8_t alpha) noexcept {
+    ImU32 base_col = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+    if (!cfg.thermal_warnings_enabled) {
+        return base_col;
+    }
+
+    if (m == MetricType::GpuTemp || m == MetricType::CpuTemp) {
+        int temp = (m == MetricType::GpuTemp) ? d.gpu_temp_c : d.cpu_temp_c;
+        if (temp >= 82) {
+            return IM_COL32(255, 70, 70, alpha);  // Critical Red
+        }
+        if (temp >= 72) {
+            return IM_COL32(255, 185, 0, alpha);  // Warning Amber/Orange
+        }
+    } else if (m == MetricType::GpuLoad || m == MetricType::CpuLoad) {
+        float load = (m == MetricType::GpuLoad) ? d.gpu_load_pct : d.cpu_load_pct;
+        if (load >= 97.0f) {
+            return IM_COL32(255, 185, 0, alpha);  // High Load Amber
+        }
+    } else if (m == MetricType::Ram || m == MetricType::GameRam) {
+        // System RAM nearly full -> stutter / swapping risk
+        if (d.ram_used_pct >= 90.0f) return IM_COL32(255, 70, 70, alpha);
+        if (d.ram_used_pct >= 80.0f) return IM_COL32(255, 185, 0, alpha);
+    } else if (m == MetricType::SwapRam) {
+        if (d.swap_total_gb > 0.0f) {
+            float swap_pct = 100.0f * d.swap_used_gb / d.swap_total_gb;
+            if (swap_pct >= 80.0f) return IM_COL32(255, 70, 70, alpha);
+            if (swap_pct >= 50.0f) return IM_COL32(255, 185, 0, alpha);
+        }
+    } else if (m == MetricType::MemPressure) {
+        // PSI "some" avg10: >= 5% noticeable hitching, >= 20% heavy memory stalls
+        if (d.mem_psi_some_pct >= 20.0f) return IM_COL32(255, 70, 70, alpha);
+        if (d.mem_psi_some_pct >= 5.0f) return IM_COL32(255, 185, 0, alpha);
+    }
+    return base_col;
 }
 
-void format_styled_value(MetricType m, const TelemetryData& data, const HudConfig& cfg, uint8_t alpha, StyledValue& out) {
-    out.prefix[0] = '\0';
-    out.number[0] = '\0';
-    out.unit[0] = '\0';
-
-    ImU32 default_col = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
-    out.color = default_col;
+void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) noexcept {
+    sv.prefix[0] = '\0';
+    sv.number[0] = '\0';
+    sv.unit[0]   = '\0';
 
     switch (m) {
         case MetricType::FPS:
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.fps);
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.fps);
+            return;
         case MetricType::FpsAvg:
-            std::snprintf(out.prefix, sizeof(out.prefix), "AVG ");
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.fps_avg);
-            break;
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "AVG:");
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.fps_avg);
+            return;
         case MetricType::Fps1Low:
-            std::snprintf(out.prefix, sizeof(out.prefix), "1%% ");
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.fps_1pct_low);
-            break;
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "1%%:");
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.fps_1pct_low);
+            return;
         case MetricType::Fps01Low:
-            std::snprintf(out.prefix, sizeof(out.prefix), "0.1%% ");
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.fps_01pct_low);
-            break;
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "0.1%%:");
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.fps_01pct_low);
+            return;
         case MetricType::FrameTimes:
-            std::snprintf(out.number, sizeof(out.number), "%.1f", data.frametime_ms);
-            std::snprintf(out.unit, sizeof(out.unit), "ms");
-            break;
-
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.frametime_ms);
+            std::snprintf(sv.unit, sizeof(sv.unit), "ms");
+            return;
         case MetricType::GpuLoad:
-            std::snprintf(out.number, sizeof(out.number), "%u", data.gpu_load_percent);
-            std::snprintf(out.unit, sizeof(out.unit), "%%");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.gpu_load_pct);
+            std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+            return;
         case MetricType::GpuClock:
-            std::snprintf(out.number, sizeof(out.number), "%u", data.gpu_clock_mhz);
-            std::snprintf(out.unit, sizeof(out.unit), "MHz");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_clock_mhz);
+            std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
+            return;
         case MetricType::GpuVram:
-            std::snprintf(out.number, sizeof(out.number), "%.1f/%.1f", data.vram_used_gb, data.vram_total_gb);
-            std::snprintf(out.unit, sizeof(out.unit), "GB");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.gpu_vram_used_gb);
+            std::snprintf(sv.unit, sizeof(sv.unit), "GB");
+            return;
         case MetricType::GpuBandwidth:
-            std::snprintf(out.number, sizeof(out.number), "%.1f", data.gpu_bandwidth_gbs);
-            std::snprintf(out.unit, sizeof(out.unit), "GB/s");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.gpu_bandwidth_gbs);
+            std::snprintf(sv.unit, sizeof(sv.unit), "GB/s");
+            return;
         case MetricType::GpuTemp:
-            std::snprintf(out.number, sizeof(out.number), "%u", data.gpu_temp_c);
-            std::snprintf(out.unit, sizeof(out.unit), "°C");
-            if (cfg.thermal_warnings_enabled) {
-                out.color = get_thermal_color(data.gpu_temp_c, alpha);
-            }
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_temp_c);
+            std::snprintf(sv.unit, sizeof(sv.unit), "\xC2\xB0" "C"); // UTF-8 °C
+            return;
         case MetricType::GpuFan:
-            std::snprintf(out.prefix, sizeof(out.prefix), "FAN ");
-            std::snprintf(out.number, sizeof(out.number), "%u", data.gpu_fan_percent);
-            std::snprintf(out.unit, sizeof(out.unit), "%%");
-            break;
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "FAN:");
+            std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_fan_pct);
+            std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+            return;
         case MetricType::GpuWatt:
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.gpu_power_watts);
-            std::snprintf(out.unit, sizeof(out.unit), "W");
-            break;
-
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.gpu_power_w);
+            std::snprintf(sv.unit, sizeof(sv.unit), "W");
+            return;
         case MetricType::CpuLoad:
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.cpu_load_percent);
-            std::snprintf(out.unit, sizeof(out.unit), "%%");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.cpu_load_pct);
+            std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+            return;
         case MetricType::CpuClock:
-            std::snprintf(out.number, sizeof(out.number), "%u", data.cpu_clock_mhz);
-            std::snprintf(out.unit, sizeof(out.unit), "MHz");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%d", d.cpu_clock_mhz);
+            std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
+            return;
         case MetricType::CpuWatt:
-            std::snprintf(out.number, sizeof(out.number), "%.0f", data.cpu_power_watts);
-            std::snprintf(out.unit, sizeof(out.unit), "W");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.cpu_power_w);
+            std::snprintf(sv.unit, sizeof(sv.unit), "W");
+            return;
         case MetricType::CpuTemp:
-            std::snprintf(out.number, sizeof(out.number), "%u", data.cpu_temp_c);
-            std::snprintf(out.unit, sizeof(out.unit), "°C");
-            if (cfg.thermal_warnings_enabled) {
-                out.color = get_thermal_color(data.cpu_temp_c, alpha);
-            }
-            break;
-
+            std::snprintf(sv.number, sizeof(sv.number), "%d", d.cpu_temp_c);
+            std::snprintf(sv.unit, sizeof(sv.unit), "\xC2\xB0" "C"); // UTF-8 °C
+            return;
         case MetricType::Ram:
-            std::snprintf(out.number, sizeof(out.number), "%.1f/%.1f", data.ram_used_gb, data.ram_total_gb);
-            std::snprintf(out.unit, sizeof(out.unit), "GB");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.ram_used_gb);
+            std::snprintf(sv.unit, sizeof(sv.unit), "GB %.0f%%", d.ram_used_pct);
+            return;
         case MetricType::GameRam:
-            std::snprintf(out.prefix, sizeof(out.prefix), "GAME ");
-            std::snprintf(out.number, sizeof(out.number), "%.1f", data.game_ram_used_gb);
-            std::snprintf(out.unit, sizeof(out.unit), "GB");
-            break;
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "GAME:");
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.game_ram_gb);
+            std::snprintf(sv.unit, sizeof(sv.unit), "GB");
+            return;
         case MetricType::SwapRam:
-            std::snprintf(out.prefix, sizeof(out.prefix), "SWAP ");
-            if (data.swap_total_gb <= 0.05f) {
-                std::snprintf(out.number, sizeof(out.number), "OFF");
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "SWAP:");
+            if (d.swap_total_gb <= 0.0f) {
+                std::snprintf(sv.number, sizeof(sv.number), "OFF");
             } else {
-                std::snprintf(out.number, sizeof(out.number), "%.1f/%.1f", data.swap_used_gb, data.swap_total_gb);
-                std::snprintf(out.unit, sizeof(out.unit), "GB");
+                std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.swap_used_gb);
+                std::snprintf(sv.unit, sizeof(sv.unit), "GB");
             }
-            break;
+            return;
         case MetricType::MemPressure:
-            std::snprintf(out.prefix, sizeof(out.prefix), "PSI ");
-            if (data.mem_pressure_pct < 0.0f) {
-                std::snprintf(out.number, sizeof(out.number), "N/A");
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "PSI:");
+            if (d.mem_psi_some_pct < 0.0f) {
+                std::snprintf(sv.number, sizeof(sv.number), "N/A");
             } else {
-                std::snprintf(out.number, sizeof(out.number), "%.1f", data.mem_pressure_pct);
-                std::snprintf(out.unit, sizeof(out.unit), "%%");
-                if (data.mem_pressure_pct > 10.0f) {
-                    out.color = IM_COL32(255, 60, 60, alpha); // Red stutter alert
-                } else if (data.mem_pressure_pct > 3.0f) {
-                    out.color = IM_COL32(255, 180, 50, alpha); // Yellow warn
-                }
+                std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.mem_psi_some_pct);
+                std::snprintf(sv.unit, sizeof(sv.unit), "%%");
             }
-            break;
+            return;
         case MetricType::RamSpeed:
-            if (data.ram_speed_mts > 0) {
-                if (data.ram_type[0]) {
-                    std::snprintf(out.number, sizeof(out.number), "%s %u", data.ram_type, data.ram_speed_mts);
-                } else {
-                    std::snprintf(out.number, sizeof(out.number), "%u", data.ram_speed_mts);
-                }
-                std::snprintf(out.unit, sizeof(out.unit), "MT/s");
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "%s:", d.ram_type);
+            if (d.ram_speed_mts <= 0) {
+                std::snprintf(sv.number, sizeof(sv.number), "N/A");
             } else {
-                std::snprintf(out.number, sizeof(out.number), "%u", data.ram_percent);
-                std::snprintf(out.unit, sizeof(out.unit), "%%");
+                std::snprintf(sv.number, sizeof(sv.number), "%d", d.ram_speed_mts);
+                std::snprintf(sv.unit, sizeof(sv.unit), "MT/s");
             }
-            break;
-
+            return;
         case MetricType::EngineApi:
-            if (data.engine_api == GraphicsApi::Vulkan) {
-                std::snprintf(out.number, sizeof(out.number), "Vulkan");
-            } else if (data.engine_api == GraphicsApi::OpenGL) {
-                std::snprintf(out.number, sizeof(out.number), "OpenGL");
-            } else {
-                std::snprintf(out.number, sizeof(out.number), "API");
-            }
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%s", d.render_api ? d.render_api : "VULKAN");
+            return;
         case MetricType::SystemClock:
-            std::snprintf(out.number, sizeof(out.number), "%s", data.system_clock[0] ? data.system_clock : "00:00");
-            break;
+            std::snprintf(sv.number, sizeof(sv.number), "%s", d.local_time_str);
+            return;
     }
 }
 
-MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& data, uint8_t alpha) {
+MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& data, uint8_t alpha) noexcept {
     MetricGroupList list{};
-
     for (MetricType m : cfg.metrics) {
         GroupCategory cat = get_metric_category(m);
-
-        // Find or create category group
         MetricGroup* target = nullptr;
         for (size_t i = 0; i < list.count; ++i) {
             if (list.items[i].category == cat) {
@@ -269,25 +271,23 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
                 break;
             }
         }
-
         if (!target && list.count < list.items.size()) {
             target = &list.items[list.count++];
             target->category = cat;
-            target->label = get_group_label(cat);
-            target->label_color = cfg.category_colors_enabled ?
-                                  get_category_color(cat, alpha) :
-                                  IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+            target->label = get_category_label(cat);
+            target->label_color = get_category_color(cat, cfg, alpha);
             target->value_count = 0;
         }
-
         if (target && target->value_count < target->values.size()) {
-            format_styled_value(m, data, cfg, alpha, target->values[target->value_count++]);
+            StyledValue& sv = target->values[target->value_count++];
+            format_styled_value(m, data, sv);
+            sv.color = get_metric_value_color(m, data, cfg, alpha);
         }
     }
-
     return list;
 }
 
+// Draws text with adaptive 4/8-direction outline stroke and drop shadow
 void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
     if (!text || !*text) return;
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -308,7 +308,7 @@ void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
         draw_list->AddText(font, font_size, ImVec2(pos.x + d, pos.y + d), drop_col, text);
     }
 
-    // 2. High-contrast Crisp Outline (4-way cross, plus diagonal corners if thick)
+    // 2. Adaptive stroke outline
     if (cfg.outline_enabled && cfg.outline_thickness > 0.0f) {
         uint8_t out_alpha = static_cast<uint8_t>(std::clamp(0.95f * cfg.text_opacity * 255.0f, 0.0f, 255.0f));
         ImU32 outline_col = IM_COL32(0, 0, 0, out_alpha);
@@ -327,49 +327,52 @@ void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
         }
     }
 
-    // 3. Foreground crisp text glyph
+    // 3. Main foreground text
     draw_list->AddText(font, font_size, pos, color, text);
-
-    ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, text);
-    ImGui::Dummy(text_size);
+    ImVec2 sz = ImGui::CalcTextSize(text);
+    ImGui::Dummy(sz);
 }
 
-// Draws a styled value: optional prefix ("AVG "), bold number ("60"), muted unit ("ms")
+// Draws a single metric item with dimmed prefix/unit and bright number so values never blend together
 void draw_styled_metric_item(const StyledValue& sv, const HudConfig& cfg, ImU32 muted_col) {
+    float tight_gap = 2.0f * (cfg.font_size_px / 20.0f);
+    bool has_prev = false;
+
     if (sv.prefix[0] != '\0') {
         draw_crisp_text(sv.prefix, muted_col, cfg);
-        ImGui::SameLine(0.0f, 1.0f);
+        has_prev = true;
     }
-
     if (sv.number[0] != '\0') {
+        if (has_prev) ImGui::SameLine(0.0f, tight_gap);
         draw_crisp_text(sv.number, sv.color, cfg);
+        has_prev = true;
     }
-
     if (sv.unit[0] != '\0') {
-        ImGui::SameLine(0.0f, 1.0f);
+        if (has_prev) ImGui::SameLine(0.0f, 1.5f);
         draw_crisp_text(sv.unit, muted_col, cfg);
     }
 }
 
-void draw_styled_group_values(const MetricGroup& g, const HudConfig& cfg, ImU32 muted_col) {
-    for (size_t v = 0; v < g.value_count; ++v) {
-        if (v > 0) {
-            ImGui::SameLine(0.0f, 4.0f);
-            draw_crisp_text("·", muted_col, cfg);
-            ImGui::SameLine(0.0f, 4.0f);
+void draw_styled_group_values(const MetricGroup& g, const HudConfig& cfg, ImU32 muted_col, ImU32 dot_col, float ui_ratio) {
+    float dot_gap = 6.0f * ui_ratio;
+    for (size_t i = 0; i < g.value_count; ++i) {
+        if (i > 0) {
+            ImGui::SameLine(0.0f, dot_gap);
+            draw_crisp_text("\xC2\xB7", dot_col, cfg); // UTF-8 middle dot ·
+            ImGui::SameLine(0.0f, dot_gap);
         }
-        draw_styled_metric_item(g.values[v], cfg, muted_col);
+        draw_styled_metric_item(g.values[i], cfg, muted_col);
     }
 }
 
 void draw_mini_frametime_graph(const HudConfig& cfg, uint8_t alpha) {
-    auto& telemetry = get_telemetry_collector();
-    float graph_w = 190.0f * (cfg.font_size_px / 20.0f);
-    float graph_h = 32.0f * (cfg.font_size_px / 20.0f);
+    const auto& telemetry = get_telemetry();
+    float ui_ratio = cfg.font_size_px / 20.0f;
+    float graph_w = std::clamp(220.0f * ui_ratio, 140.0f, 380.0f);
+    float graph_h = std::clamp(28.0f * ui_ratio, 18.0f, 52.0f);
 
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_PlotLines, IM_COL32(110, 240, 130, alpha));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, static_cast<uint8_t>(alpha * 0.4f)));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f, 0.05f, 0.07f, std::max(0.45f, cfg.bg_alpha)));
+    ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.0f, 0.90f, 1.0f, alpha / 255.0f));
     ImGui::PlotLines("##HUD_MiniFTGraph",
                      telemetry.get_ft_history(),
                      TelemetryCollector::kGraphHistorySize,
@@ -572,11 +575,10 @@ void render_overlay_ui(HudConfig& cfg,
 
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
 
-    // Smooth subtle padding and rounding for the HUD box
-    float ui_ratio = std::clamp(cfg.font_size_px / 20.0f, 0.6f, 2.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * ui_ratio, 8.0f * ui_ratio));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * ui_ratio);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f * ui_ratio, 3.0f * ui_ratio));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        cfg.background == BackgroundStyle::None ? ImVec2(4.0f, 4.0f) : ImVec2(12.0f, 8.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.06f, cfg.bg_alpha));
 
     if (ImGui::Begin("##FPSHUD_Overlay", nullptr, flags)) {
@@ -584,51 +586,59 @@ void render_overlay_ui(HudConfig& cfg,
         ImGui::SetWindowFontScale(cfg.font_scale);
 
         uint8_t fg_alpha = static_cast<uint8_t>(std::clamp(cfg.text_opacity * 255.0f, 10.0f, 255.0f));
-        ImU32 muted_col = IM_COL32(165, 175, 190, static_cast<uint8_t>(fg_alpha * 0.85f));
+        uint8_t muted_alpha = static_cast<uint8_t>(std::clamp(cfg.text_opacity * 215.0f, 10.0f, 255.0f));
+        uint8_t sep_alpha = static_cast<uint8_t>(std::clamp(cfg.text_opacity * 170.0f, 10.0f, 255.0f));
+
+        // Soft cool-gray for units & sub-labels (AVG:, 1%:, MHz, GB, W, °C) so numbers pop out cleanly
+        ImU32 muted_col = IM_COL32(175, 190, 208, muted_alpha);
+        ImU32 dot_col   = IM_COL32(130, 145, 165, sep_alpha);
+        ImU32 sep_color = IM_COL32(160, 175, 195, sep_alpha);
 
         MetricGroupList groups = build_metric_groups(cfg, data, fg_alpha);
+        float ui_ratio = cfg.font_size_px / 20.0f;
 
         if (cfg.arrangement == ArrangementMode::Linear) {
-            // Horizontal Bar Layout: category labels + values separated by dividers
             for (size_t i = 0; i < groups.count; ++i) {
-                if (i > 0) {
-                    ImGui::SameLine(0.0f, 8.0f * ui_ratio);
-                    draw_crisp_text("|", IM_COL32(100, 110, 125, fg_alpha), cfg);
-                    ImGui::SameLine(0.0f, 8.0f * ui_ratio);
-                }
                 const MetricGroup& g = groups.items[i];
+                if (i > 0) {
+                    ImGui::SameLine(0.0f, 10.0f * ui_ratio);
+                    draw_crisp_text("|", sep_color, cfg);
+                    ImGui::SameLine(0.0f, 10.0f * ui_ratio);
+                }
                 draw_crisp_text(g.label, g.label_color, cfg);
-                ImGui::SameLine(0.0f, 5.0f * ui_ratio);
-                draw_styled_group_values(g, cfg, muted_col);
+                ImGui::SameLine(0.0f, 7.0f * ui_ratio);
+                draw_styled_group_values(g, cfg, muted_col, dot_col, ui_ratio);
             }
             if (data.benchmark_active) {
-                ImGui::SameLine(0.0f, 8.0f * ui_ratio);
+                ImGui::SameLine(0.0f, 10.0f * ui_ratio);
                 char rec_buf[32];
                 std::snprintf(rec_buf, sizeof(rec_buf), "[REC %.1fs]", data.benchmark_elapsed_sec);
                 draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
             }
         } else if (cfg.arrangement == ArrangementMode::Double) {
-            // 2-Column Compact Side-by-Side Grid
-            if (ImGui::BeginTable("##FPSHUD_DoubleTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-                ImGui::TableSetupColumn("Col0", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Col1", ImGuiTableColumnFlags_WidthStretch);
+            ImGuiTableFlags tflags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX;
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(7.0f * ui_ratio, 3.0f * ui_ratio));
+            if (ImGui::BeginTable("##FPSHUD_DoubleGroupTable", 4, tflags)) {
+                ImGui::TableSetupColumn("G1", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("V1", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("G2", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("V2", ImGuiTableColumnFlags_WidthFixed);
 
                 for (size_t i = 0; i < groups.count; i += 2) {
+                    const MetricGroup& g1 = groups.items[i];
                     ImGui::TableNextRow();
-                    // Col 0
                     ImGui::TableSetColumnIndex(0);
-                    const MetricGroup& g0 = groups.items[i];
-                    draw_crisp_text(g0.label, g0.label_color, cfg);
-                    ImGui::SameLine(0.0f, 5.0f * ui_ratio);
-                    draw_styled_group_values(g0, cfg, muted_col);
+                    draw_crisp_text(g1.label, g1.label_color, cfg);
+                    ImGui::TableSetColumnIndex(1);
+                    draw_styled_group_values(g1, cfg, muted_col, dot_col, ui_ratio);
 
-                    // Col 1
                     if (i + 1 < groups.count) {
-                        ImGui::TableSetColumnIndex(1);
-                        const MetricGroup& g1 = groups.items[i + 1];
-                        draw_crisp_text(g1.label, g1.label_color, cfg);
-                        ImGui::SameLine(0.0f, 5.0f * ui_ratio);
-                        draw_styled_group_values(g1, cfg, muted_col);
+                        const MetricGroup& g2 = groups.items[i + 1];
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12.0f * ui_ratio);
+                        draw_crisp_text(g2.label, g2.label_color, cfg);
+                        ImGui::TableSetColumnIndex(3);
+                        draw_styled_group_values(g2, cfg, muted_col, dot_col, ui_ratio);
                     }
                 }
                 ImGui::EndTable();
@@ -638,13 +648,11 @@ void render_overlay_ui(HudConfig& cfg,
                 std::snprintf(rec_buf, sizeof(rec_buf), "[REC BENCHMARK: %.1fs]", data.benchmark_elapsed_sec);
                 draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
             }
+            ImGui::PopStyleVar();
         } else {
-            // Stack (Vertical Grouped Rows): clean tabular layout with zero jitter
             size_t max_vals = 1;
             for (size_t i = 0; i < groups.count; ++i) {
-                if (groups.items[i].value_count > max_vals) {
-                    max_vals = groups.items[i].value_count;
-                }
+                if (groups.items[i].value_count > max_vals) max_vals = groups.items[i].value_count;
             }
 
             int total_cols = static_cast<int>(1 + max_vals);
