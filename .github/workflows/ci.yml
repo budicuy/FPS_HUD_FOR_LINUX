@@ -1,4 +1,4 @@
-name: CI Build & Auto-Release Portable Binary
+name: CI Build, Test & Release
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-test-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -23,33 +23,38 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build pkg-config \
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids
 
-      - name: Configure & Build Portable FPSHUD
+      - name: Configure & Build Portable FPSHUD Binary
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
+          strip -s build/libfpshud.so build/fpshud_test
 
       - name: Run Multi-Device Simulation & Feature Verification Suite
         run: |
           ./build/fpshud_test 1 || true
 
-      - name: Package Portable Release Tarball (fpshud-linux-x86_64.tar.gz)
+      - name: Package Portable Release Archive
         run: |
-          tar -czf fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud_test
+          mkdir -p release_pkg
+          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud_test
 
-      - name: Publish Portable Binary to GitHub Releases
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpshud-linux-x86_64
+          path: release_pkg/fpshud-linux-x86_64.tar.gz
+
+      - name: Publish Portable Binary to GitHub Releases (on main / tags)
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
           name: "FPSHUD Latest Portable Release (Linux x86_64)"
           body: |
-            Automated portable Linux `x86_64` release of **FPSHUD** (`libfpshud.so` + `fpshud_test`).
-            Install with a single command:
+            Automated portable binary build of **FPSHUD** (`libfpshud.so` + `fpshud_test`).
+            Install with one command:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
             ```
-          files: fpshud-linux-x86_64.tar.gz
-          make_latest: true
+          files: release_pkg/fpshud-linux-x86_64.tar.gz
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

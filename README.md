@@ -1,171 +1,107 @@
-# FPSHUD for Linux
+# FPSHUD
 
 **Lightweight In-Game Performance Overlay & Live GUI Configurator for Linux Gaming (Vulkan & OpenGL)**
 
-[![CI & Release](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml/badge.svg)](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions)
+[![CI Build & Release](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml/badge.svg)](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C++20](https://img.shields.io/badge/C%2B%2B-20-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
 [![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry.cpp)
 
-> 🌐 **Language / Bahasa:** **[English (Default)](README.md)** | **[Bahasa Indonesia](README.id.md)**
+> 🌐 **Language / Bahasa Dokumentasi:** **[English (Default)](README.md)** | **[Bahasa Indonesia](README.id.md)**
 
 ---
 
-## Overview
+## Quick Install (1 Command — No Compiling Required!)
 
-### What is FPSHUD?
-**FPSHUD** is a lightweight, easy-to-use in-game performance monitor (HUD overlay) made for Linux gamers. It lets you see your real-time **FPS, 1% Low stutters, GPU/CPU temperatures, clock speeds, power draw (Watts), and RAM usage** directly on screen while playing your favorite games on Steam (Proton/DXVK), Lutris, Heroic, or native Linux.
-
-Most Linux overlays force you to close your game, open a text editor, and tweak complicated config files just to change the HUD position or add a sensor. **FPSHUD changes that:** you simply launch your game with **`FPS_HUD=1`**, press **`Insert`** or **`F12`** on your keyboard while playing, and customize everything live through a clean **In-Game Settings Menu (`FPSHUD Configuration Tool`)**!
-
-### What is it built with?
-FPSHUD is written in modern **C++20** for maximum speed and minimal resource usage (`~950 KB` binary, zero frame-time lag). It uses:
-- **Vulkan Implicit Layer & OpenGL Hooks** to draw smoothly inside almost any game on Linux.
-- **Dear ImGui** to provide the interactive, side-by-side in-game configuration menu.
-- **Linux Kernel (`drm`, `hwmon`, `powercap`) & NVIDIA NVML** to read hardware sensors directly from your system without heavy background daemons.
-
-### What features are inside?
-- **1-Command Installation**: Install or uninstall in seconds using a single `curl` command—no manual compiling or complex package hunting needed.
-- **Live In-Game Menu (No Tabs, No Clutter)**: Press `Insert`, `F12`, or `F10` in-game to change screen position, font size, background opacity, colors, or toggle any of the **19 hardware sensors** in real time.
-- **Works on All Hardware (NVIDIA, AMD, Intel & Steam Deck/APUs)**: Automatically detects your CPU and GPU model names and reads sensors across **NVIDIA GeForce**, **AMD Radeon**, and **Intel Arc / Iris** graphics, as well as **Intel Core** and **AMD Ryzen** processors.
-- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS only), **Standard**, **Advance** (all 19 sensors), or save your own **Custom** preset.
-- **Easy-to-Read Two-Tone Design & Thermal Alerts**: Bright white numbers paired with soft silver units (`MHz`, `GB`, `°C`, `W`) and automatic warning colors when your GPU or CPU gets warm (`>= 72°C` Yellow, `>= 82°C` Red).
-- **One-Key Benchmark Recorder (`F9`)**: Press `F9` during gameplay to record your average FPS, 1% Low, 0.1% Low, and peak temperatures into a `.csv` spreadsheet in your `Documents` folder.
-
-### How does it work?
-1. When you run a game with `FPS_HUD=1`, Linux automatically loads `libfpshud.so` into the game's rendering pipeline.
-2. Every time the game finishes drawing a frame, FPSHUD measures the exact frame delivery time (`ms`) and draws your chosen stats on top of the screen.
-3. Meanwhile, a separate background thread quietly checks your CPU and GPU temperatures, clocks, and power usage once every **0.5 seconds** (`500ms`), so monitoring your hardware never slows down your game's FPS.
-
----
-
-## Quick Install (1 Command via `curl`)
-
-You can install **FPSHUD** immediately on any Linux distribution (Arch, Ubuntu, Debian, Linux Mint, Fedora, Pop!_OS, Nobara, Bazzite, or SteamOS) with a single command:
+Install **FPSHUD** in seconds on any Linux distribution (Arch, Ubuntu, Debian, Fedora, Linux Mint, Pop!_OS, Nobara, Bazzite, or SteamOS) without installing compilers or build tools:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
-### Quick Uninstall (1 Command)
+To uninstall at any time:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
 ```
 
 ---
 
+## Overview
+
+### What is FPSHUD for?
+When playing games on Linux (whether through Steam Proton, Lutris, Heroic, or native Linux ports), you often want to check your **FPS**, see if your game is stuttering (**1% Low / Frametime**), or keep an eye on your **GPU and CPU temperatures, clock speeds, power draw, and RAM usage**.
+
+With traditional Linux overlays, customizing what appears on screen usually means closing the game, opening a text editor, and manually typing long configuration lines or environment variables. **FPSHUD solves this by giving you a live, interactive control panel directly inside your game.** You simply turn it on with `FPS_HUD=1`, press **`Insert`** or **`F12`** while playing, and click what you want to see—just like modern overlays on Windows, but built natively and lightweight for Linux.
+
+### What is it built with?
+FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage, uses **Dear ImGui** to draw both the on-screen HUD and the in-game settings menu, and hooks directly into **Vulkan** (as a standard Vulkan Implicit Layer) and **OpenGL** (`LD_PRELOAD`). Fonts are embedded directly inside the library so text always looks sharp, even inside containerized environments like Steam Linux Runtime and Proton.
+
+### What features are inside?
+- **In-Game Settings Menu (`Insert` / `F12` / `F10`)**: A clean, tabless side-by-side dashboard that lets you toggle sensors, change screen position, adjust font size, pick colors, and switch presets live without restarting your game.
+- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 19 sensors), or save your own **Custom** preset.
+- **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs**, **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
+- **Easy-to-Read Two-Tone Design & Thermal Warnings**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings when your GPU or CPU runs hot.
+- **Accurate 1% & 0.1% Low FPS + CSV Benchmark Recorder (`F9`)**: Measures real frame smoothness over a rolling 3.5-second window (automatically ignoring loading-screen freezes) and lets you record benchmark results directly to a `.csv` file.
+
+### How does it work?
+1. **Install once** using the 1-line `curl` command above (it places the portable `libfpshud.so` library in `~/.local/lib/fpshud/` and registers the Vulkan layer in your user folder).
+2. **Enable in your game** by adding `FPS_HUD=1 %command%` in Steam Launch Options (or running `FPS_HUD=1 your_game` in terminal).
+3. **Zero FPS drop while gaming**: As your game renders each frame, FPSHUD draws the overlay on top of the final image before it hits your monitor. Meanwhile, a separate background thread quietly reads your CPU/GPU temperatures and power usage once every 0.5 seconds—so the overlay never slows down your game.
+
+---
+
 ## Table of Contents
 
-1. [How to Use in Games (Steam, Lutris, Heroic, Terminal)](#1-how-to-use-in-games-steam-lutris-heroic-terminal)
-2. [In-Game Menu & Keyboard Shortcuts](#2-in-game-menu--keyboard-shortcuts)
-3. [Supported Hardware & 19 Sensors List](#3-supported-hardware--19-sensors-list)
-4. [Optional Sensor & Wayland Permissions](#4-optional-sensor--wayland-permissions)
-5. [Tech Stack & System Architecture](#5-tech-stack--system-architecture)
-6. [Developer Guide (Build from Source & Automated Testing)](#6-developer-guide-build-from-source--automated-testing)
-7. [Troubleshooting & FAQ](#7-troubleshooting--faq)
-8. [Contributing, Credits & License](#8-contributing-credits--license)
+1. [Key Features](#1-key-features)
+2. [Installation & Sensor Permissions](#2-installation--sensor-permissions)
+3. [How to Use in Steam, Lutris, Heroic & Terminal](#3-how-to-use-in-steam-lutris-heroic--terminal)
+4. [In-Game GUI Guide & Keyboard Shortcuts](#4-in-game-gui-guide--keyboard-shortcuts)
+5. [Supported Hardware & All 19 Sensors](#5-supported-hardware--all-19-sensors)
+6. [Tech Stack & System Architecture](#6-tech-stack--system-architecture)
+7. [Developer Guide (Building from Source & Testing)](#7-developer-guide-building-from-source--testing)
+8. [Troubleshooting & FAQ](#8-troubleshooting--faq)
+9. [Contributing, Credits & License](#9-contributing-credits--license)
 
 ---
 
-## 1. How to Use in Games (Steam, Lutris, Heroic, Terminal)
+## 1. Key Features
 
-FPSHUD uses only **one simple environment variable**:
-- **`FPS_HUD=1`** — Turns **ON** the overlay and the in-game menu.
-- **`FPS_HUD=0`** — Turns **OFF** the overlay completely.
+- **Simple Activation (`FPS_HUD=1` / `FPS_HUD=0`)**:
+  - `FPS_HUD=1`: Turns on the HUD overlay and the In-Game GUI Configurator.
+  - `FPS_HUD=0` (or unset): Completely disabled with zero background impact.
+- **Tabless Side-by-Side In-Game GUI (`FPSHUD Configuration Tool`)**:
+  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a 2-column dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Right: 19 Live Hardware Sensors & Quick Presets).
+  - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
+  - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
+- **Universal Multi-Vendor Hardware Support**:
+  - **NVIDIA**: Uses `libnvidia-ml.so.1` (NVML) dynamically.
+  - **AMD Radeon & APUs (`amdgpu`)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, and combines shared `GTT` memory on APUs/Steam Deck.
+  - **Intel Arc & Integrated Graphics (`i915` / `xe`)**: Reads Linux DRM & `hwmon` sensors, `lmem_total_bytes`, and Intel RAPL power counters.
+  - **Hybrid Gaming Laptops**: Automatically prioritizes the dedicated gaming GPU (`card1`) over the integrated GPU (`card0`) and identifies exact GPU model names via `/usr/share/hwdata/pci.ids`.
+- **High-Contrast Readability & Dynamic Alerts**:
+  - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and automatic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**).
+- **Mini Frametime Graph & CSV Benchmark Logging (`F9`)**:
+  - Optional live frametime waveform graph right on the HUD, plus 1-key CSV benchmarking (`~/Documents/fpshud_benchmark.csv`) that logs Avg FPS, 1% Low, 0.1% Low, Min/Max FPS, and peak GPU/CPU temperatures and wattage.
 
-### Steam (Proton / DXVK / Native Games)
-1. Right-click your game in Steam -> **Properties** -> **General**.
-2. In **Launch Options**, paste:
-   ```bash
-   FPS_HUD=1 %command%
-   ```
-   *(If you are playing an older native Linux **OpenGL** game, use: `FPS_HUD=1 ~/.local/bin/fpshud %command%`)*
+---
 
-### Lutris & Heroic Games Launcher
-- Open the game's **Settings / Configuration** -> **System / Environment Variables**:
-  - Add variable **`FPS_HUD`** with value **`1`**.
+## 2. Installation & Sensor Permissions
 
-### Terminal / Command Line
+### 1-Command Installation (Recommended for All Users)
 ```bash
-# Test with Vulkan cube:
-FPS_HUD=1 vkcube
-
-# Test with OpenGL gears:
-~/.local/bin/fpshud glxgears
+curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
----
-
-## 2. In-Game Menu & Keyboard Shortcuts
-
-While inside a game, use these shortcuts at any time (you can also change these keys inside the GUI):
-
-| Default Key | Action |
-| :--- | :--- |
-| **`Insert`** / **`F12`** / **`F10`** | **Open / Close the In-Game Settings Menu** (automatically saves your changes when closed) |
-| **`F11`** | **Hide / Show the HUD overlay** on screen without opening the menu |
-| **`F9`** | **Start / Stop CSV Benchmark Recording** (saved to `~/Documents/fpshud_benchmark.csv`) |
-| **`ESC`** | Close the settings menu and return mouse control to the game |
-
-### The 4 Built-In Presets
-Inside the top header bar of the GUI, you can switch between 4 presets with a single click:
-1. **`Minimal`**: Shows only `FPS` and `Frametime (ms)` in a tiny badge.
-2. **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
-3. **`Advance`**: Turns on all **19 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `FT`, full `GPU`, full `CPU`, `RAM`, `Render API`, and `System Clock`).
-4. **`Custom` & `Save Custom`**: Lets you save your own favorite sensor layout to `~/.config/fpshud/custom_preset.ini`.
-
----
-
-## 3. Supported Hardware & 19 Sensors List
-
-### Universal Multi-Vendor Compatibility
-
-| Hardware Type | Supported Devices & Drivers | Automatic Features |
-| :--- | :--- | :--- |
-| **NVIDIA GPUs** | GeForce GTX / RTX (`nvidia` driver via `libnvidia-ml.so.1`) | Load, Clock, VRAM, Memory Bandwidth, Temp, Fan %, Power (Watts) |
-| **AMD GPUs & APUs** | Radeon RX / Integrated APUs / Steam Deck (`amdgpu`) | Load, Clock, VRAM + Shared GTT RAM, Bandwidth, Temp, Fan %, Power (Watts), PCI ID name lookup |
-| **Intel GPUs** | Intel Arc Discrete & Iris Xe / UHD (`xe` & `i915`) | Load, Clock, VRAM, Bandwidth, Temp, Fan %, Power (Watts), PCI ID name lookup |
-| **Hybrid Laptops** | Dual-GPU Laptops (`iGPU` + `dGPU`) | Automatically prioritizes your dedicated gaming GPU (`card1`) over integrated graphics (`card0`) |
-| **Intel & AMD CPUs** | Intel Core & AMD Ryzen Processors | Auto-detects CPU model name, per-core boost clock, load %, temperature (`coretemp` / `k10temp` / `zenpower`), and package power (`RAPL`) |
-
-### All 19 Available Sensors
-
-| # | Sensor Name | Group | What It Shows | Example on HUD |
-| :--- | :--- | :--- | :--- | :--- |
-| `01` | **FPS Counter** | `FPS` | Current frames per second | `144` |
-| `02` | **FPS Average** | `FPS` | Average FPS over the last 3.5 seconds | `AVG: 138` |
-| `03` | **FPS 1% Low** | `FPS` | Time-weighted 1% slowest frames (stutter indicator) | `1%: 112` |
-| `04` | **FPS 0.1% Low** | `FPS` | Time-weighted 0.1% worst micro-stutters | `0.1%: 95` |
-| `05` | **Frame Time** | `FPS` | Time taken to render each frame in milliseconds | `6.9 ms` |
-| `06` | **GPU Load** | `GPU` | GPU core usage percentage | `98%` |
-| `07` | **GPU Clock** | `GPU` | Current GPU core frequency | `2430 MHz` |
-| `08` | **GPU VRAM** | `GPU` | Video memory used in Gigabytes (includes shared GTT on APUs) | `6.4 GB` |
-| `09` | **GPU Bandwidth** | `GPU` | Active video memory throughput in GB/s | `165.4 GB/s` |
-| `10` | **GPU Temp** | `GPU` | GPU temperature in Celsius | `65 °C` |
-| `11` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
-| `12` | **GPU Power** | `GPU` | GPU power consumption in Watts | `185 W` |
-| `13` | **CPU Load** | `CPU` | Total processor usage percentage | `42%` |
-| `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | Processor package power draw in Watts | `58 W` |
-| `16` | **CPU Temp** | `CPU` | Processor temperature in Celsius | `62 °C` |
-| `17` | **System RAM** | `RAM` | System memory currently used in Gigabytes | `9.2 GB` |
-| `18` | **Render API** | `SYS` | Graphics API running the game (`VULKAN` or `OPENGL`) | `VULKAN` |
-| `19` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
-
----
-
-## 4. Optional Sensor & Wayland Permissions
-
-On some Linux distributions, two quick permission commands will ensure hotkeys on Wayland and CPU Watt readings work without needing root:
-
-1. **Allow In-Game Hotkeys & Mouse Grab on Wayland (`evdev`)**:
+### Optional: Enable Wayland Hotkeys & CPU Wattage Sensor Permissions
+On Linux, two hardware features are restricted by default for normal users:
+1. **Wayland / XWayland In-Game GUI Hotkeys & Mouse Capture (`/dev/input/event*`)**:
    ```bash
    sudo usermod -aG input $USER
-   # Apply immediately without rebooting:
+   # And apply immediately for your current session without rebooting:
    sudo chmod a+r /dev/input/event*
    ```
-2. **Allow Non-Root CPU Watt Readings (`intel-rapl` / `amd-rapl`)**:
+2. **CPU Power Consumption in Watts (`intel-rapl` / `amd-rapl`)**:
    ```bash
    echo 'SUBSYSTEM=="powercap", KERNEL=="*rapl:*", RUN+="/bin/chmod a+r /sys/class/powercap/%k/energy_uj"' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
    sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj 2>/dev/null || true
@@ -173,62 +109,184 @@ On some Linux distributions, two quick permission commands will ensure hotkeys o
 
 ---
 
-## 5. Tech Stack & System Architecture
+## 3. How to Use in Steam, Lutris, Heroic & Terminal
 
-| Component | Technology | Highlights |
+### 1. Steam (Proton / DXVK / Vulkan Games)
+Right-click your game in Steam -> **Properties** -> **General** -> **Launch Options**:
+```bash
+FPS_HUD=1 %command%
+```
+*(To disable temporarily, change it to `FPS_HUD=0 %command%`)*
+
+### 2. Steam (Native Linux OpenGL Games)
+```bash
+FPS_HUD=1 ~/.local/bin/fpshud %command%
+```
+
+### 3. Lutris & Heroic Games Launcher
+Open **Game Settings** -> **System / Environment Variables** -> Add:
+- **Key**: `FPS_HUD`
+- **Value**: `1`
+
+### 4. Terminal / Command Line
+```bash
+# Run any Vulkan game or app:
+FPS_HUD=1 vkcube
+
+# Run any OpenGL game or app:
+~/.local/bin/fpshud glxgears
+```
+
+---
+
+## 4. In-Game GUI Guide & Keyboard Shortcuts
+
+Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable inside the GUI):
+
+| Default Key | Action |
+| :--- | :--- |
+| **`Insert` / `F12` / `F10`** | Open or Close the **`FPSHUD Configuration Tool`** menu |
+| **`F11`** | Quickly hide or show the HUD overlay without opening the menu |
+| **`F9`** | Start or Stop **CSV Benchmark Recording** (`~/Documents/fpshud_benchmark.csv`) |
+| **`ESC`** | Close the GUI menu and return mouse control to the game |
+
+### The 4 Built-In Presets
+- **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
+- **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
+- **`Advance`**: Enables all **19 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 4 `CPU` metrics, `RAM`, `Render API`, and `Local Clock`).
+- **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
+
+---
+
+## 5. Supported Hardware & All 19 Sensors
+
+### Hardware Compatibility Matrix
+
+| Component | Supported Vendors & Drivers | Linux Data Sources |
 | :--- | :--- | :--- |
-| **Language & Build** | **C++20**, CMake, LTO, `-O3` | Statically links `libstdc++` & `libgcc` for universal distro portability (`~950 KB` binary). |
-| **Graphics Hooks** | **Vulkan 1.3 Layer** + **GLX/EGL** | Hooks `vkQueuePresentKHR`, `glXSwapBuffers`, and `eglSwapBuffers`. |
-| **Overlay & GUI** | **Dear ImGui (`v1.91.6`)** | Custom vertex-shaded outline/drop-shadow text & compact Latin-1 font atlas. |
-| **Telemetry Engine** | **POSIX `sysfs`/`procfs` + NVML** | Lock-free atomic/stack snapshots; zero heap allocations per frame. |
+| **NVIDIA GPUs** | NVIDIA Proprietary / Open Kernel (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
+| **AMD GPUs & APUs** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
+| **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
+| **Intel CPUs** | Intel Core (All Generations) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
+| **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+
+### All 19 Available Sensors
+
+| # | Sensor Name | Group | What It Shows | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `01` | **FPS Counter** | `FPS` | Current smooth frames per second | `144` |
+| `02` | **FPS Average** | `FPS` | Average FPS over the last 3.5 seconds | `AVG: 138` |
+| `03` | **FPS 1% Low** | `FPS` | Time-weighted 1% slowest frames (stutter indicator) | `1%: 112` |
+| `04` | **FPS 0.1% Low** | `FPS` | Time-weighted 0.1% worst micro-stutter frames | `0.1%: 95` |
+| `05` | **Frame Time** | `FPS` | Time taken to render a frame in milliseconds | `6.9 ms` |
+| `06` | **GPU Load** | `GPU` | GPU core usage percentage | `98%` |
+| `07` | **GPU Clock** | `GPU` | Current GPU graphics core clock speed | `2430 MHz` |
+| `08` | **GPU VRAM** | `GPU` | Used video memory in GB (includes shared GTT on APUs) | `6.4 GB` |
+| `09` | **GPU Bandwidth** | `GPU` | Active VRAM + PCIe memory bandwidth throughput | `165.4 GB/s` |
+| `10` | **GPU Temp** | `GPU` | GPU temperature in Celsius | `65 °C` |
+| `11` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
+| `12` | **GPU Power** | `GPU` | GPU power draw in Watts | `185 W` |
+| `13` | **CPU Load** | `CPU` | Total CPU utilization across all threads | `42%` |
+| `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
+| `15` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
+| `16` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
+| `17` | **System RAM** | `RAM` | Used system memory in GB | `9.2 GB` |
+| `18` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
+| `19` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+
+---
+
+## 6. Tech Stack & System Architecture
+
+| Layer | Technology | Highlights |
+| :--- | :--- | :--- |
+| **Language & Build** | **C++20**, **CMake**, **LTO (`-O3`)** | Statically links `libstdc++` & `libgcc` for universal distro portability. |
+| **Graphics Hooks** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Hooks `vkQueuePresentKHR`, `glXSwapBuffers`, and `eglSwapBuffers`. |
+| **UI Framework** | **Dear ImGui (`v1.91.6`)** | Custom vertex-shaded outline/drop-shadow text & split-panel dashboard. |
+| **Input Capture** | **Linux `evdev` + `X11` Fallback** | Non-blocking `/dev/input/event*` polling with `EVIOCGRAB` cursor lock. |
+| **Telemetry Engine** | **Async 500ms Worker Thread** | Zero heap allocations per frame; lock-free atomic snapshot reads. |
 
 ```mermaid
 flowchart TD
-    Env["Launch Game with FPS_HUD=1"] --> Config["Load ~/.config/fpshud/config.ini"]
-    Config --> Hook["Intercept Frame Present (Vulkan / OpenGL)"]
-    Hook --> HUD["Draw Two-Tone HUD & Mini Graph (src/overlay_ui.cpp)"]
-    Hook --> GUI["Draw Side-by-Side Settings Menu on Insert/F12 (src/gui_menu.cpp)"]
-    Worker["Background Telemetry Thread (Every 500ms)\nNVIDIA NVML | AMD amdgpu | Intel i915/xe | CPU procfs/hwmon"] -->|Lock-Free Snapshot| HUD
-    Worker -->|Live Sensor Values| GUI
+    Env["Launch Option: FPS_HUD=1"] --> Init["Config Manager (~/.config/fpshud/config.ini)"]
+    subgraph GameProcess["Game Process (Vulkan / Proton / DXVK / OpenGL)"]
+        VK["Vulkan Loader (VkLayer_FPSHUD_overlay)"] --> HUD["Two-Tone HUD & In-Game GUI Renderer"]
+        GL["OpenGL Wrapper (glXSwapBuffers / eglSwapBuffers)"] --> HUD
+        Input["Linux evdev + X11 Input Manager"] --> HUD
+        HUD <--> Init
+        subgraph Worker["Background Telemetry Thread (Every 500ms)"]
+            NV["NVIDIA: libnvidia-ml.so.1"]
+            DRM["AMD & Intel: /sys/class/drm + hwmon + pci.ids"]
+            CPU["CPU & RAM: /proc/stat + cpufreq + RAPL + hwmon"]
+        end
+        Worker -->|Lock-Free Snapshot| HUD
+    end
 ```
 
 ---
 
-## 6. Developer Guide (Build from Source & Automated Testing)
+## 7. Developer Guide (Building from Source & Testing)
 
-If you want to modify the code or build FPSHUD manually from source:
+If you are a developer or want to compile **FPSHUD** from source instead of using the prebuilt binary:
 
+### 1. Install Build Dependencies
+- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata`
+- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids`
+- **Fedora**: `sudo dnf install -y gcc-c++ cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata`
+
+### 2. Clone, Compile & Run Multi-Device Verification Suite
 ```bash
 git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
-./install.sh
-```
+./scripts/install.sh
 
-### Running the Multi-Device Automated Test Suite
-FPSHUD includes an automated hardware simulation test suite (`src/test_cli.cpp`) that tests all **19 sensors**, PCI ID name resolution, hybrid laptop dGPU selection, Low FPS tail calculation, and CSV benchmarking across **5 device profiles** (Real Hardware, Simulated AMD Desktop, Simulated Intel Arc Desktop, Hybrid Dual-GPU Laptop, and Steam Deck/APU):
-
-```bash
+# Run the automated 26-check verification suite across 5 simulated device profiles:
 ./build/fpshud_test 1
 ```
 
+### Project Structure
+```text
+FPS_HUD_FOR_LINUX/
+├── .github/workflows/ci.yml             # Automated CI build, 5-device test & GitHub Release publisher
+├── CMakeLists.txt                       # C++20 build config with LTO & static libstdc++/libgcc
+├── dist/fpshud-linux-x86_64.tar.gz      # Prebuilt portable binary package for 1-command curl install
+├── install.sh / uninstall.sh            # 1-command curl installer & uninstaller
+├── README.md / README.id.md             # English & Indonesian documentation
+└── src/
+    ├── config.hpp / config.cpp          # Preset manager & INI configuration persistence
+    ├── embedded_fonts.hpp               # Embedded OpenSans-Bold & VeraMono-Bold TTF byte arrays
+    ├── telemetry.hpp / telemetry.cpp    # Multi-vendor GPU/CPU telemetry & CSV benchmark recorder
+    ├── input_manager.hpp / .cpp         # Linux evdev + X11 input polling & EVIOCGRAB mouse lock
+    ├── gui_menu.hpp / gui_menu.cpp      # Tabless Side-by-Side Dear ImGui in-game configurator
+    ├── overlay_ui.hpp / overlay_ui.cpp  # Two-tone HUD renderer, outline/shadow & mini FT graph
+    ├── vulkan_layer.cpp                 # Vulkan Implicit Layer dispatch & vkQueuePresentKHR hook
+    ├── opengl_hook.cpp                  # OpenGL GLX/EGL buffer swap hooks
+    └── test_cli.cpp                     # Automated 5-Device Sysfs Simulation & Verification Suite
+```
+
 ---
 
-## 7. Troubleshooting & FAQ
+## 8. Troubleshooting & FAQ
 
-- **Pressing `Insert` / `F12` does not open the menu in-game:**
-  Run `sudo chmod a+r /dev/input/event*` (or add your user to the `input` group with `sudo usermod -aG input $USER` and log out/in).
-- **CPU Power shows `0 W`:**
-  Run `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj`.
-- **How do I reset all settings to default?**
-  Open the in-game menu (`Insert`/`F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
+1. **Pressing `Insert` / `F12` does not open the GUI or mouse clicks pass through to the game:**
+   - Run `sudo chmod a+r /dev/input/event*` (or permanently add your user to the `input` group with `sudo usermod -aG input $USER` and log out/in).
+2. **CPU Power shows `0 W`:**
+   - Run `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj` (see [Section 2](#2-installation--sensor-permissions) to make it permanent across reboots).
+3. **How do I reset all settings back to default?**
+   - Open the In-Game GUI (`Insert` / `F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
 
 ---
 
-## 8. Contributing, Credits & License
+## 9. Contributing, Credits & License
 
-- **Contributions**: Pull requests and issues are welcome! Please run `./build/fpshud_test 1` before submitting PRs.
-- **Credits**:
-  - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut for the immediate-mode graphical interface.
-  - **Khronos Group** for the Vulkan & OpenGL headers and implicit layer standards.
-  - **Linux Kernel Community** for the `drm`, `amdgpu`, `i915`/`xe`, `hwmon`, and `powercap` interfaces.
-- **License**: Released under the **[MIT License](LICENSE)**.
+### Contributing
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 26 multi-vendor checks pass.
+
+### Credits & Acknowledgments
+- **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.
+- **Khronos Group** — Vulkan & OpenGL headers and implicit layer architecture.
+- **Linux Kernel Community** — `drm`, `amdgpu`, `i915`/`xe`, `hwmon`, and `powercap` driver maintainers.
+- **Open Sans & Bitstream Vera** — Open-source TrueType fonts embedded for crisp in-game typography.
+
+### License
+Distributed under the **[MIT License](LICENSE)**.

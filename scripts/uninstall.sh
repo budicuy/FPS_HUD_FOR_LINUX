@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$(dirname "$SCRIPT_DIR")/uninstall.sh" "$@"
+echo "[*] Uninstalling FPSHUD user files..."
+rm -f "$HOME/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
+rm -f "$HOME/.local/bin/fpshud"
+rm -rf "$HOME/.local/share/fpshud"
+
+echo "[*] FPSHUD has been uninstalled."
+echo "    (Optional) To remove saved user configurations, run: rm -rf ~/.config/fpshud"

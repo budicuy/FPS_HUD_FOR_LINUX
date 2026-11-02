@@ -1,171 +1,105 @@
-# FPSHUD for Linux
+# FPSHUD
 
-**Overlay Monitoring FPS & Hardware Ringan dengan Menu Pengaturan Langsung di Dalam Game untuk Linux (Vulkan & OpenGL)**
+**Overlay Performa In-Game Ringan & Menu Pengaturan Interaktif untuk Gaming di Linux (Vulkan & OpenGL)**
 
-[![CI & Release](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml/badge.svg)](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions)
+[![CI Build & Release](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml/badge.svg)](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C++20](https://img.shields.io/badge/C%2B%2B-20-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
 [![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry.cpp)
 
-> 🌐 **Bahasa Dokumentasi:** **[English](README.md)** | **[Bahasa Indonesia (Aktif)](README.id.md)**
+> 🌐 **Bahasa Dokumentasi / Language:** **[English](README.md)** | **[Bahasa Indonesia (Aktif)](README.id.md)**
 
 ---
 
-## Gambaran Umum (Overview)
+## Instalasi Cepat (Cukup 1 Perintah — Tanpa Perlu Compile!)
 
-### Apa itu FPSHUD?
-**FPSHUD** adalah aplikasi pemantau performa (*in-game overlay* / HUD) ringan yang dibuat untuk para pemain game di Linux. Aplikasi ini berfungsi untuk menampilkan informasi **FPS, 1% Low (indikator patah-patah/*stutter*), suhu GPU & CPU, kecepatan clock, konsumsi daya (Watt), hingga pemakaian RAM** secara langsung di layar saat kamu bermain game di Steam (Proton/DXVK), Lutris, Heroic, maupun game Linux native.
-
-Kebanyakan overlay di Linux mengharuskan kamu keluar dari game dan mengedit file teks konfigurasi yang rumit hanya untuk memindahkan posisi tulisan atau menambah sensor. **FPSHUD dibuat agar jauh lebih praktis:** kamu cukup menjalankan game dengan **`FPS_HUD=1`**, lalu tekan tombol **`Insert`** atau **`F12`** kapan saja saat bermain untuk mengatur semuanya secara langsung lewat **Menu Pengaturan di Dalam Game (`FPSHUD Configuration Tool`)**!
-
-### Dibangun Menggunakan Apa?
-FPSHUD dibangun menggunakan bahasa **C++20** modern agar ukurannya sangat kecil (`~950 KB`) dan tidak membebani FPS game kamu sama sekali. Teknologi utama di dalamnya meliputi:
-- **Vulkan Implicit Layer & OpenGL Hook** untuk menampilkan teks di atas layar game dengan mulus tanpa *lag*.
-- **Dear ImGui** untuk menyediakan menu pengaturan interaktif di dalam game yang rapi dan responsif.
-- **Sensor Kernel Linux (`drm`, `hwmon`, `powercap`) & NVIDIA NVML** untuk membaca suhu, kipas, clock, dan daya langsung dari perangkat keras tanpa membutuhkan aplikasi latar belakang yang berat.
-
-### Fitur Apa Saja yang Ada di Dalamnya?
-- **Instalasi 1 Perintah (`curl`)**: Cukup salin dan jalankan 1 baris perintah di terminal untuk menginstal—tidak perlu repot menginstal paket *compiler* atau melakukan *build* manual.
-- **Menu Pengaturan Langsung di Dalam Game (Tanpa Tab yang Rumit)**: Tekan `Insert`, `F12`, atau `F10` saat bermain untuk mengubah posisi HUD, ukuran huruf, transparansi latar belakang, warna, atau memilih **19 sensor hardware** secara *real-time*.
-- **Mendukung Semua Perangkat (NVIDIA, AMD, Intel & Steam Deck/APU)**: Otomatis mengenali nama model CPU & GPU kamu dan bekerja di kartu grafis **NVIDIA GeForce**, **AMD Radeon**, maupun **Intel Arc / Iris**, serta prosesor **Intel Core** dan **AMD Ryzen**.
-- **4 Preset Siap Pakai**: Ganti tampilan dengan 1 klik antara **Minimal** (hanya FPS), **Standard**, **Advance** (lengkap 19 sensor), atau simpan racikanmu sendiri di **Custom**.
-- **Tampilan Dua Warna (*Two-Tone*) yang Mudah Dibaca & Peringatan Suhu**: Angka ditampilkan dengan warna putih terang yang tegas sedangkan satuan (`MHz`, `GB`, `°C`, `W`) berwarna perak lembut, dilengkapi warna peringatan otomatis saat suhu GPU/CPU mulai panas (`>= 72°C` Kuning, `>= 82°C` Merah).
-- **Perekam Benchmark ke CSV (`F9`)**: Tekan `F9` saat bermain untuk merekam rata-rata FPS, 1% Low, 0.1% Low, serta suhu maksimum ke dalam file `.csv` di folder `Dokumen` / `Documents`.
-
-### Bagaimana Cara Kerjanya?
-1. Saat kamu menjalankan game dengan `FPS_HUD=1`, sistem Linux secara otomatis menyisipkan `libfpshud.so` ke dalam proses gambar game tersebut.
-2. Setiap kali game selesai menggambar satu frame ke layar, FPSHUD menghitung waktu antar-frame secara presisi dan menggambar teks HUD di atasnya.
-3. Sementara itu, proses pembacaan suhu, daya, dan beban CPU/GPU dijalankan secara terpisah di latar belakang setiap **0,5 detik sekali** (`500ms`), sehingga pemantauan sensor dijamin tidak akan pernah membuat game kamu mengalami penurunan FPS.
-
----
-
-## Instalasi Cepat (Cukup 1 Perintah `curl`)
-
-Kamu bisa langsung menginstal **FPSHUD** di distro Linux apa pun (Arch, Ubuntu, Debian, Linux Mint, Fedora, Pop!_OS, Nobara, Bazzite, maupun SteamOS) hanya dengan **1 perintah** berikut di terminal:
+Instal **FPSHUD** dalam hitungan detik di distro Linux apa pun (Arch, Ubuntu, Debian, Fedora, Linux Mint, Pop!_OS, Nobara, Bazzite, maupun SteamOS) tanpa perlu menginstal paket compiler atau build tambahan:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
-### Cara Uninstall Cepat (1 Perintah)
+Untuk menghapus instalasi (uninstall) kapan saja:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
 ```
 
 ---
 
+## Gambaran Umum (Overview)
+
+### Untuk apa aplikasi ini dibuat?
+Saat bermain game di Linux (baik lewat Steam Proton, Lutris, Heroic, maupun game native Linux), kita sering ingin memantau **berapa FPS yang didapat**, apakah ada patah-patah (**1% Low / Frametime**), serta mengecek kondisi kesehatan PC/laptop seperti **suhu GPU & CPU, kecepatan clock, konsumsi daya (Watt), dan pemakaian RAM/VRAM**.
+
+Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, mengganti ukuran huruf, atau memilih sensor mana saja yang tampil, kamu harus keluar dulu dari game lalu mengedit file konfigurasi teks secara manual. **FPSHUD hadir untuk membuat semuanya jauh lebih praktis:** cukup aktifkan dengan `FPS_HUD=1`, lalu tekan tombol **`Insert`** atau **`F12`** langsung di tengah permainan untuk membuka menu pengaturan interaktif di layar game kamu!
+
+### Dibangun menggunakan apa?
+FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, memanfaatkan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
+
+### Fitur apa saja yang ada di dalamnya?
+- **Menu Pengaturan Langsung di Dalam Game (`Insert` / `F12` / `F10`)**: Dashboard 2 kolom yang rapi tanpa tab berbelit-belit. Kamu bisa langsung mencentang sensor yang ingin ditampilkan, mengatur posisi layar, ukuran font, transparansi background, hingga warna teks tanpa keluar dari game.
+- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 19 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
+- **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
+- **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
+- **1% Low FPS Akurat & Perekam Benchmark ke CSV (`F9`)**: Menghitung rata-rata frame terendah secara akurat (otomatis mengabaikan jeda saat layar *loading*) dan bisa merekam laporan performa ke file `.csv` kapan saja dengan menekan `F9`.
+
+### Bagaimana cara kerjanya?
+1. **Pasang sekali lewat 1 perintah `curl`**: Script installer otomatis mengunduh file `libfpshud.so` siap pakai ke `~/.local/lib/fpshud/` dan mendaftarkannya ke sistem Vulkan/OpenGL pengguna.
+2. **Aktifkan di game**: Cukup tambahkan `FPS_HUD=1 %command%` pada Launch Options game di Steam (atau Lutris/Heroic).
+3. **Tidak bikin FPS game turun**: Saat game menggambar setiap frame ke layar, FPSHUD ikut menempelkan teks informasi tepat sebelum gambar ditampilkan ke monitor. Sementara itu, tugas membaca sensor suhu, kipas, dan Watt dilakukan oleh pekerja terpisah di latar belakang setiap 0,5 detik—sehingga performa game kamu tetap kencang tanpa gangguan.
+
+---
+
 ## Daftar Isi
 
-1. [Cara Pakai di Game (Steam, Lutris, Heroic, Terminal)](#1-cara-pakai-di-game-steam-lutris-heroic-terminal)
-2. [Menu Pengaturan di Dalam Game & Tombol Shortcut](#2-menu-pengaturan-di-dalam-game--tombol-shortcut)
-3. [Dukungan Hardware & Daftar 19 Sensor](#3-dukungan-hardware--daftar-19-sensor)
-4. [Izin Tambahan untuk Sensor Daya & Wayland (Opsional)](#4-izin-tambahan-untuk-sensor-daya--wayland-opsional)
-5. [Tech Stack & Arsitektur Sistem](#5-tech-stack--arsitektur-sistem)
-6. [Panduan Developer (Build dari Source & Pengujian Otomatis)](#6-panduan-developer-build-dari-source--pengujian-otomatis)
-7. [Troubleshooting & Tanya Jawab (FAQ)](#7-troubleshooting--tanya-jawab-faq)
-8. [Kontribusi, Kredit & Lisensi](#8-kontribusi-kredit--lisensi)
+1. [Fitur Utama](#1-fitur-utama)
+2. [Instalasi & Izin Akses Sensor](#2-instalasi--izin-akses-sensor)
+3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)
+4. [Panduan Menu In-Game GUI & Tombol Shortcut](#4-panduan-menu-in-game-gui--tombol-shortcut)
+5. [Dukungan Perangkat Keras & Daftar 19 Sensor](#5-dukungan-perangkat-keras--daftar-19-sensor)
+6. [Tech Stack & Arsitektur Sistem](#6-tech-stack--arsitektur-sistem)
+7. [Panduan Pengembang (Build dari Source & Pengujian)](#7-panduan-pengembang-build-dari-source--pengujian)
+8. [Troubleshooting & Tanya Jawab (FAQ)](#8-troubleshooting--tanya-jawab-faq)
+9. [Kontribusi, Kredit & Lisensi](#9-kontribusi-kredit--lisensi)
 
 ---
 
-## 1. Cara Pakai di Game (Steam, Lutris, Heroic, Terminal)
+## 1. Fitur Utama
 
-FPSHUD hanya menggunakan **satu perintah pengaktifan**:
-- **`FPS_HUD=1`** — **Menyalakan** HUD Overlay sekaligus Menu Pengaturan di dalam game.
-- **`FPS_HUD=0`** — **Mematikan** HUD Overlay sepenuhnya.
+- **Aktivasi Simpel (`FPS_HUD=1` / `FPS_HUD=0`)**:
+  - `FPS_HUD=1`: Menyalakan HUD Overlay dan menu In-Game GUI Configurator.
+  - `FPS_HUD=0` (atau dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
+- **Dashboard In-Game GUI Tanpa Tab (`FPSHUD Configuration Tool`)**:
+  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka panel berdampingan (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Kanan: 19 Sensor Hardware & Tombol Preset).
+  - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
+  - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
+- **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
+  - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
+  - **AMD Radeon & APU (`amdgpu`)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, serta menggabungkan memori *Shared GTT* pada APU/Steam Deck.
+  - **Intel Arc & Integrated Graphics (`i915` / `xe`)**: Membaca sensor DRM & `hwmon`, `lmem_total_bytes`, serta sensor daya Intel RAPL.
+  - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
+- **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
+  - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
 
-### Steam (Game Proton / DXVK / Vulkan)
-1. Klik kanan game di Steam -> **Properties** -> **General**.
-2. Pada kolom **Launch Options**, isi dengan:
-   ```bash
-   FPS_HUD=1 %command%
-   ```
-   *(Catatan: Jika kamu memainkan game Linux lawas yang masih menggunakan **OpenGL**, gunakan: `FPS_HUD=1 ~/.local/bin/fpshud %command%`)*
+---
 
-### Lutris & Heroic Games Launcher
-- Buka **Pengaturan Game (Configuration)** -> **System / Environment Variables**:
-  - Tambahkan Key **`FPS_HUD`** dengan nilai **`1`**.
+## 2. Instalasi & Izin Akses Sensor
 
-### Terminal
+### Instalasi 1 Perintah (Direkomendasikan untuk Semua Pengguna)
 ```bash
-# Coba dengan Vulkan cube:
-FPS_HUD=1 vkcube
-
-# Coba dengan OpenGL gears:
-~/.local/bin/fpshud glxgears
+curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
----
-
-## 2. Menu Pengaturan di Dalam Game & Tombol Shortcut
-
-Saat sedang berada di dalam game, gunakan tombol shortcut berikut kapan saja (tombol ini juga bisa kamu ganti sendiri di dalam menu GUI):
-
-| Tombol Default | Fungsi |
-| :--- | :--- |
-| **`Insert`** / **`F12`** / **`F10`** | **Membuka / Menutup Menu Pengaturan GUI** (otomatis menyimpan pengaturan saat ditutup) |
-| **`F11`** | **Menyembunyikan / Menampilkan HUD** di layar dengan cepat tanpa membuka menu |
-| **`F9`** | **Mulai / Berhenti Merekam Benchmark CSV** (tersimpan ke `~/Dokumen/fpshud_benchmark.csv` atau `~/Documents/fpshud_benchmark.csv`) |
-| **`ESC`** | Menutup menu pengaturan dan mengembalikan kursor mouse ke dalam game |
-
-### 4 Pilihan Preset Siap Pakai
-Di bagian bar atas jendela menu GUI, kamu bisa memilih 4 preset hanya dengan 1 klik:
-1. **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)` secara simpel.
-2. **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Suhu)`, `CPU (Load, Clock, Suhu)`, dan `RAM`.
-3. **`Advance`**: Menampilkan lengkap **19 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `FT`, semua sensor `GPU`, semua sensor `CPU`, `RAM`, `Render API`, dan `Jam Lokal`).
-4. **`Custom` & `Save Custom`**: Menyimpan susunan sensor pilihanmu sendiri ke `~/.config/fpshud/custom_preset.ini`.
-
----
-
-## 3. Dukungan Hardware & Daftar 19 Sensor
-
-### Kompatibilitas Semua Merek Hardware (Multi-Vendor)
-
-| Jenis Perangkat | Hardware & Driver yang Didukung | Fitur Otomatis |
-| :--- | :--- | :--- |
-| **GPU NVIDIA** | GeForce GTX / RTX (`nvidia` via `libnvidia-ml.so.1`) | Load, Clock, VRAM, Bandwidth, Suhu, Fan %, Daya (Watt) |
-| **GPU & APU AMD** | Radeon RX / APU / Steam Deck (`amdgpu`) | Load, Clock, VRAM + Shared GTT RAM, Bandwidth, Suhu, Fan %, Daya (Watt), deteksi nama via `pci.ids` |
-| **GPU Intel** | Intel Arc Discrete & Iris Xe / UHD (`xe` & `i915`) | Load, Clock, VRAM, Bandwidth, Suhu, Fan %, Daya (Watt), deteksi nama via `pci.ids` |
-| **Laptop Hybrid** | Laptop Dual-GPU (`iGPU` + `dGPU`) | Otomatis memilih GPU gaming utama (`card1`) dibanding iGPU bawaan prosesor (`card0`) |
-| **CPU Intel & AMD** | Prosesor Intel Core & AMD Ryzen | Otomatis mengenali nama prosesor, kecepatan clock tertinggi, beban %, suhu (`coretemp` / `k10temp` / `zenpower`), dan daya (`RAPL`) |
-
-### Daftar Lengkap 19 Sensor
-
-| # | Nama Sensor | Grup | Fungsi / Informasi yang Ditampilkan | Contoh di HUD |
-| :--- | :--- | :--- | :--- | :--- |
-| `01` | **FPS Counter** | `FPS` | Jumlah frame per detik saat ini | `144` |
-| `02` | **FPS Average** | `FPS` | Rata-rata FPS selama 3,5 detik terakhir | `AVG: 138` |
-| `03` | **FPS 1% Low** | `FPS` | Rata-rata 1% frame paling lambat (indikator *stutter*) | `1%: 112` |
-| `04` | **FPS 0.1% Low** | `FPS` | Rata-rata 0,1% frame paling lambat (*micro-stutter*) | `0.1%: 95` |
-| `05` | **Frame Time** | `FPS` | Waktu render per frame dalam milidetik | `6.9 ms` |
-| `06` | **GPU Load** | `GPU` | Persentase kerja kartu grafis | `98%` |
-| `07` | **GPU Clock** | `GPU` | Kecepatan frekuensi core GPU saat ini | `2430 MHz` |
-| `08` | **GPU VRAM** | `GPU` | Pemakaian memori VRAM dalam GB (termasuk GTT pada APU) | `6.4 GB` |
-| `09` | **GPU Bandwidth** | `GPU` | Kecepatan transfer memori VRAM aktif dalam GB/s | `165.4 GB/s` |
-| `10` | **GPU Temp** | `GPU` | Suhu GPU dalam derajat Celcius | `65 °C` |
-| `11` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
-| `12` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
-| `13` | **CPU Load** | `CPU` | Persentase beban kerja prosesor | `42%` |
-| `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU aktif tertinggi | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | Konsumsi daya listrik prosesor dalam Watt | `58 W` |
-| `16` | **CPU Temp** | `CPU` | Suhu prosesor dalam derajat Celcius | `62 °C` |
-| `17` | **System RAM** | `RAM` | Pemakaian memori RAM sistem dalam GB | `9.2 GB` |
-| `18` | **Render API** | `SYS` | API grafis yang dipakai game (`VULKAN` atau `OPENGL`) | `VULKAN` |
-| `19` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
-
----
-
-## 4. Izin Tambahan untuk Sensor Daya & Wayland (Opsional)
-
-Pada beberapa distro Linux, jalankan dua perintah singkat ini agar tombol shortcut di Wayland dan sensor Watt CPU bisa terbaca tanpa memerlukan `sudo`:
-
-1. **Mengizinkan Shortcut Keyboard & Mouse GUI di Wayland (`evdev`)**:
+### Opsional: Aktifkan Izin Shortcut Wayland & Sensor Daya CPU (Watt)
+Di Linux, dua fitur di bawah ini secara bawaan dibatasi aksesnya untuk pengguna biasa:
+1. **Agar Shortcut Keyboard (`Insert`/`F12`) & Klik Mouse GUI Berjalan di Wayland (`/dev/input/event*`)**:
    ```bash
    sudo usermod -aG input $USER
-   # Aktifkan langsung saat ini tanpa perlu restart:
+   # Dan aktifkan langsung untuk sesi saat ini tanpa perlu restart:
    sudo chmod a+r /dev/input/event*
    ```
-2. **Mengizinkan Pembacaan Watt CPU (`intel-rapl` / `amd-rapl`)**:
+2. **Agar Sensor Daya CPU (`CPU Watt` via `intel-rapl` / `amd-rapl`) Terbaca Tanpa Root**:
    ```bash
    echo 'SUBSYSTEM=="powercap", KERNEL=="*rapl:*", RUN+="/bin/chmod a+r /sys/class/powercap/%k/energy_uj"' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
    sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj 2>/dev/null || true
@@ -173,62 +107,164 @@ Pada beberapa distro Linux, jalankan dua perintah singkat ini agar tombol shortc
 
 ---
 
-## 5. Tech Stack & Arsitektur Sistem
+## 3. Cara Pakai di Steam, Lutris, Heroic & Terminal
 
-| Komponen | Teknologi | Keunggulan |
-| :--- | :--- | :--- |
-| **Bahasa & Build** | **C++20**, CMake, LTO, `-O3` | Menautkan `libstdc++` & `libgcc` secara statis agar portabel di semua distro (`~950 KB`). |
-| **Graphics Hook** | **Vulkan 1.3 Layer** + **GLX/EGL** | Mengintersepsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
-| **Overlay & GUI** | **Dear ImGui (`v1.91.6`)** | Teks tajam dengan *outline*/*drop shadow* & atlas font ringkas hemat memori. |
-| **Mesin Sensor** | **POSIX `sysfs`/`procfs` + NVML** | *Snapshot* memori tanpa alokasi heap per frame (*zero frame-time overhead*). |
+### 1. Steam (Game Proton / DXVK / Vulkan)
+Klik kanan game di Steam -> **Properties** -> **General** -> **Launch Options**:
+```bash
+FPS_HUD=1 %command%
+```
+*(Untuk mematikan sementara, cukup ubah menjadi `FPS_HUD=0 %command%`)*
 
-```mermaid
-flowchart TD
-    Env["Jalankan Game dengan FPS_HUD=1"] --> Config["Muat ~/.config/fpshud/config.ini"]
-    Config --> Hook["Intersepsi Frame Game (Vulkan / OpenGL)"]
-    Hook --> HUD["Gambar Teks HUD Two-Tone & Grafik Mini (src/overlay_ui.cpp)"]
-    Hook --> GUI["Buka Menu Pengaturan saat Tekan Insert/F12 (src/gui_menu.cpp)"]
-    Worker["Thread Sensor Latar Belakang (Tiap 500ms)\nNVIDIA NVML | AMD amdgpu | Intel i915/xe | CPU procfs/hwmon"] -->|Snapshot Cepat| HUD
-    Worker -->|Data Sensor Real-Time| GUI
+### 2. Steam (Game Linux OpenGL Native)
+```bash
+FPS_HUD=1 ~/.local/bin/fpshud %command%
+```
+
+### 3. Lutris & Heroic Games Launcher
+Buka **Game Settings / Configuration** -> **System / Environment Variables** -> Tambahkan:
+- **Key**: `FPS_HUD`
+- **Value**: `1`
+
+### 4. Terminal / Command Line
+```bash
+# Menjalankan aplikasi/game Vulkan:
+FPS_HUD=1 vkcube
+
+# Menjalankan aplikasi/game OpenGL:
+~/.local/bin/fpshud glxgears
 ```
 
 ---
 
-## 6. Panduan Developer (Build dari Source & Pengujian Otomatis)
+## 4. Panduan Menu In-Game GUI & Tombol Shortcut
 
-Jika kamu seorang pengembang yang ingin memodifikasi kode sumber atau melakukan kompilasi manual:
+Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua tombol bisa diganti lewat menu GUI):
 
+| Tombol Default | Fungsi |
+| :--- | :--- |
+| **`Insert` / `F12` / `F10`** | Membuka atau Menutup menu **`FPSHUD Configuration Tool`** |
+| **`F11`** | Menyembunyikan atau Menampilkan HUD dengan cepat tanpa membuka menu |
+| **`F9`** | Memulai atau Menghentikan perekaman **Benchmark CSV** |
+| **`ESC`** | Menutup menu GUI dan mengembalikan kursor mouse ke dalam game |
+
+### 4 Pilihan Preset di Dalam GUI
+- **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
+- **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
+- **`Advance`**: Menampilkan lengkap **19 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 4 sensor `CPU`, `RAM`, `Render API`, dan `Local Clock`).
+- **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
+
+---
+
+## 5. Dukungan Perangkat Keras & Daftar 19 Sensor
+
+### Matriks Kompatibilitas Perangkat Keras
+
+| Komponen | Vendor & Driver yang Didukung | Sumber Data di Linux |
+| :--- | :--- | :--- |
+| **GPU NVIDIA** | Driver NVIDIA Proprietary / Open (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
+| **GPU & APU AMD** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
+| **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
+| **CPU Intel** | Intel Core (Semua Generasi) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
+| **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+
+### Daftar Lengkap 19 Sensor
+
+| # | Nama Sensor | Grup | Informasi yang Ditampilkan | Contoh di HUD |
+| :--- | :--- | :--- | :--- | :--- |
+| `01` | **FPS Counter** | `FPS` | Jumlah frame per detik saat ini | `144` |
+| `02` | **FPS Average** | `FPS` | Rata-rata FPS selama 3,5 detik terakhir | `AVG: 138` |
+| `03` | **FPS 1% Low** | `FPS` | Rata-rata 1% frame paling lambat (indikator kelancaran) | `1%: 112` |
+| `04` | **FPS 0.1% Low** | `FPS` | Rata-rata 0,1% frame paling lambat (*micro-stutter*) | `0.1%: 95` |
+| `05` | **Frame Time** | `FPS` | Waktu yang dibutuhkan untuk merender 1 frame (milidetik) | `6.9 ms` |
+| `06` | **GPU Load** | `GPU` | Persentase beban kerja core GPU | `98%` |
+| `07` | **GPU Clock** | `GPU` | Kecepatan frekuensi core GPU saat ini | `2430 MHz` |
+| `08` | **GPU VRAM** | `GPU` | Pemakaian memori VRAM GPU dalam GB (termasuk GTT di APU) | `6.4 GB` |
+| `09` | **GPU Bandwidth** | `GPU` | Kecepatan transfer bandwidth memori VRAM + PCIe aktif | `165.4 GB/s` |
+| `10` | **GPU Temp** | `GPU` | Suhu GPU dalam derajat Celcius | `65 °C` |
+| `11` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
+| `12` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
+| `13` | **CPU Load** | `CPU` | Persentase pemakaian total seluruh thread CPU | `42%` |
+| `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
+| `15` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
+| `16` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
+| `17` | **System RAM** | `RAM` | Pemakaian memori RAM sistem dalam GB | `9.2 GB` |
+| `18` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
+| `19` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+
+---
+
+## 6. Tech Stack & Arsitektur Sistem
+
+| Bagian | Teknologi | Keunggulan Utama |
+| :--- | :--- | :--- |
+| **Bahasa & Build** | **C++20**, **CMake**, **LTO (`-O3`)** | Menggabungkan `libstdc++` & `libgcc` secara statis agar portabel di semua distro. |
+| **Intersepsi Grafis** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Menangkap fungsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
+| **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 2 kolom tanpa tab. |
+| **Penangkap Input** | **Linux `evdev` + Fallback `X11`** | Pembacaan `/dev/input/event*` non-blocking dengan pengunci kursor `EVIOCGRAB`. |
+| **Mesin Sensor** | **Thread Pekerja Asinkron (500ms)** | Nol alokasi memori per frame; pembacaan data ke layar bebas hambatan (*lock-free*). |
+
+```mermaid
+flowchart TD
+    Env["Launch Option: FPS_HUD=1"] --> Init["Manajer Konfigurasi (~/.config/fpshud/config.ini)"]
+    subgraph GameProcess["Proses Game (Vulkan / Proton / DXVK / OpenGL)"]
+        VK["Vulkan Loader (VkLayer_FPSHUD_overlay)"] --> HUD["Renderer HUD Two-Tone & In-Game GUI"]
+        GL["OpenGL Wrapper (glXSwapBuffers / eglSwapBuffers)"] --> HUD
+        Input["Linux evdev + X11 Input Manager"] --> HUD
+        HUD <--> Init
+        subgraph Worker["Thread Sensor Latar Belakang (Setiap 500ms)"]
+            NV["NVIDIA: libnvidia-ml.so.1"]
+            DRM["AMD & Intel: /sys/class/drm + hwmon + pci.ids"]
+            CPU["CPU & RAM: /proc/stat + cpufreq + RAPL + hwmon"]
+        end
+        Worker -->|Snapshot Bebas Hambatan| HUD
+    end
+```
+
+---
+
+## 7. Panduan Pengembang (Build dari Source & Pengujian)
+
+Bagi pengembang (*developer*) yang ingin memodifikasi kode sumber atau melakukan kompilasi manual:
+
+### 1. Instal Paket Dependensi Build
+- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata`
+- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids`
+- **Fedora**: `sudo dnf install -y gcc-c++ cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata`
+
+### 2. Clone, Compile & Jalankan Pengujian Simulasi 5 Perangkat
 ```bash
 git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
-./install.sh
-```
+./scripts/install.sh
 
-### Menjalankan Pengujian Simulasi 5 Perangkat Otomatis
-FPSHUD dilengkapi *test suite* otomatis (`src/test_cli.cpp`) yang menyimulasikan struktur file kernel Linux untuk menguji ke-19 sensor, database `pci.ids`, pemilihan dGPU laptop hybrid, akurasi 1% Low FPS, dan perekam CSV benchmark pada **5 profil perangkat berbeda** (Hardware Asli, PC Desktop AMD, PC Desktop Intel Arc, Laptop Hybrid Dual-GPU, dan Steam Deck/APU):
-
-```bash
+# Jalankan 26 pengujian otomatis pada 5 profil perangkat (NVIDIA, AMD, Intel, Laptop Hybrid, APU):
 ./build/fpshud_test 1
 ```
 
 ---
 
-## 7. Troubleshooting & Tanya Jawab (FAQ)
+## 8. Troubleshooting & Tanya Jawab (FAQ)
 
-- **Menekan `Insert` / `F12` tidak membuka menu di dalam game:**
-  Jalankan `sudo chmod a+r /dev/input/event*` (atau tambahkan user ke grup `input` dengan `sudo usermod -aG input $USER` lalu login ulang).
-- **Nilai CPU Power menampilkan `0 W`:**
-  Jalankan `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj`.
-- **Bagaimana cara mengembalikan semua pengaturan ke awal (Reset)?**
-  Buka menu di dalam game (`Insert`/`F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
+1. **Menekan `Insert` / `F12` tidak membuka menu GUI atau klik mouse tembus ke dalam game:**
+   - Jalankan `sudo chmod a+r /dev/input/event*` (atau tambahkan user ke grup `input` secara permanen dengan `sudo usermod -aG input $USER` lalu login ulang).
+2. **Daya CPU menampilkan `0 W`:**
+   - Jalankan `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj` (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) agar aktif permanen setiap kali komputer dinyalakan).
+3. **Bagaimana cara mengembalikan semua pengaturan ke kondisi awal (Reset)?**
+   - Buka menu GUI di dalam game (`Insert` / `F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
 
 ---
 
-## 8. Kontribusi, Kredit & Lisensi
+## 9. Kontribusi, Kredit & Lisensi
 
-- **Kontribusi**: *Pull Request* dan laporan *issue* sangat terbuka! Pastikan seluruh pengujian `./build/fpshud_test 1` lulus sebelum mengirimkan PR.
-- **Kredit**:
-  - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut untuk pustaka antarmuka grafis di dalam game.
-  - **Khronos Group** untuk spesifikasi standar Vulkan & OpenGL.
-  - **Komunitas Kernel Linux** untuk antarmuka sensor `drm`, `amdgpu`, `i915`/`xe`, `hwmon`, dan `powercap`.
-- **Lisensi**: Dirilis di bawah lisensi sumber terbuka **[MIT License](LICENSE)**.
+### Kontribusi
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 26 pengujian multi-perangkat lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+
+### Kredit & Penghargaan
+- **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.
+- **Khronos Group** — Spesifikasi standar Vulkan Implicit Layer dan OpenGL.
+- **Komunitas Kernel Linux** — Pengembang subsistem `drm`, `amdgpu`, `i915`/`xe`, `hwmon`, dan `powercap`.
+- **Open Sans & Bitstream Vera** — Font TrueType open-source yang ditanamkan di dalam program.
+
+### Lisensi
+Didistribusikan di bawah lisensi **[MIT License](LICENSE)**.
