@@ -62,7 +62,7 @@ enum class FontFamily {
     AdwaitaMono = 3  // AdwaitaMono-Bold
 };
 
-constexpr float kAtlasBaseFontSizePx = 32.0f;
+constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
 constexpr std::size_t kTotalMetricCount = 23;
@@ -100,7 +100,7 @@ struct HudConfig {
     int key_toggle_hud = 0;
     int key_benchmark = 0;
 
-    // GUI Menu Scaling (0.60f .. 2.00f, default 1.0f = 100%)
+    // GUI Menu & Render Scaling (0.50f .. 2.00f, default 1.0f = 100%)
     float gui_scale = 1.0f;
 
     // Font sizing (atlas rasterized at 32.0px for crisp vector quality)
