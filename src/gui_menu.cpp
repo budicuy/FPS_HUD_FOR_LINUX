@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -94,17 +95,34 @@ void render_gui_menu(HudConfig& cfg,
 
     if (!cfg.gui_open) return;
 
-    // Wide side-by-side dashboard window (all settings + every sensor visible on 1 screen without tabs!)
-    ImGui::SetNextWindowPos(ImVec2(display_width * 0.5f, display_height * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(840.0f, 600.0f), ImGuiCond_FirstUseEver);
+    constexpr float kBaseGuiWidth = 1280.0f;
+    constexpr float kBaseGuiHeight = 720.0f;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 4.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 4.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 5.0f));
+    float scale = std::clamp(cfg.gui_scale, 0.60f, 2.00f);
+    float max_w = std::max(display_width - 24.0f, 480.0f);
+    float max_h = std::max(display_height - 24.0f, 320.0f);
+    float win_w = std::min(kBaseGuiWidth * scale, max_w);
+    float win_h = std::min(kBaseGuiHeight * scale, max_h);
+
+    static float s_applied_scale = -1.0f;
+    bool scale_changed = (s_applied_scale > 0.0f && std::fabs(s_applied_scale - scale) > 0.005f);
+    s_applied_scale = scale;
+
+    // Wide side-by-side dashboard window (1280x720 base landscape, scalable live)
+    ImGui::SetNextWindowPos(ImVec2(display_width * 0.5f, display_height * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    if (scale_changed) {
+        ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Always);
+    } else {
+        ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_FirstUseEver);
+    }
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 4.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * scale, 10.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f * scale, 4.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 5.0f * scale));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.10f, 0.97f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.11f, 0.14f, 0.90f));
@@ -116,7 +134,7 @@ void render_gui_menu(HudConfig& cfg,
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.36f, 0.55f, 1.00f));
 
     if (ImGui::Begin("FPSHUD Configuration Tool", &cfg.gui_open, ImGuiWindowFlags_MenuBar)) {
-        ImGui::SetWindowFontScale(15.5f / kAtlasBaseFontSizePx);
+        ImGui::SetWindowFontScale((15.5f * scale) / kAtlasBaseFontSizePx);
 
         // ====================================================================
         // 1. Top Menu Bar
@@ -142,6 +160,7 @@ void render_gui_menu(HudConfig& cfg,
                 ImGui::Separator();
                 if (ImGui::MenuItem("Reset to Standard Default")) {
                     apply_preset_standard(cfg);
+                    cfg.gui_scale = 1.0f;
                     cfg.text_color = {255, 255, 255, 255};
                     cfg.text_opacity = 1.0f;
                     cfg.font_size_px = 20.0f;
@@ -172,8 +191,9 @@ void render_gui_menu(HudConfig& cfg,
         // ====================================================================
         // 2. Top Header Bar: Presets on Left + Live FPS Waveform on Right
         // ====================================================================
+        float presets_col_w = 480.0f * scale;
         if (ImGui::BeginTable("##TopHeaderBar", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("PresetsCol", ImGuiTableColumnFlags_WidthFixed, 455.0f);
+            ImGui::TableSetupColumn("PresetsCol", ImGuiTableColumnFlags_WidthFixed, presets_col_w);
             ImGui::TableSetupColumn("GraphCol", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableNextRow();
 
@@ -188,7 +208,7 @@ void render_gui_menu(HudConfig& cfg,
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.54f, 0.34f, 1.0f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.64f, 0.40f, 1.0f));
                 }
-                if (ImGui::Button(label, ImVec2(72.0f, 28.0f))) {
+                if (ImGui::Button(label, ImVec2(74.0f * scale, 28.0f * scale))) {
                     apply_fn(cfg);
                     set_status_message(std::string("Preset ") + label + " aktif.");
                 }
@@ -198,14 +218,14 @@ void render_gui_menu(HudConfig& cfg,
             };
 
             draw_preset_btn("Minimal", "minimal", apply_preset_minimal);
-            ImGui::SameLine(0.0f, 5.0f);
+            ImGui::SameLine(0.0f, 5.0f * scale);
             draw_preset_btn("Standard", "standard", apply_preset_standard);
-            ImGui::SameLine(0.0f, 5.0f);
+            ImGui::SameLine(0.0f, 5.0f * scale);
             draw_preset_btn("Advance", "advance", apply_preset_advance);
-            ImGui::SameLine(0.0f, 5.0f);
+            ImGui::SameLine(0.0f, 5.0f * scale);
             draw_preset_btn("Custom", "custom", apply_preset_custom);
-            ImGui::SameLine(0.0f, 5.0f);
-            if (ImGui::Button("Save", ImVec2(58.0f, 28.0f))) {
+            ImGui::SameLine(0.0f, 5.0f * scale);
+            if (ImGui::Button("Save", ImVec2(58.0f * scale, 28.0f * scale))) {
                 cfg.active_preset = "custom";
                 if (save_custom_preset_to_disk(cfg)) {
                     set_status_message("Tersimpan ke Custom!");
@@ -223,18 +243,18 @@ void render_gui_menu(HudConfig& cfg,
                              telemetry.get_fps_history(),
                              TelemetryCollector::kGraphHistorySize,
                              telemetry.get_graph_offset(),
-                             graph_overlay, 0.0f, 240.0f, ImVec2(-1.0f, 28.0f));
+                             graph_overlay, 0.0f, 240.0f, ImVec2(-1.0f, 28.0f * scale));
             ImGui::PopStyleColor();
 
             ImGui::EndTable();
         }
 
         // ====================================================================
-        // 3. Side-by-Side Split Dashboard (Left: Settings | Right: 19 Sensors)
+        // 3. Side-by-Side Split Dashboard (Left: Settings | Right: 23 Sensors)
         // ====================================================================
-        float footer_height = 38.0f;
+        float footer_height = 42.0f * scale;
         float panel_height = ImGui::GetContentRegionAvail().y - footer_height;
-        float half_width = (ImGui::GetContentRegionAvail().x - 10.0f) * 0.52f;
+        float half_width = (ImGui::GetContentRegionAvail().x - (10.0f * scale)) * 0.50f;
 
         // --------------------------------------------------------------------
         // LEFT PANEL: Appearance, Typography, Colors & Shortcuts
@@ -242,7 +262,7 @@ void render_gui_menu(HudConfig& cfg,
         ImGui::BeginChild("##LeftSettingsPanel", ImVec2(half_width, panel_height), true);
 
         if (ImGui::BeginTable("##LeftFormTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 138.0f);
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 145.0f * scale);
             ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
 
             // Section 1: Layout & Grouping
@@ -289,7 +309,7 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::Text("HUD Display");
             ImGui::TableSetColumnIndex(1);
             ImGui::Checkbox("Show HUD", &cfg.hud_visible);
-            ImGui::SameLine(0.0f, 14.0f);
+            ImGui::SameLine(0.0f, 14.0f * scale);
             ImGui::Checkbox("Mini FT Graph", &cfg.hud_graph_enabled);
 
             // Section 2: Typography & Effects
@@ -298,6 +318,22 @@ void render_gui_menu(HudConfig& cfg,
             draw_section_header("Typography & Effects");
             ImGui::TableSetColumnIndex(1);
             draw_section_header("");
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Menu Scale");
+            ImGui::TableSetColumnIndex(1);
+            float reset_btn_w = 54.0f * scale;
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - reset_btn_w - (6.0f * scale));
+            int scale_pct = static_cast<int>(std::round(cfg.gui_scale * 100.0f));
+            if (ImGui::SliderInt("##MenuScaleSlider", &scale_pct, 60, 200, "%d%%")) {
+                cfg.gui_scale = std::clamp(scale_pct / 100.0f, 0.60f, 2.00f);
+            }
+            ImGui::SameLine(0.0f, 6.0f * scale);
+            if (ImGui::Button("100%", ImVec2(reset_btn_w, 0.0f))) {
+                cfg.gui_scale = 1.0f;
+            }
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -394,7 +430,7 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::Text("Color Coding");
             ImGui::TableSetColumnIndex(1);
             ImGui::Checkbox("Category Colors", &cfg.category_colors_enabled);
-            ImGui::SameLine(0.0f, 12.0f);
+            ImGui::SameLine(0.0f, 12.0f * scale);
             ImGui::Checkbox("Thermal Alerts", &cfg.thermal_warnings_enabled);
 
             // Section 4: Shortcuts & Benchmark
@@ -413,7 +449,7 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::AlignTextToFramePadding();
             ImGui::Text("GUI / HUD Keys");
             ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(155.0f);
+            ImGui::SetNextItemWidth(155.0f * scale);
             ImGui::Combo("##GUIKey", &cfg.key_toggle_gui, gui_keys, IM_ARRAYSIZE(gui_keys));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1.0f);
@@ -424,7 +460,7 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::AlignTextToFramePadding();
             ImGui::Text("Benchmark CSV");
             ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(85.0f);
+            ImGui::SetNextItemWidth(85.0f * scale);
             ImGui::Combo("##BenchKey", &cfg.key_benchmark, bench_keys, IM_ARRAYSIZE(bench_keys));
             ImGui::SameLine();
             if (!data.benchmark_active) {
@@ -458,7 +494,7 @@ void render_gui_menu(HudConfig& cfg,
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImVec4(0.38f, 0.84f, 1.0f, 1.0f), "Hardware Sensors (%zu/%zu Active)",
                            cfg.metrics.size(), kTotalMetricCount);
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 142.0f);
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 150.0f * scale);
         if (ImGui::SmallButton("All")) {
             apply_preset_advance(cfg);
             cfg.active_preset = "custom";
@@ -580,20 +616,20 @@ void render_gui_menu(HudConfig& cfg,
         // 4. Bottom Action Bar
         // ====================================================================
         ImGui::Separator();
-        if (ImGui::Button("Save Configuration", ImVec2(175.0f, 26.0f))) {
+        if (ImGui::Button("Save Configuration", ImVec2(185.0f * scale, 28.0f * scale))) {
             if (save_config_to_disk(cfg)) {
                 set_status_message("Tersimpan ke config.ini");
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Close & Return to Game", ImVec2(195.0f, 26.0f))) {
+        if (ImGui::Button("Close & Return to Game", ImVec2(210.0f * scale, 28.0f * scale))) {
             cfg.gui_open = false;
         }
 
         if (!g_status_msg.empty()) {
             double since_msg = std::chrono::duration<double>(now - g_status_time).count();
             if (since_msg < 4.0) {
-                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::SameLine(0.0f, 14.0f * scale);
                 ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.50f, 1.0f), "%s", g_status_msg.c_str());
             }
         }

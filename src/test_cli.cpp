@@ -195,9 +195,16 @@ void run_all_devices_and_features_suite() {
         bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
         apply_preset_advance(test_cfg);
         bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && test_cfg.active_preset == "advance");
-        check_cond(min_ok && std_ok && adv_ok,
-                   "0. GUI Presets (Minimal=2, Standard=9, Advance=23)",
-                   "All 3 built-in presets & 23 MetricType mappings verified");
+
+        test_cfg.gui_scale = 1.35f;
+        save_ini_file("/tmp/test_gui_scale.ini", test_cfg, "Test Scale");
+        HudConfig loaded_cfg;
+        load_ini_file("/tmp/test_gui_scale.ini", loaded_cfg);
+        bool scale_ok = std::fabs(loaded_cfg.gui_scale - 1.35f) < 0.01f;
+
+        check_cond(min_ok && std_ok && adv_ok && scale_ok,
+                   "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=23, Scale=1.35x)",
+                   "All 3 built-in presets, 23 metrics & GUI scale INI persistence verified");
     }
 
     const fs::path base = "/tmp/fpshud_mock_hw";

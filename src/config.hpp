@@ -100,6 +100,9 @@ struct HudConfig {
     int key_toggle_hud = 0;
     int key_benchmark = 0;
 
+    // GUI Menu Scaling (0.60f .. 2.00f, default 1.0f = 100%)
+    float gui_scale = 1.0f;
+
     // Font sizing (atlas rasterized at 32.0px for crisp vector quality)
     float font_size_px = 20.0f;
     float font_scale = 20.0f / kAtlasBaseFontSizePx;
@@ -137,6 +140,10 @@ HudConfig init_config_from_env(const char* env_value);
 // Save / Load main config file (~/.config/fpshud/config.ini)
 bool save_config_to_disk(const HudConfig& cfg, std::string* out_path = nullptr);
 bool load_config_from_disk(HudConfig& cfg, std::string* out_path = nullptr);
+
+// Generic INI file serializer / parser
+bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment = nullptr);
+bool load_ini_file(const std::string& path, HudConfig& cfg);
 
 // Save / Load user-customizable preset (~/.config/fpshud/custom_preset.ini)
 bool save_custom_preset_to_disk(const HudConfig& cfg, std::string* out_path = nullptr);

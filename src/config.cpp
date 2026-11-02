@@ -135,6 +135,8 @@ void ensure_parent_dir(const std::string& file_path) {
     ::mkdir(dir.c_str(), 0755);
 }
 
+} // namespace
+
 bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
     ensure_parent_dir(path);
 
@@ -148,6 +150,7 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
 
     std::fprintf(fp, "# %s\n", header_comment ? header_comment : "FPSHUD Config");
     std::fprintf(fp, "preset=%s\n", cfg.active_preset.c_str());
+    std::fprintf(fp, "gui_scale=%.2f\n", cfg.gui_scale);
     std::fprintf(fp, "hud_visible=%d\n", cfg.hud_visible ? 1 : 0);
     std::fprintf(fp, "layout=%d\n", static_cast<int>(cfg.layout));
     std::fprintf(fp, "arrangement=%d\n", static_cast<int>(cfg.arrangement));
@@ -211,6 +214,9 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
 
         if (key == "preset") {
             cfg.active_preset = val;
+            parsed_any = true;
+        } else if (key == "gui_scale") {
+            cfg.gui_scale = std::clamp(std::strtof(val.c_str(), nullptr), 0.60f, 2.00f);
             parsed_any = true;
         } else if (key == "hud_visible") {
             cfg.hud_visible = (std::atoi(val.c_str()) != 0);
@@ -312,8 +318,6 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
     cfg.gui_open = keep_open;
     return true;
 }
-
-} // namespace
 
 bool HudConfig::has_metric(MetricType m) const {
     return std::find(metrics.begin(), metrics.end(), m) != metrics.end();
