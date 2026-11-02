@@ -86,7 +86,7 @@ void render_gui_menu(HudConfig& cfg,
                                    bench_keybind_name(cfg.key_benchmark));
             } else {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                                   "[FPSHUD GUI] Jalankan 'sudo chmod a+r /dev/input/event*' agar shortcut & mouse aktif");
+                                   "[FPSHUD GUI] Hotkeys need input access: re-run the installer and allow sudo");
             }
         }
         ImGui::End();
@@ -94,9 +94,9 @@ void render_gui_menu(HudConfig& cfg,
 
     if (!cfg.gui_open) return;
 
-    // Wide side-by-side dashboard window (all settings + 19 metrics visible on 1 screen without tabs!)
+    // Wide side-by-side dashboard window (all settings + every sensor visible on 1 screen without tabs!)
     ImGui::SetNextWindowPos(ImVec2(display_width * 0.5f, display_height * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(820.0f, 545.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(840.0f, 600.0f), ImGuiCond_FirstUseEver);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
@@ -456,9 +456,10 @@ void render_gui_menu(HudConfig& cfg,
         ImGui::BeginChild("##RightMetricsPanel", ImVec2(0.0f, panel_height), true);
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(ImVec4(0.38f, 0.84f, 1.0f, 1.0f), "Hardware Sensors (%zu/19 Active)", cfg.metrics.size());
+        ImGui::TextColored(ImVec4(0.38f, 0.84f, 1.0f, 1.0f), "Hardware Sensors (%zu/%zu Active)",
+                           cfg.metrics.size(), kTotalMetricCount);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 142.0f);
-        if (ImGui::SmallButton("All 19")) {
+        if (ImGui::SmallButton("All")) {
             apply_preset_advance(cfg);
             cfg.active_preset = "custom";
         }
@@ -476,7 +477,8 @@ void render_gui_menu(HudConfig& cfg,
 
         char b_fps[24], b_avg[24], b_1l[24], b_01l[24], b_ft[24];
         char b_gload[24], b_gclk[24], b_gvram[24], b_gbw[24], b_gtmp[24], b_gfan[24], b_gpwr[24];
-        char b_cload[24], b_cclk[24], b_cpwr[24], b_ctmp[24], b_ram[24], b_api[32];
+        char b_cload[24], b_cclk[24], b_cpwr[24], b_ctmp[24], b_ram[32], b_api[32];
+        char b_gram[24], b_swap[32], b_psi[24], b_rspd[32];
 
         std::snprintf(b_fps,   sizeof(b_fps),   "%.0f",      data.fps);
         std::snprintf(b_avg,   sizeof(b_avg),   "%.0f",      data.fps_avg);
@@ -494,8 +496,24 @@ void render_gui_menu(HudConfig& cfg,
         std::snprintf(b_cclk,  sizeof(b_cclk),  "%d MHz",    data.cpu_clock_mhz);
         std::snprintf(b_cpwr,  sizeof(b_cpwr),  "%.1f W",    data.cpu_power_w);
         std::snprintf(b_ctmp,  sizeof(b_ctmp),  "%d °C",     data.cpu_temp_c);
-        std::snprintf(b_ram,   sizeof(b_ram),   "%.2f GB",   data.ram_used_gb);
+        std::snprintf(b_ram,   sizeof(b_ram),   "%.2f GB (%.0f%%)", data.ram_used_gb, data.ram_used_pct);
         std::snprintf(b_api,   sizeof(b_api),   "%s",        data.render_api);
+        std::snprintf(b_gram,  sizeof(b_gram),  "%.2f GB",   data.game_ram_gb);
+        if (data.swap_total_gb > 0.0f) {
+            std::snprintf(b_swap, sizeof(b_swap), "%.2f/%.1f GB", data.swap_used_gb, data.swap_total_gb);
+        } else {
+            std::snprintf(b_swap, sizeof(b_swap), "OFF");
+        }
+        if (data.mem_psi_some_pct >= 0.0f) {
+            std::snprintf(b_psi, sizeof(b_psi), "%.1f%%", data.mem_psi_some_pct);
+        } else {
+            std::snprintf(b_psi, sizeof(b_psi), "N/A (kernel)");
+        }
+        if (data.ram_speed_mts > 0) {
+            std::snprintf(b_rspd, sizeof(b_rspd), "%s %d MT/s", data.ram_type, data.ram_speed_mts);
+        } else {
+            std::snprintf(b_rspd, sizeof(b_rspd), "N/A (run installer)");
+        }
 
         if (ImGui::BeginTable("##SensorsSplitGrid", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextRow();
@@ -517,7 +535,13 @@ void render_gui_menu(HudConfig& cfg,
             draw_metric_checkbox_row(cfg, MetricType::CpuTemp,  "CPU Temp",      b_ctmp);
             draw_metric_checkbox_row(cfg, MetricType::CpuWatt,  "CPU Power",     b_cpwr);
 
-            // Column 2: GPU + RAM & System
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.75f, 0.82f, 0.90f, 1.0f), "System");
+            draw_metric_checkbox_row(cfg, MetricType::EngineApi,   "Render API",   b_api);
+            draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock",  data.local_time_str);
+
+            // Column 2: GPU + Memory (RAM)
             ImGui::TableSetColumnIndex(1);
             ImGui::TextColored(ImVec4(0.46f, 0.88f, 0.0f, 1.0f), "GPU (%s)", data.gpu_name);
             draw_metric_checkbox_row(cfg, MetricType::GpuLoad,      "GPU Load",      b_gload);
@@ -530,10 +554,12 @@ void render_gui_menu(HudConfig& cfg,
 
             ImGui::Spacing();
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.86f, 0.53f, 1.0f, 1.0f), "Memory & System");
+            ImGui::TextColored(ImVec4(0.86f, 0.53f, 1.0f, 1.0f), "Memory (RAM)");
             draw_metric_checkbox_row(cfg, MetricType::Ram,         "System RAM",   b_ram);
-            draw_metric_checkbox_row(cfg, MetricType::EngineApi,   "Render API",   b_api);
-            draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock",  data.local_time_str);
+            draw_metric_checkbox_row(cfg, MetricType::GameRam,     "Game RAM",     b_gram);
+            draw_metric_checkbox_row(cfg, MetricType::SwapRam,     "Swap / ZRAM",  b_swap);
+            draw_metric_checkbox_row(cfg, MetricType::MemPressure, "Mem Pressure", b_psi);
+            draw_metric_checkbox_row(cfg, MetricType::RamSpeed,    "RAM Speed",    b_rspd);
 
             ImGui::EndTable();
         }

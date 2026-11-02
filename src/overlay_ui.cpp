@@ -70,6 +70,10 @@ GroupCategory get_metric_category(MetricType m) noexcept {
         case MetricType::CpuTemp:
             return GroupCategory::CPU;
         case MetricType::Ram:
+        case MetricType::GameRam:
+        case MetricType::SwapRam:
+        case MetricType::MemPressure:
+        case MetricType::RamSpeed:
             return GroupCategory::RAM;
         case MetricType::EngineApi:
         case MetricType::SystemClock:
@@ -122,6 +126,20 @@ ImU32 get_metric_value_color(MetricType m, const TelemetryData& d, const HudConf
         if (load >= 97.0f) {
             return IM_COL32(255, 185, 0, alpha);  // High Load Amber
         }
+    } else if (m == MetricType::Ram || m == MetricType::GameRam) {
+        // System RAM nearly full -> stutter / swapping risk
+        if (d.ram_used_pct >= 90.0f) return IM_COL32(255, 70, 70, alpha);
+        if (d.ram_used_pct >= 80.0f) return IM_COL32(255, 185, 0, alpha);
+    } else if (m == MetricType::SwapRam) {
+        if (d.swap_total_gb > 0.0f) {
+            float swap_pct = 100.0f * d.swap_used_gb / d.swap_total_gb;
+            if (swap_pct >= 80.0f) return IM_COL32(255, 70, 70, alpha);
+            if (swap_pct >= 50.0f) return IM_COL32(255, 185, 0, alpha);
+        }
+    } else if (m == MetricType::MemPressure) {
+        // PSI "some" avg10: >= 5% noticeable hitching, >= 20% heavy memory stalls
+        if (d.mem_psi_some_pct >= 20.0f) return IM_COL32(255, 70, 70, alpha);
+        if (d.mem_psi_some_pct >= 5.0f) return IM_COL32(255, 185, 0, alpha);
     }
     return base_col;
 }
@@ -198,7 +216,39 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
             return;
         case MetricType::Ram:
             std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.ram_used_gb);
+            std::snprintf(sv.unit, sizeof(sv.unit), "GB %.0f%%", d.ram_used_pct);
+            return;
+        case MetricType::GameRam:
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "GAME:");
+            std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.game_ram_gb);
             std::snprintf(sv.unit, sizeof(sv.unit), "GB");
+            return;
+        case MetricType::SwapRam:
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "SWAP:");
+            if (d.swap_total_gb <= 0.0f) {
+                std::snprintf(sv.number, sizeof(sv.number), "OFF");
+            } else {
+                std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.swap_used_gb);
+                std::snprintf(sv.unit, sizeof(sv.unit), "GB");
+            }
+            return;
+        case MetricType::MemPressure:
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "PSI:");
+            if (d.mem_psi_some_pct < 0.0f) {
+                std::snprintf(sv.number, sizeof(sv.number), "N/A");
+            } else {
+                std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.mem_psi_some_pct);
+                std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+            }
+            return;
+        case MetricType::RamSpeed:
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "%s:", d.ram_type);
+            if (d.ram_speed_mts <= 0) {
+                std::snprintf(sv.number, sizeof(sv.number), "N/A");
+            } else {
+                std::snprintf(sv.number, sizeof(sv.number), "%d", d.ram_speed_mts);
+                std::snprintf(sv.unit, sizeof(sv.unit), "MT/s");
+            }
             return;
         case MetricType::EngineApi:
             std::snprintf(sv.number, sizeof(sv.number), "%s", d.render_api ? d.render_api : "VULKAN");
