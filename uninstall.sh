@@ -21,20 +21,16 @@ if [ -f /etc/udev/rules.d/99-fpshud-rapl.rules ] || [ -f /etc/udev/rules.d/99-fp
         udevadm control --reload-rules 2>/dev/null || true
     elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
         if sudo -n true 2>/dev/null; then
-            sudo -n rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
-            sudo -n rm -rf /etc/fpshud
-            sudo -n udevadm control --reload-rules 2>/dev/null || true
-        elif [ -t 0 ] || [ -e /dev/tty ]; then
-            read -r -t 10 -p "[?] Remove system udev rules with sudo? [Y/n] " U_ANSWER </dev/tty 2>/dev/null || U_ANSWER="n"
-            case "$U_ANSWER" in
-                [yY][eE][sS]|[yY]|"")
-                    if sudo </dev/tty -v 2>/dev/null; then
-                        sudo </dev/tty rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
-                        sudo </dev/tty rm -rf /etc/fpshud
-                        sudo </dev/tty udevadm control --reload-rules 2>/dev/null || true
-                    fi
-                    ;;
-            esac
+            sudo rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
+            sudo rm -rf /etc/fpshud
+            sudo udevadm control --reload-rules 2>/dev/null || true
+        elif [ -e /dev/tty ]; then
+            echo "[*] Requesting sudo to clean up system udev rules and /etc/fpshud..."
+            if sudo </dev/tty -v; then
+                sudo rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
+                sudo rm -rf /etc/fpshud
+                sudo udevadm control --reload-rules 2>/dev/null || true
+            fi
         fi
     fi
 fi

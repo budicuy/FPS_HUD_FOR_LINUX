@@ -122,7 +122,7 @@ chmod +x "$BIN_DIR/fpshud"
 # 6. Hardware Telemetry Permissions (RAM Speed, CPU Wattage & Wayland Hotkeys)
 # ====================================================================
 HAVE_SUDO=0
-SUDO_CMD=""
+SUDO_CMD="sudo"
 
 if [ "$EUID" -eq 0 ]; then
     HAVE_SUDO=1
@@ -130,29 +130,20 @@ if [ "$EUID" -eq 0 ]; then
 elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
     if sudo -n true 2>/dev/null; then
         HAVE_SUDO=1
-        SUDO_CMD="sudo -n"
-    elif [ -t 0 ] || [ -e /dev/tty ]; then
+        SUDO_CMD="sudo"
+    elif [ -e /dev/tty ]; then
         echo ""
-        echo "[*] Optional: Sudo access enables all hardware sensors permanently:"
+        echo "[*] Requesting sudo permission to configure hardware sensors permanently:"
         echo "    • RAM Speed (MT/s) & Memory Generation (DDR4 / DDR5 / LPDDR5)"
         echo "    • CPU Package Power (Watts via intel-rapl / amd-rapl)"
         echo "    • In-game GUI hotkeys (Insert/F12) & mouse capture on Wayland"
         echo ""
-        read -r -t 15 -p "[?] Enable full sensor access with sudo? [Y/n] " S_ANSWER </dev/tty 2>/dev/null || S_ANSWER="n"
-        echo ""
-        case "$S_ANSWER" in
-            [yY][eE][sS]|[yY]|"")
-                if sudo </dev/tty -v 2>/dev/null; then
-                    HAVE_SUDO=1
-                    SUDO_CMD="sudo </dev/tty"
-                else
-                    echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
-                fi
-                ;;
-            *)
-                echo "[*] Sudo permission skipped by user. Non-privileged sensors will continue to function."
-                ;;
-        esac
+        if sudo </dev/tty -v; then
+            HAVE_SUDO=1
+            SUDO_CMD="sudo"
+        else
+            echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
+        fi
     fi
 fi
 
