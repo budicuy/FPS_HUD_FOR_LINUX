@@ -13,6 +13,8 @@ fpshud_test
 
 # Generated files
 VkLayer_FPSHUD_overlay.json
+src/embedded_fonts.hpp
+dist/
 
 # IDE & Editor files
 .vscode/

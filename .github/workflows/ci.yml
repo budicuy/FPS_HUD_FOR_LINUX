@@ -21,7 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build pkg-config \
-            libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids
+            libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
+            fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3
 
       - name: Configure & Build Portable FPSHUD Binary
         run: |

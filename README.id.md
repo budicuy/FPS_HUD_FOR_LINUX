@@ -91,6 +91,11 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
+### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)
+```bash
+curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+```
+
 ### Opsional: Aktifkan Izin Shortcut Wayland & Sensor Daya CPU (Watt)
 Di Linux, dua fitur di bawah ini secara bawaan dibatasi aksesnya untuk pengguna biasa:
 1. **Agar Shortcut Keyboard (`Insert`/`F12`) & Klik Mouse GUI Berjalan di Wayland (`/dev/input/event*`)**:
@@ -128,11 +133,11 @@ Buka **Game Settings / Configuration** -> **System / Environment Variables** -> 
 
 ### 4. Terminal / Command Line
 ```bash
-# Menjalankan aplikasi/game Vulkan:
-FPS_HUD=1 vkcube
+# Menjalankan game atau aplikasi berbasis Vulkan:
+FPS_HUD=1 ./nama_game
 
-# Menjalankan aplikasi/game OpenGL:
-~/.local/bin/fpshud glxgears
+# Menjalankan game atau aplikasi berbasis OpenGL:
+~/.local/bin/fpshud ./nama_game
 ```
 
 ---

@@ -93,6 +93,11 @@ FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
+### 1-Command Uninstallation (Clean Removal)
+```bash
+curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+```
+
 ### Optional: Enable Wayland Hotkeys & CPU Wattage Sensor Permissions
 On Linux, two hardware features are restricted by default for normal users:
 1. **Wayland / XWayland In-Game GUI Hotkeys & Mouse Capture (`/dev/input/event*`)**:
@@ -130,11 +135,11 @@ Open **Game Settings** -> **System / Environment Variables** -> Add:
 
 ### 4. Terminal / Command Line
 ```bash
-# Run any Vulkan game or app:
-FPS_HUD=1 vkcube
+# Run any Vulkan game or application:
+FPS_HUD=1 ./your_game
 
-# Run any OpenGL game or app:
-~/.local/bin/fpshud glxgears
+# Run any OpenGL game or application:
+~/.local/bin/fpshud ./your_game
 ```
 
 ---

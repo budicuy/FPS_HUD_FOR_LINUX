@@ -346,13 +346,17 @@ ImFont* load_ttf_with_fallback(ImGuiIO& io,
         }
     }
 
-    ImFontConfig mem_cfg = font_cfg;
-    mem_cfg.FontDataOwnedByAtlas = false;
-    return io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(fallback_mem),
-        static_cast<int>(fallback_size),
-        kAtlasBaseFontSizePx,
-        &mem_cfg);
+    if (fallback_mem && fallback_size > 16) {
+        ImFontConfig mem_cfg = font_cfg;
+        mem_cfg.FontDataOwnedByAtlas = false;
+        ImFont* f = io.Fonts->AddFontFromMemoryTTF(
+            const_cast<unsigned char*>(fallback_mem),
+            static_cast<int>(fallback_size),
+            kAtlasBaseFontSizePx,
+            &mem_cfg);
+        if (f) return f;
+    }
+    return io.Fonts->AddFontDefault();
 }
 
 } // namespace

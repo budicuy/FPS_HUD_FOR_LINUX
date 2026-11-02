@@ -40,6 +40,14 @@ FetchContent_MakeAvailable(imgui)
 find_package(Vulkan REQUIRED)
 find_package(OpenGL REQUIRED COMPONENTS OpenGL GLX EGL)
 find_package(Threads REQUIRED)
+find_package(Python3 COMPONENTS Interpreter)
+
+# Automatically generate src/embedded_fonts.hpp if not already present
+if(Python3_Interpreter_FOUND)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_embedded_fonts.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_fonts.hpp"
+    )
+endif()
 
 set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
