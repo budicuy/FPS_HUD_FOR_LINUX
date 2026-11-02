@@ -89,6 +89,7 @@ void clean_hardware_name(const char* raw, char* out, size_t out_size) noexcept {
             prev_space = true;
         } else {
             compact.push_back(c);
+            prev_space = false;
         }
     }
     while (!compact.empty() && compact.back() == ' ') compact.pop_back();
