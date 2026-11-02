@@ -92,25 +92,18 @@ FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
+> [!NOTE]
+> During installation, the script will prompt for optional `sudo` permission. Granting it will automatically configure:
+> 1. **RAM Speed & Generation** (`DDR4 / DDR5 / LPDDR5` in `MT/s`).
+> 2. **CPU Power Consumption** (`intel-rapl` / `amd-rapl` in Watts).
+> 3. **Wayland Hotkeys & Mouse Input** (`/dev/input/event*` for `Insert` / `F12` in-game GUI).
+>
+> If you decline or run non-interactively without sudo, the installation continues cleanly and non-privileged sensors will function normally.
 
 ### 1-Command Uninstallation (Clean Removal)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
 ```
-
-### Optional: Enable Wayland Hotkeys & CPU Wattage Sensor Permissions
-On Linux, two hardware features are restricted by default for normal users:
-1. **Wayland / XWayland In-Game GUI Hotkeys & Mouse Capture (`/dev/input/event*`)**:
-   ```bash
-   sudo usermod -aG input $USER
-   # And apply immediately for your current session without rebooting:
-   sudo chmod a+r /dev/input/event*
-   ```
-2. **CPU Power Consumption in Watts (`intel-rapl` / `amd-rapl`)**:
-   ```bash
-   echo 'SUBSYSTEM=="powercap", KERNEL=="*rapl:*", RUN+="/bin/chmod a+r /sys/class/powercap/%k/energy_uj"' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
-   sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj 2>/dev/null || true
-   ```
 
 ---
 
@@ -158,12 +151,12 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
 - **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
-- **`Advance`**: Enables all **19 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 4 `CPU` metrics, `RAM`, `Render API`, and `Local Clock`).
+- **`Advance`**: Enables all **23 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 4 `CPU` metrics, all 5 `Memory/RAM` metrics, `Render API`, and `Local Clock`).
 - **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
 
 ---
 
-## 5. Supported Hardware & All 19 Sensors
+## 5. Supported Hardware & All 23 Sensors
 
 ### Hardware Compatibility Matrix
 
@@ -174,8 +167,9 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 | **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
 | **Intel CPUs** | Intel Core (All Generations) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+| **System Memory** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
 
-### All 19 Available Sensors
+### All 23 Available Sensors
 
 | # | Sensor Name | Group | What It Shows | Example |
 | :--- | :--- | :--- | :--- | :--- |
@@ -195,9 +189,13 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 | `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
 | `15` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
 | `16` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
-| `17` | **System RAM** | `RAM` | Used system memory in GB | `9.2 GB` |
-| `18` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
-| `19` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+| `17` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
+| `18` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
+| `19` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
+| `20` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
+| `21` | **RAM Speed** | `RAM` | Effective memory transfer speed and generation | `DDR5: 6000 MT/s` |
+| `22` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
+| `23` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
 
 ---
 

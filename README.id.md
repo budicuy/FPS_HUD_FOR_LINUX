@@ -90,25 +90,18 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
+> [!NOTE]
+> Saat instalasi berjalan, skrip akan menawarkan izin `sudo` opsional. Jika disetujui, installer akan mengonfigurasi otomatis:
+> 1. **Kecepatan & Generasi RAM** (`DDR4 / DDR5 / LPDDR5` dalam `MT/s`).
+> 2. **Sensor Daya CPU** (`intel-rapl` / `amd-rapl` dalam Watt).
+> 3. **Shortcut Keyboard & Mouse Wayland** (`/dev/input/event*` untuk menu GUI `Insert` / `F12`).
+>
+> Jika kamu memilih melewati sudo atau menginstal secara non-interaktif, instalasi tetap berhasil dan seluruh sensor non-privilege tetap berfungsi normal.
 
 ### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
 ```
-
-### Opsional: Aktifkan Izin Shortcut Wayland & Sensor Daya CPU (Watt)
-Di Linux, dua fitur di bawah ini secara bawaan dibatasi aksesnya untuk pengguna biasa:
-1. **Agar Shortcut Keyboard (`Insert`/`F12`) & Klik Mouse GUI Berjalan di Wayland (`/dev/input/event*`)**:
-   ```bash
-   sudo usermod -aG input $USER
-   # Dan aktifkan langsung untuk sesi saat ini tanpa perlu restart:
-   sudo chmod a+r /dev/input/event*
-   ```
-2. **Agar Sensor Daya CPU (`CPU Watt` via `intel-rapl` / `amd-rapl`) Terbaca Tanpa Root**:
-   ```bash
-   echo 'SUBSYSTEM=="powercap", KERNEL=="*rapl:*", RUN+="/bin/chmod a+r /sys/class/powercap/%k/energy_uj"' | sudo tee /etc/udev/rules.d/99-rapl-read.rules
-   sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj 2>/dev/null || true
-   ```
 
 ---
 
@@ -156,12 +149,12 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 ### 4 Pilihan Preset di Dalam GUI
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
 - **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
-- **`Advance`**: Menampilkan lengkap **19 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 4 sensor `CPU`, `RAM`, `Render API`, dan `Local Clock`).
+- **`Advance`**: Menampilkan lengkap **23 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 4 sensor `CPU`, 5 sensor `RAM/Memori`, `Render API`, dan `Local Clock`).
 - **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
 
 ---
 
-## 5. Dukungan Perangkat Keras & Daftar 19 Sensor
+## 5. Dukungan Perangkat Keras & Daftar 23 Sensor
 
 ### Matriks Kompatibilitas Perangkat Keras
 
@@ -172,8 +165,9 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 | **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
 | **CPU Intel** | Intel Core (Semua Generasi) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+| **Memori RAM** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
 
-### Daftar Lengkap 19 Sensor
+### Daftar Lengkap 23 Sensor
 
 | # | Nama Sensor | Grup | Informasi yang Ditampilkan | Contoh di HUD |
 | :--- | :--- | :--- | :--- | :--- |
@@ -193,9 +187,13 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 | `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
 | `15` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
 | `16` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
-| `17` | **System RAM** | `RAM` | Pemakaian memori RAM sistem dalam GB | `9.2 GB` |
-| `18` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
-| `19` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+| `17` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
+| `18` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
+| `19` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
+| `20` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
+| `21` | **RAM Speed** | `RAM` | Kecepatan transfer efektif & generasi RAM | `DDR4: 3200 MT/s` |
+| `22` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
+| `23` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
 
 ---
 
