@@ -35,8 +35,45 @@ void write_mock_file(const fs::path& p, const std::string& content) {
     f << content << "\n";
 }
 
-// Tests all 19 metrics, Low FPS engine, Scene-Stall Reset, API switching, and Benchmark CSV on a collector
-void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* device_title) {
+// Builds a binary SMBIOS Type 17 (Memory Device) record exactly like /sys/firmware/dmi/entries/17-N/raw
+void write_mock_dmi17(const fs::path& entries_dir, int index, uint16_t size_mb, uint8_t mem_type,
+                      uint16_t speed, uint16_t conf_speed, uint32_t ext_speed = 0, uint32_t ext_conf = 0) {
+    const uint8_t len = 0x5C; // SMBIOS 3.3+ structure length (includes extended speed fields)
+    std::vector<uint8_t> b(len, 0);
+    auto put16 = [&](size_t off, uint16_t v) { b[off] = v & 0xFF; b[off + 1] = (v >> 8) & 0xFF; };
+    auto put32 = [&](size_t off, uint32_t v) {
+        for (int i = 0; i < 4; ++i) b[off + i] = (v >> (8 * i)) & 0xFF;
+    };
+    b[0] = 17;
+    b[1] = len;
+    put16(0x0C, size_mb);
+    b[0x12] = mem_type;
+    put16(0x15, speed);
+    put16(0x20, conf_speed);
+    put32(0x54, ext_speed);
+    put32(0x58, ext_conf);
+    b.push_back(0); // empty string table terminator
+    b.push_back(0);
+
+    fs::path p = entries_dir / ("17-" + std::to_string(index)) / "raw";
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
+}
+
+// Expected values for the extended RAM sensors on simulated devices (nullptr = real hardware)
+struct RamExpect {
+    float game_ram_gb;
+    float swap_used_gb;   // < 0 -> swap must be OFF
+    float psi_pct;        // < 0 -> PSI must be reported as unavailable
+    int   speed_mts;
+    const char* type;
+};
+
+// Tests all 23 metrics, Low FPS engine, Scene-Stall Reset, API switching, and Benchmark CSV on a collector
+void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* device_title,
+                                   const RamExpect* ram_expect = nullptr) {
     using namespace fpshud;
 
     // 1. Test Render API Switch (VULKAN <-> OPENGL)
@@ -108,6 +145,37 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
     check_cond(d.last_benchmark.has_result && d.last_benchmark.avg_fps > 120.0f &&
                    d.last_benchmark.max_gpu_temp_c > 0 && d.last_benchmark.max_cpu_temp_c > 0,
                "5. Benchmark CSV Recorder & Peak Sensor Log", detail_bench);
+
+    // 6. Extended RAM sensors (Game RAM / Swap / Memory Pressure / RAM Speed)
+    char psi_str[24], spd_str[32], swap_str[32];
+    if (d.mem_psi_some_pct >= 0.0f) std::snprintf(psi_str, sizeof(psi_str), "%.1f%%", d.mem_psi_some_pct);
+    else std::snprintf(psi_str, sizeof(psi_str), "N/A");
+    if (d.ram_speed_mts > 0) std::snprintf(spd_str, sizeof(spd_str), "%s %dMT/s x%d", d.ram_type, d.ram_speed_mts, d.ram_modules);
+    else std::snprintf(spd_str, sizeof(spd_str), "N/A (no sudo cache)");
+    if (d.swap_total_gb > 0.0f) std::snprintf(swap_str, sizeof(swap_str), "%.2f/%.2fGB", d.swap_used_gb, d.swap_total_gb);
+    else std::snprintf(swap_str, sizeof(swap_str), "OFF");
+
+    char detail_ram[200];
+    std::snprintf(detail_ram, sizeof(detail_ram), "RAM=%.0f%% | Game=%.2fGB | Swap=%s | PSI=%s | Speed=%s",
+                  d.ram_used_pct, d.game_ram_gb, swap_str, psi_str, spd_str);
+
+    bool ram_ok = false;
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.05f; };
+    if (!ram_expect) {
+        // Real hardware: values depend on the machine, so validate sanity only
+        ram_ok = d.game_ram_gb > 0.0f && d.ram_used_pct > 0.0f && d.ram_used_pct <= 100.0f &&
+                 d.swap_used_gb >= 0.0f && (d.mem_psi_some_pct >= 0.0f || d.mem_psi_some_pct == -1.0f) &&
+                 d.ram_speed_mts >= 0;
+    } else {
+        bool swap_ok = (ram_expect->swap_used_gb < 0.0f) ? (d.swap_total_gb == 0.0f)
+                                                          : near(d.swap_used_gb, ram_expect->swap_used_gb);
+        bool psi_ok = (ram_expect->psi_pct < 0.0f) ? (d.mem_psi_some_pct == -1.0f)
+                                                    : near(d.mem_psi_some_pct, ram_expect->psi_pct);
+        ram_ok = near(d.game_ram_gb, ram_expect->game_ram_gb) && swap_ok && psi_ok &&
+                 d.ram_speed_mts == ram_expect->speed_mts &&
+                 std::strcmp(d.ram_type, ram_expect->type) == 0;
+    }
+    check_cond(ram_ok, "6. RAM Sensors (Game/Swap/PSI/Speed + %)", detail_ram);
 }
 
 void run_all_devices_and_features_suite() {
@@ -126,10 +194,10 @@ void run_all_devices_and_features_suite() {
         apply_preset_standard(test_cfg);
         bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
         apply_preset_advance(test_cfg);
-        bool adv_ok = (test_cfg.metrics.size() == 19 && test_cfg.active_preset == "advance");
+        bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && test_cfg.active_preset == "advance");
         check_cond(min_ok && std_ok && adv_ok,
-                   "0. GUI Presets (Minimal=2, Standard=9, Advance=19)",
-                   "All 3 built-in presets & 19 MetricType mappings verified");
+                   "0. GUI Presets (Minimal=2, Standard=9, Advance=23)",
+                   "All 3 built-in presets & 23 MetricType mappings verified");
     }
 
     const fs::path base = "/tmp/fpshud_mock_hw";
@@ -152,7 +220,12 @@ void run_all_devices_and_features_suite() {
     write_mock_file(base / "proc/cpuinfo",
                     "processor\t: 0\nmodel name\t: AMD Ryzen 7 7800X3D 8-Core Processor\n");
     write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
-    write_mock_file(base / "proc/meminfo", "MemTotal:       33554432 kB\nMemAvailable:   20971520 kB\n");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       33554432 kB\nMemAvailable:   20971520 kB\n"
+                    "SwapTotal:       8388608 kB\nSwapFree:        6291456 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      4194304 kB\n");
+    write_mock_file(base / "proc/pressure/memory", "some avg10=2.50 avg60=1.20 avg300=0.50 total=12345\n");
+    write_mock_file(base / "data/fpshud/ram_info", "type=DDR5\nspeed_mts=6000\nmodules=2\n");
     write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "5050000");
     write_mock_file(base / "sys/class/hwmon/hwmon0/name", "k10temp");
     write_mock_file(base / "sys/class/hwmon/hwmon0/temp1_input", "64000");
@@ -173,7 +246,8 @@ void run_all_devices_and_features_suite() {
     {
         TelemetryCollector amd_tc(base.string(), true);
         write_mock_file(base / "proc/stat", "cpu  10450 0 2150 88400 0 0 0 0 0 0");
-        verify_all_features_on_device(amd_tc, "PROFILE 2 [SIMULATED AMD PC]: Ryzen 7 7800X3D + Radeon RX 7800 XT");
+        RamExpect ram2{4.00f, 2.00f, 2.50f, 6000, "DDR5"};
+        verify_all_features_on_device(amd_tc, "PROFILE 2 [SIMULATED AMD PC]: Ryzen 7 7800X3D + Radeon RX 7800 XT", &ram2);
     }
 
     // ------------------------------------------------------------------------
@@ -183,7 +257,13 @@ void run_all_devices_and_features_suite() {
     write_mock_file(base / "proc/cpuinfo",
                     "processor\t: 0\nmodel name\t: 13th Gen Intel(R) Core(TM) i7-13700K\n");
     write_mock_file(base / "proc/stat", "cpu  20000 0 4000 76000 0 0 0 0 0 0");
-    write_mock_file(base / "proc/meminfo", "MemTotal:       33554432 kB\nMemAvailable:   16777216 kB\n");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       33554432 kB\nMemAvailable:   16777216 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      6291456 kB\n");
+    // Test DMI binary SMBIOS 17 parsing directly (2x 16GB DDR4 3200 MT/s)
+    write_mock_dmi17(base / "sys/firmware/dmi/entries", 0, 16384, 0x1A, 3200, 3200);
+    write_mock_dmi17(base / "sys/firmware/dmi/entries", 1, 16384, 0x1A, 3200, 3200);
     write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "5300000");
     write_mock_file(base / "sys/class/hwmon/hwmon0/name", "coretemp");
     write_mock_file(base / "sys/class/hwmon/hwmon0/temp1_input", "71000");
@@ -207,7 +287,8 @@ void run_all_devices_and_features_suite() {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         write_mock_file(base / "proc/stat", "cpu  20350 0 4050 76600 0 0 0 0 0 0");
         write_mock_file(base / "sys/class/powercap/intel-rapl:0/energy_uj", "12700000");
-        verify_all_features_on_device(intel_tc, "PROFILE 3 [SIMULATED INTEL PC]: Core i7-13700K + Intel Arc A770");
+        RamExpect ram3{6.00f, -1.0f, -1.0f, 3200, "DDR4"}; // swap=OFF, psi=N/A
+        verify_all_features_on_device(intel_tc, "PROFILE 3 [SIMULATED INTEL PC]: Core i7-13700K + Intel Arc A770", &ram3);
     }
 
     // ------------------------------------------------------------------------
@@ -217,7 +298,12 @@ void run_all_devices_and_features_suite() {
     write_mock_file(base / "proc/cpuinfo",
                     "processor\t: 0\nmodel name\t: AMD Ryzen 7 6800H with Radeon Graphics\n");
     write_mock_file(base / "proc/stat", "cpu  30000 0 3000 67000 0 0 0 0 0 0");
-    write_mock_file(base / "proc/meminfo", "MemTotal:       16777216 kB\nMemAvailable:   6291456 kB\n");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       16777216 kB\nMemAvailable:   6291456 kB\n"
+                    "SwapTotal:       4194304 kB\nSwapFree:        3145728 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      3145728 kB\n");
+    write_mock_file(base / "proc/pressure/memory", "some avg10=14.50 avg60=8.00 avg300=2.00 total=9999\n");
+    write_mock_file(base / "run/fpshud/ram_info", "type=DDR5\nspeed_mts=4800\nmodules=2\n");
     write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4400000");
     write_mock_file(base / "sys/class/hwmon/hwmon0/name", "zenpower");
     write_mock_file(base / "sys/class/hwmon/hwmon0/temp1_input", "76000");
@@ -243,7 +329,8 @@ void run_all_devices_and_features_suite() {
     {
         TelemetryCollector hybrid_tc(base.string(), true);
         write_mock_file(base / "proc/stat", "cpu  30250 0 3050 67700 0 0 0 0 0 0");
-        verify_all_features_on_device(hybrid_tc, "PROFILE 4 [HYBRID LAPTOP]: Ryzen 7 6800H (card0 iGPU -> auto card1 dGPU)");
+        RamExpect ram4{3.00f, 1.00f, 14.50f, 4800, "DDR5"};
+        verify_all_features_on_device(hybrid_tc, "PROFILE 4 [HYBRID LAPTOP]: Ryzen 7 6800H (card0 iGPU -> auto card1 dGPU)", &ram4);
     }
 
     // ------------------------------------------------------------------------
@@ -253,7 +340,14 @@ void run_all_devices_and_features_suite() {
     write_mock_file(base / "proc/cpuinfo",
                     "processor\t: 0\nmodel name\t: AMD Custom APU 0405 (Steam Deck OLED)\n");
     write_mock_file(base / "proc/stat", "cpu  40000 0 5000 55000 0 0 0 0 0 0");
-    write_mock_file(base / "proc/meminfo", "MemTotal:       16777216 kB\nMemAvailable:   7340032 kB\n");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       16777216 kB\nMemAvailable:   7340032 kB\n"
+                    "SwapTotal:       1048576 kB\nSwapFree:         524288 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      5242880 kB\n");
+    write_mock_file(base / "proc/pressure/memory", "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+    // Test extended SMBIOS Type 17 fields (>0xFFFF) for LPDDR5-6400
+    write_mock_dmi17(base / "sys/firmware/dmi/entries", 0, 8192, 0x23, 0xFFFF, 0xFFFF, 6400, 6400);
+    write_mock_dmi17(base / "sys/firmware/dmi/entries", 1, 8192, 0x23, 0xFFFF, 0xFFFF, 6400, 6400);
     write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "3500000");
     write_mock_file(base / "sys/class/thermal/thermal_zone0/temp", "69000"); // Fallback thermal_zone0
     write_mock_file(base / "sys/class/powercap/amd-rapl:0/energy_uj", "5000000");
@@ -275,7 +369,8 @@ void run_all_devices_and_features_suite() {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         write_mock_file(base / "proc/stat", "cpu  40400 0 5100 55500 0 0 0 0 0 0");
         write_mock_file(base / "sys/class/powercap/amd-rapl:0/energy_uj", "5270000"); // ~9W CPU
-        verify_all_features_on_device(apu_tc, "PROFILE 5 [APU / STEAM DECK / iGPU]: Shared GTT Memory + Thermal Zone Fallback");
+        RamExpect ram5{5.00f, 0.50f, 0.00f, 6400, "LPDDR5"};
+        verify_all_features_on_device(apu_tc, "PROFILE 5 [APU / STEAM DECK / iGPU]: Shared GTT Memory + Thermal Zone Fallback", &ram5);
     }
 
     fs::remove_all(base, ec);
