@@ -7,6 +7,7 @@
 #include <libgen.h>
 
 int main(int argc, char* argv[]) {
+    (void)argc;
     // 1. Determine directory where launcher is located
     char exe_path[4096] = {0};
     ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);

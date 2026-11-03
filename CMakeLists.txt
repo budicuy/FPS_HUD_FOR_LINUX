@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 project(FPSHUD VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -9,16 +9,59 @@ endif()
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"
+#endif
+#include <inplace_vector>
+int main() {
+    std::inplace_vector<int, 4> v;
+    v.try_push_back(42);
+    return v.size() == 1 ? 0 : 1;
+}
+" FPSHUD_HAS_CXX26_INPLACE_VECTOR)
+if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
+    message(FATAL_ERROR
+        "FPSHUD requires an ISO C++26 compiler and standard library providing <inplace_vector> "
+        "(GCC 15+ or Clang 20+ with libstdc++ 15+).\n"
+        "On Ubuntu/Debian: install g++-15 (from ppa:ubuntu-toolchain-r/test) and pass -DCMAKE_CXX_COMPILER=g++-15.")
+endif()
+
+option(FPSHUD_NATIVE_ARCH "Optimize for host CPU microarchitecture (-march=native)" OFF)
 option(ENABLE_ASAN "Enable AddressSanitizer and LeakSanitizer" OFF)
 option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+
+if(FPSHUD_NATIVE_ARCH)
+    add_compile_options(-march=native)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_compile_options(-march=x86-64 -mtune=generic)
+endif()
 
 if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
     set(USE_SANITIZERS ON)
 else()
     set(USE_SANITIZERS OFF)
+endif()
+
+set(FPSHUD_GLIBC_COMPAT_SOURCES "")
+set(FPSHUD_GLIBC_COMPAT_LINK_OPTS "")
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
+    set_source_files_properties(src/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
+    set(FPSHUD_GLIBC_COMPAT_SOURCES src/glibc_compat.c)
+    set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
+        -Wl,--wrap=acosf
+        -Wl,--wrap=atan2f
+        -Wl,--wrap=fmodf
+        -Wl,--wrap=__isoc23_sscanf
+        -Wl,--wrap=__isoc23_strtol
+        -Wl,--wrap=__isoc23_strtoul
+        -Wl,--wrap=__isoc23_strtoull
+    )
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -37,7 +80,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -fno-trapping-math
             -Wall
             -Wextra
-            -Wno-deprecated-declarations
         )
         add_link_options(
             -fuse-ld=lld
@@ -57,7 +99,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -fno-optimize-sibling-calls
             -Wall
             -Wextra
-            -Wno-deprecated-declarations
         )
     endif()
 
@@ -86,14 +127,17 @@ else()
         -DNDEBUG
         -ffunction-sections
         -fdata-sections
+        -fstack-protector-strong
         -fno-math-errno
         -fno-trapping-math
-        -Wno-deprecated-declarations
+        -Wall
+        -Wextra
     )
     add_link_options(
         -Wl,--gc-sections
         -Wl,-O2
-        -static-libstdc++
+        -Wl,--as-needed
+        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
         -static-libgcc
     )
 endif()
@@ -129,6 +173,7 @@ set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
+set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 add_library(fpshud SHARED
     src/config.cpp
@@ -140,6 +185,7 @@ add_library(fpshud SHARED
     src/vulkan_layer.cpp
     src/opengl_hook.cpp
     ${IMGUI_SOURCES}
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
 target_include_directories(fpshud PRIVATE
@@ -165,6 +211,7 @@ target_link_libraries(fpshud PRIVATE
 target_link_options(fpshud PRIVATE
     -Wl,--exclude-libs,ALL
     "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/manifest/libfpshud.version"
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
 )
 
 # Hide internal symbols except exported Vulkan Layer & OpenGL hook entrypoints
@@ -182,6 +229,7 @@ add_executable(fpshud_test
     src/config.cpp
     src/telemetry.cpp
     src/recorder_ipc.cpp
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
 target_include_directories(fpshud_test PRIVATE
@@ -191,6 +239,10 @@ target_include_directories(fpshud_test PRIVATE
 target_link_libraries(fpshud_test PRIVATE
     Threads::Threads
     ${CMAKE_DL_LIBS}
+)
+
+target_link_options(fpshud_test PRIVATE
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
 )
 
 # Screen Recorder Helper Daemon (On-Demand)
@@ -209,6 +261,7 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
     add_executable(fpshud_recorder_bin
         src/recorder_main.cpp
         src/config.cpp
+        ${FPSHUD_GLIBC_COMPAT_SOURCES}
     )
 
     target_include_directories(fpshud_recorder_bin PRIVATE
@@ -232,14 +285,19 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
     )
     target_link_options(fpshud_recorder_bin PRIVATE
         "-Wl,--disable-new-dtags"
+        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
     )
 
     # Universal lightweight container-aware launcher
     add_executable(fpshud_recorder
         src/recorder_launcher.c
+        ${FPSHUD_GLIBC_COMPAT_SOURCES}
     )
     target_link_libraries(fpshud_recorder PRIVATE
         ${CMAKE_DL_LIBS}
+    )
+    target_link_options(fpshud_recorder PRIVATE
+        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
     )
 
     message(STATUS "Screen Recorder: ENABLED (fpshud_recorder & fpshud_recorder_bin will be built)")

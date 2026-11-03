@@ -1,6 +1,7 @@
 #include "overlay_ui.hpp"
 #include "embedded_fonts.hpp"
 #include "gui_menu.hpp"
+#include "inplace_vec.hpp"
 #include "input_manager.hpp"
 #include "recorder_ipc.hpp"
 
@@ -14,7 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <inplace_vector>
 #include <string>
 #include <vector>
 

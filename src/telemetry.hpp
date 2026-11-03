@@ -1,10 +1,11 @@
 #pragma once
 
+#include "inplace_vec.hpp"
+
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <inplace_vector>
 #include <mutex>
 #include <string>
 #include <thread>

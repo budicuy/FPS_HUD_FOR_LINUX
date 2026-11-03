@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "inplace_vec.hpp"
 #include "telemetry.hpp"
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
@@ -10,7 +11,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <inplace_vector>
 #include <string>
 #include <thread>
 
