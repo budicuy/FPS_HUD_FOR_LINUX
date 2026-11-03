@@ -228,51 +228,101 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Find best hardware video encoder: HEVC (hevc_nvenc -> hevc_vaapi -> libx265) or H.264 (h264_nvenc -> h264_vaapi -> libx264)
-    const AVCodec* vcodec = nullptr;
-    bool is_nvenc = false;
-    bool is_vaapi = false;
-
+    // Find best video encoder using candidate fallback loop:
+    // HEVC:  {"hevc_nvenc", "libx265", "hevc", "h264_nvenc", "libx264", "h264"}
+    // H.264: {"h264_nvenc", "libx264", "h264"}
+    std::vector<const char*> candidates;
     if (codec_choice == "hevc") {
-        vcodec = avcodec_find_encoder_by_name("hevc_nvenc");
-        if (vcodec) {
-            is_nvenc = true;
-        } else {
-            vcodec = avcodec_find_encoder_by_name("hevc_vaapi");
-            if (vcodec) {
-                is_vaapi = true;
+        candidates = {"hevc_nvenc", "libx265", "hevc", "h264_nvenc", "libx264", "h264"};
+    } else {
+        candidates = {"h264_nvenc", "libx264", "h264"};
+    }
+
+    const AVCodec* vcodec = nullptr;
+    AVCodecContext* vctx = nullptr;
+
+    for (const char* cand : candidates) {
+        const AVCodec* c = avcodec_find_encoder_by_name(cand);
+        if (!c) {
+            if (std::strcmp(cand, "hevc") == 0) c = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+            else if (std::strcmp(cand, "h264") == 0) c = avcodec_find_encoder(AV_CODEC_ID_H264);
+        }
+        if (!c) continue;
+
+        AVCodecContext* ctx = avcodec_alloc_context3(c);
+        if (!ctx) continue;
+
+        bool is_nv = (std::strstr(c->name, "nvenc") != nullptr);
+        ctx->codec_id = c->id;
+        ctx->width = target_width;
+        ctx->height = target_height;
+        ctx->time_base = AVRational{1, target_fps};
+        ctx->framerate = AVRational{target_fps, 1};
+        ctx->pix_fmt = is_nv ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
+        ctx->gop_size = target_fps * 2; // 2-second keyframe interval
+        ctx->max_b_frames = 0;          // Low latency for gameplay capture
+
+        if (quality_mode == 0) {
+            // CQP Mode (Adaptive Constant Quantization Parameter)
+            if (is_nv) {
+                av_opt_set(ctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
+                av_opt_set(ctx->priv_data, "tune", "ll", 0);   // Low latency
+                av_opt_set(ctx->priv_data, "rc", "constqp", 0);
+                av_opt_set_int(ctx->priv_data, "qp", target_cq, 0);
+                av_opt_set(ctx->priv_data, "spatial-aq", "1", 0);  // Preserves HUD text and sharp UI fonts
+                av_opt_set(ctx->priv_data, "temporal-aq", "1", 0); // Bitrate savings on static/dialogue scenes
             } else {
-                vcodec = avcodec_find_encoder_by_name("libx265");
-                if (!vcodec) {
-                    vcodec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-                }
+                av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
+                av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
+                av_opt_set_int(ctx->priv_data, "crf", target_cq, 0);
+            }
+        } else {
+            // VBR Mode (Target Bitrate)
+            ctx->bit_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
+            if (is_nv) {
+                av_opt_set(ctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
+                av_opt_set(ctx->priv_data, "tune", "ll", 0);   // Low latency
+                av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+            } else {
+                av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
+                av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
             }
         }
-        if (!vcodec) {
-            std::fprintf(stderr, "[FPSHUD Recorder] HEVC encoder not available, falling back to H.264.\n");
-            codec_choice = "h264";
+
+        if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
+            ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        }
+
+        if (avcodec_open2(ctx, c, nullptr) >= 0) {
+            vcodec = c;
+            vctx = ctx;
+            if (c->id == AV_CODEC_ID_H264) {
+                codec_choice = "h264";
+            }
+            std::fprintf(stderr, "[FPSHUD Recorder] Successfully initialized video encoder: %s (%s)\n",
+                         vcodec->name, codec_choice.c_str());
+            if (quality_mode == 0) {
+                if (is_nv) {
+                    std::fprintf(stderr, "[FPSHUD Recorder] NVENC Adaptive CQP: CQ=%d, Spatial-AQ=ON, Temporal-AQ=ON\n", target_cq);
+                } else {
+                    std::fprintf(stderr, "[FPSHUD Recorder] Software CRF: %d\n", target_cq);
+                }
+            } else {
+                if (is_nv) {
+                    std::fprintf(stderr, "[FPSHUD Recorder] NVENC VBR: %d kbps\n", target_bitrate_kbps);
+                } else {
+                    std::fprintf(stderr, "[FPSHUD Recorder] Software VBR: %d kbps\n", target_bitrate_kbps);
+                }
+            }
+            break;
+        } else {
+            std::fprintf(stderr, "[FPSHUD Recorder] Candidate encoder '%s' failed to open, falling back...\n", cand);
+            avcodec_free_context(&ctx);
         }
     }
 
-    if (!vcodec) {
-        vcodec = avcodec_find_encoder_by_name("h264_nvenc");
-        if (vcodec) {
-            is_nvenc = true;
-        } else {
-            vcodec = avcodec_find_encoder_by_name("h264_vaapi");
-            if (vcodec) {
-                is_vaapi = true;
-            } else {
-                vcodec = avcodec_find_encoder_by_name("libx264");
-                if (!vcodec) {
-                    vcodec = avcodec_find_encoder(AV_CODEC_ID_H264);
-                }
-            }
-        }
-    }
-
-    if (!vcodec) {
-        std::fprintf(stderr, "[FPSHUD Recorder] No suitable video encoder found.\n");
+    if (!vctx) {
+        std::fprintf(stderr, "[FPSHUD Recorder] No suitable video encoder could be opened.\n");
         avformat_free_context(oc);
         close(client_fd);
         close(server_fd);
@@ -280,65 +330,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::fprintf(stderr, "[FPSHUD Recorder] Using Video Encoder: %s (%s)\n", vcodec->name, codec_choice.c_str());
-
     AVStream* vstream = avformat_new_stream(oc, nullptr);
-    AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
-    vstream->id = 0;
-    vctx->codec_id = vcodec->id;
-    vctx->width = target_width;
-    vctx->height = target_height;
-    vctx->time_base = AVRational{1, target_fps};
-    vstream->time_base = vctx->time_base;
-    vctx->framerate = AVRational{target_fps, 1};
-    vctx->pix_fmt = (is_nvenc || is_vaapi) ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
-    vctx->gop_size = target_fps * 2; // 2-second keyframe interval
-    vctx->max_b_frames = 0;          // Low latency for gameplay capture
-
-    if (quality_mode == 0) {
-        // CQP Mode (Adaptive Constant Quantization Parameter)
-        if (is_nvenc) {
-            av_opt_set(vctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
-            av_opt_set(vctx->priv_data, "tune", "ll", 0);   // Low latency
-            av_opt_set(vctx->priv_data, "rc", "constqp", 0);
-            av_opt_set_int(vctx->priv_data, "qp", target_cq, 0);
-            av_opt_set(vctx->priv_data, "spatial-aq", "1", 0);  // Preserves HUD text and sharp UI fonts
-            av_opt_set(vctx->priv_data, "temporal-aq", "1", 0); // Bitrate savings on static/dialogue scenes
-            std::fprintf(stderr, "[FPSHUD Recorder] NVENC Adaptive CQP: CQ=%d, Spatial-AQ=ON, Temporal-AQ=ON\n", target_cq);
-        } else if (is_vaapi) {
-            av_opt_set(vctx->priv_data, "rc_mode", "CQP", 0);
-            av_opt_set_int(vctx->priv_data, "qp", target_cq, 0);
-            std::fprintf(stderr, "[FPSHUD Recorder] VA-API CQP: QP=%d\n", target_cq);
-        } else {
-            av_opt_set(vctx->priv_data, "preset", "ultrafast", 0);
-            av_opt_set(vctx->priv_data, "tune", "zerolatency", 0);
-            av_opt_set_int(vctx->priv_data, "crf", target_cq, 0);
-            std::fprintf(stderr, "[FPSHUD Recorder] Software CRF: %d\n", target_cq);
-        }
-    } else {
-        // VBR Mode (Target Bitrate)
-        vctx->bit_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
-        if (is_nvenc) {
-            av_opt_set(vctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
-            av_opt_set(vctx->priv_data, "tune", "ll", 0);   // Low latency
-            av_opt_set(vctx->priv_data, "rc", "vbr", 0);
-            std::fprintf(stderr, "[FPSHUD Recorder] NVENC VBR: %d kbps\n", target_bitrate_kbps);
-        } else if (is_vaapi) {
-            av_opt_set(vctx->priv_data, "rc_mode", "CBR", 0);
-            std::fprintf(stderr, "[FPSHUD Recorder] VA-API CBR: %d kbps\n", target_bitrate_kbps);
-        } else {
-            av_opt_set(vctx->priv_data, "preset", "ultrafast", 0);
-            av_opt_set(vctx->priv_data, "tune", "zerolatency", 0);
-            std::fprintf(stderr, "[FPSHUD Recorder] Software VBR: %d kbps\n", target_bitrate_kbps);
-        }
-    }
-
-    if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
-        vctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
-
-    if (avcodec_open2(vctx, vcodec, nullptr) < 0) {
-        std::fprintf(stderr, "[FPSHUD Recorder] Could not open video codec: %s\n", vcodec->name);
+    if (!vstream) {
+        std::fprintf(stderr, "[FPSHUD Recorder] Could not allocate video stream.\n");
         avcodec_free_context(&vctx);
         avformat_free_context(oc);
         close(client_fd);
@@ -346,6 +340,8 @@ int main(int argc, char* argv[]) {
         unlink(socket_path.c_str());
         return 1;
     }
+    vstream->id = 0;
+    vstream->time_base = vctx->time_base;
     avcodec_parameters_from_context(vstream->codecpar, vctx);
     if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
         vstream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
