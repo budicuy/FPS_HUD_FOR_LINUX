@@ -47,40 +47,47 @@ void* get_egl_lib() {
     return handle;
 }
 
+static std::once_flag g_glx_resolve_once;
+static std::once_flag g_egl_resolve_once;
+
 void ensure_glx_resolved() {
-    if (!real_glXSwapBuffers) {
-        real_glXSwapBuffers = reinterpret_cast<PFN_glXSwapBuffers>(dlsym(RTLD_NEXT, "glXSwapBuffers"));
-        if (!real_glXSwapBuffers && get_glx_lib()) {
-            real_glXSwapBuffers = reinterpret_cast<PFN_glXSwapBuffers>(dlsym(get_glx_lib(), "glXSwapBuffers"));
+    std::call_once(g_glx_resolve_once, []() {
+        if (!real_glXSwapBuffers) {
+            real_glXSwapBuffers = reinterpret_cast<PFN_glXSwapBuffers>(dlsym(RTLD_NEXT, "glXSwapBuffers"));
+            if (!real_glXSwapBuffers && get_glx_lib()) {
+                real_glXSwapBuffers = reinterpret_cast<PFN_glXSwapBuffers>(dlsym(get_glx_lib(), "glXSwapBuffers"));
+            }
         }
-    }
-    if (!real_glXGetProcAddress) {
-        real_glXGetProcAddress = reinterpret_cast<PFN_glXGetProcAddress>(dlsym(RTLD_NEXT, "glXGetProcAddress"));
-        if (!real_glXGetProcAddress && get_glx_lib()) {
-            real_glXGetProcAddress = reinterpret_cast<PFN_glXGetProcAddress>(dlsym(get_glx_lib(), "glXGetProcAddress"));
+        if (!real_glXGetProcAddress) {
+            real_glXGetProcAddress = reinterpret_cast<PFN_glXGetProcAddress>(dlsym(RTLD_NEXT, "glXGetProcAddress"));
+            if (!real_glXGetProcAddress && get_glx_lib()) {
+                real_glXGetProcAddress = reinterpret_cast<PFN_glXGetProcAddress>(dlsym(get_glx_lib(), "glXGetProcAddress"));
+            }
         }
-    }
-    if (!real_glXGetProcAddressARB) {
-        real_glXGetProcAddressARB = reinterpret_cast<PFN_glXGetProcAddressARB>(dlsym(RTLD_NEXT, "glXGetProcAddressARB"));
-        if (!real_glXGetProcAddressARB && get_glx_lib()) {
-            real_glXGetProcAddressARB = reinterpret_cast<PFN_glXGetProcAddressARB>(dlsym(get_glx_lib(), "glXGetProcAddressARB"));
+        if (!real_glXGetProcAddressARB) {
+            real_glXGetProcAddressARB = reinterpret_cast<PFN_glXGetProcAddressARB>(dlsym(RTLD_NEXT, "glXGetProcAddressARB"));
+            if (!real_glXGetProcAddressARB && get_glx_lib()) {
+                real_glXGetProcAddressARB = reinterpret_cast<PFN_glXGetProcAddressARB>(dlsym(get_glx_lib(), "glXGetProcAddressARB"));
+            }
         }
-    }
+    });
 }
 
 void ensure_egl_resolved() {
-    if (!real_eglSwapBuffers) {
-        real_eglSwapBuffers = reinterpret_cast<PFN_eglSwapBuffers>(dlsym(RTLD_NEXT, "eglSwapBuffers"));
-        if (!real_eglSwapBuffers && get_egl_lib()) {
-            real_eglSwapBuffers = reinterpret_cast<PFN_eglSwapBuffers>(dlsym(get_egl_lib(), "eglSwapBuffers"));
+    std::call_once(g_egl_resolve_once, []() {
+        if (!real_eglSwapBuffers) {
+            real_eglSwapBuffers = reinterpret_cast<PFN_eglSwapBuffers>(dlsym(RTLD_NEXT, "eglSwapBuffers"));
+            if (!real_eglSwapBuffers && get_egl_lib()) {
+                real_eglSwapBuffers = reinterpret_cast<PFN_eglSwapBuffers>(dlsym(get_egl_lib(), "eglSwapBuffers"));
+            }
         }
-    }
-    if (!real_eglGetProcAddress) {
-        real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(RTLD_NEXT, "eglGetProcAddress"));
-        if (!real_eglGetProcAddress && get_egl_lib()) {
-            real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(get_egl_lib(), "eglGetProcAddress"));
+        if (!real_eglGetProcAddress) {
+            real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(RTLD_NEXT, "eglGetProcAddress"));
+            if (!real_eglGetProcAddress && get_egl_lib()) {
+                real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(get_egl_lib(), "eglGetProcAddress"));
+            }
         }
-    }
+    });
 }
 
 void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fallback_h) {

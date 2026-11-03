@@ -634,6 +634,8 @@ void TelemetryCollector::init_gpu_sensors() {
         drm_vram_total_path_ = (card_root / "lmem_total_bytes").string();
     } else if (fs::exists(dev_dir / "lmem_total_bytes", ec)) {
         drm_vram_total_path_ = (dev_dir / "lmem_total_bytes").string();
+    } else if (fs::exists(card_root / "lmem0/lmem_total_bytes", ec)) {
+        drm_vram_total_path_ = (card_root / "lmem0/lmem_total_bytes").string();
     }
     if (fs::exists(dev_dir / "mem_info_gtt_used", ec)) {
         drm_gtt_used_path_ = (dev_dir / "mem_info_gtt_used").string();

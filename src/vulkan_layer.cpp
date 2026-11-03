@@ -897,10 +897,13 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
             dd->InvalidateMappedMemoryRanges(dd->device, 1, &range);
         }
         uint32_t fmt = 0; // 0 = BGRA
+        // On x86_64 little-endian:
+        // VK_FORMAT_A2B10G10R10_UNORM_PACK32 stores R in bits 0..9 (byte 0 -> Red, similar to RGBA)
+        // VK_FORMAT_A2R10G10B10_UNORM_PACK32 stores B in bits 0..9 (byte 0 -> Blue, similar to BGRA)
         if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB ||
-            sd->format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            sd->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
             fmt = 1; // 1 = RGBA
-        } else if (sd->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+        } else if (sd->format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
             fmt = 0; // 0 = BGRA
         }
         fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width, sd->extent.height, fmt, false);
