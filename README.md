@@ -145,6 +145,8 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 | :--- | :--- |
 | **`Insert` / `F12` / `F10`** | Open or Close the **`FPSHUD Configuration Tool`** menu |
 | **`F11`** | Quickly hide or show the HUD overlay without opening the menu |
+| **`F7`** | Start or Stop **Hardware-Accelerated Screen Recording** (`~/Videos/FPSHUD`) |
+| **`F8`** | Save **Instant Replay** (last 60s gameplay clip) |
 | **`F9`** | Start or Stop **CSV Benchmark Recording** (`~/Documents/fpshud_benchmark.csv`) |
 | **`ESC`** | Close the GUI menu and return mouse control to the game |
 
@@ -243,7 +245,7 @@ git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
 ./scripts/install.sh
 
-# Run the automated 26-check verification suite across 5 simulated device profiles:
+# Run the automated 31-check verification suite across 5 simulated device profiles:
 ./build/fpshud_test 1
 ```
 
@@ -264,6 +266,8 @@ FPS_HUD_FOR_LINUX/
     ├── overlay_ui.hpp / overlay_ui.cpp  # Two-tone HUD renderer, outline/shadow & mini FT graph
     ├── vulkan_layer.cpp                 # Vulkan Implicit Layer dispatch & vkQueuePresentKHR hook
     ├── opengl_hook.cpp                  # OpenGL GLX/EGL buffer swap hooks
+    ├── recorder_ipc.hpp / .cpp          # Zero-overhead IPC controller for on-demand recording helper
+    ├── recorder_main.cpp                # On-demand companion daemon (NVENC/VA-API/PulseAudio capture)
     └── test_cli.cpp                     # Automated 5-Device Sysfs Simulation & Verification Suite
 ```
 
@@ -283,7 +287,7 @@ FPS_HUD_FOR_LINUX/
 ## 9. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 26 multi-vendor checks pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 31 multi-vendor checks pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.

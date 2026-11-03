@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
+#include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
 #include "imgui.h"
@@ -745,14 +746,18 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     submit_info.pSignalSemaphores = &frame.semaphore;
 
     VkQueue target_queue = dd->graphics_queue ? dd->graphics_queue : queue;
+    VkResult pres_res = VK_SUCCESS;
     if (dd->QueueSubmit(target_queue, 1, &submit_info, frame.fence) == VK_SUCCESS) {
         VkPresentInfoKHR modified_present = *pPresentInfo;
         modified_present.waitSemaphoreCount = 1;
         modified_present.pWaitSemaphores = &frame.semaphore;
-        return dd->QueuePresentKHR(queue, &modified_present);
+        pres_res = dd->QueuePresentKHR(queue, &modified_present);
+    } else {
+        pres_res = dd->QueuePresentKHR(queue, pPresentInfo);
     }
 
-    return dd->QueuePresentKHR(queue, pPresentInfo);
+    fpshud::RecorderController::instance().on_frame_present(sd->extent.width, sd->extent.height);
+    return pres_res;
 }
 
 } // namespace

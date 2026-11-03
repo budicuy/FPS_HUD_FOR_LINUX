@@ -143,6 +143,8 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 | :--- | :--- |
 | **`Insert` / `F12` / `F10`** | Membuka atau Menutup menu **`FPSHUD Configuration Tool`** |
 | **`F11`** | Menyembunyikan atau Menampilkan HUD dengan cepat tanpa membuka menu |
+| **`F7`** | Memulai atau Menghentikan **Screen Recorder Ringan** (`~/Videos/FPSHUD`) |
+| **`F8`** | Menyimpan **Instant Replay** (klip 60 detik gameplay terakhir) |
 | **`F9`** | Memulai atau Menghentikan perekaman **Benchmark CSV** |
 | **`ESC`** | Menutup menu GUI dan mengembalikan kursor mouse ke dalam game |
 
@@ -241,7 +243,7 @@ git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
 ./scripts/install.sh
 
-# Jalankan 26 pengujian otomatis pada 5 profil perangkat (NVIDIA, AMD, Intel, Laptop Hybrid, APU):
+# Jalankan 31 pengujian otomatis pada 5 profil perangkat (NVIDIA, AMD, Intel, Laptop Hybrid, APU):
 ./build/fpshud_test 1
 ```
 
@@ -261,7 +263,7 @@ cd FPS_HUD_FOR_LINUX
 ## 9. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 26 pengujian multi-perangkat lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 31 pengujian multi-perangkat lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.

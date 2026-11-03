@@ -2,6 +2,7 @@
 #include "embedded_fonts.hpp"
 #include "gui_menu.hpp"
 #include "input_manager.hpp"
+#include "recorder_ipc.hpp"
 
 #include "imgui.h"
 
@@ -698,6 +699,22 @@ void render_overlay_ui(HudConfig& cfg,
                               data.last_benchmark.duration_sec);
                 draw_crisp_text(bsum, IM_COL32(80, 255, 120, fg_alpha), cfg);
             }
+        }
+
+        // Show video recording badge on HUD
+        if (RecorderController::instance().is_recording()) {
+            float rec_sec = RecorderController::instance().get_recording_duration();
+            int mins = static_cast<int>(rec_sec) / 60;
+            int secs = static_cast<int>(rec_sec) % 60;
+            char rec_tag[64];
+            std::snprintf(rec_tag, sizeof(rec_tag), "[● REC %02d:%02d]", mins, secs);
+            draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
+        }
+
+        // Show recent toast notification (e.g. video saved, replay saved) on HUD
+        std::string toast_msg;
+        if (RecorderController::instance().get_recent_toast(toast_msg)) {
+            draw_crisp_text(toast_msg.c_str(), IM_COL32(60, 245, 120, fg_alpha), cfg);
         }
 
         // Optional Mini Frametime Graph directly on HUD

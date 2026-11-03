@@ -94,11 +94,33 @@ struct HudConfig {
 
     // Customizable Keybindings
     // key_toggle_gui: 0=Insert/F12, 1=Insert, 2=F10, 3=Home, 4=F12
-    // key_toggle_hud: 0=F11, 1=F8, 2=End
-    // key_benchmark : 0=F9, 1=F7, 2=PageUp
+    // key_toggle_hud: 0=F11, 1=End
+    // key_benchmark : 0=F9, 1=PageUp
+    // key_record    : 0=F7, 1=Alt+F9, 2=ScrollLock
+    // key_replay    : 0=F8, 1=Alt+F10, 2=Pause
     int key_toggle_gui = 0;
     int key_toggle_hud = 0;
     int key_benchmark = 0;
+    int key_record = 0;
+    int key_replay = 0;
+
+    // Screen Recorder & Instant Replay Settings
+    // record_resolution: 0=Native (100%), 1=1440p, 2=1080p, 3=720p
+    int record_resolution = 0;
+    // record_fps: 30, 60 (default), 0=Match Display
+    int record_fps = 60;
+    // record_bitrate_kbps: 8000, 18000 (default), 32000, 50000
+    int record_bitrate_kbps = 18000;
+    // record_audio_source: 0=Game Audio Only (@DEFAULT_MONITOR@), 1=Mic Only, 2=Game+Mic, 3=Mute
+    int record_audio_source = 0;
+    // record_container: 0=.mp4 (FastStart), 1=.mkv, 2=.webm
+    int record_container = 0;
+    // record_directory: default ~/Videos/FPSHUD
+    std::string record_directory;
+    // record_replay_enabled: false (default)
+    bool record_replay_enabled = false;
+    // record_replay_duration_sec: 30, 60 (default), 120
+    int record_replay_duration_sec = 60;
 
     // GUI Menu & Render Scaling (0.50f .. 2.00f, default 1.0f = 100%)
     float gui_scale = 1.0f;
@@ -163,5 +185,9 @@ const char* font_family_name(FontFamily f);
 const char* gui_keybind_name(int idx);
 const char* hud_keybind_name(int idx);
 const char* bench_keybind_name(int idx);
+const char* record_keybind_name(int idx);
+const char* replay_keybind_name(int idx);
+std::string get_default_record_dir();
+std::string get_effective_record_dir(const HudConfig& cfg);
 
 } // namespace fpshud

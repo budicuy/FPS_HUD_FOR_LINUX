@@ -27,12 +27,14 @@ if [ -f "./build/libfpshud.so" ]; then
     echo "[*] Installing from local build directory..."
     cp -f "./build/libfpshud.so" "$LIB_DIR/libfpshud.so"
     [ -f "./build/fpshud_test" ] && cp -f "./build/fpshud_test" "$BIN_DIR/fpshud_test"
+    [ -f "./build/fpshud_recorder" ] && cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
     INSTALLED_BIN=1
 elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
     echo "[*] Extracting from local prebuilt package..."
     tar -xzf "./dist/fpshud-linux-x86_64.tar.gz" -C "$TMP_DIR"
     cp -f "$TMP_DIR/libfpshud.so" "$LIB_DIR/libfpshud.so"
     [ -f "$TMP_DIR/fpshud_test" ] && cp -f "$TMP_DIR/fpshud_test" "$BIN_DIR/fpshud_test"
+    [ -f "$TMP_DIR/fpshud_recorder" ] && cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
     INSTALLED_BIN=1
 fi
 
@@ -47,6 +49,10 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
             cp -f "$TMP_DIR/fpshud_test" "$BIN_DIR/fpshud_test"
             chmod +x "$BIN_DIR/fpshud_test"
         fi
+        if [ -f "$TMP_DIR/fpshud_recorder" ]; then
+            cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+            chmod +x "$BIN_DIR/fpshud_recorder"
+        fi
         INSTALLED_BIN=1
     else
         echo "[!] Failed to download prebuilt binary. Falling back to source build..."
@@ -59,12 +65,14 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
         cmake --build "$TMP_DIR/build" --parallel
         cp -f "$TMP_DIR/build/libfpshud.so" "$LIB_DIR/libfpshud.so"
         cp -f "$TMP_DIR/build/fpshud_test" "$BIN_DIR/fpshud_test"
+        [ -f "$TMP_DIR/build/fpshud_recorder" ] && cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
         INSTALLED_BIN=1
     fi
 fi
 
 chmod +x "$LIB_DIR/libfpshud.so"
 [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
+[ -f "$BIN_DIR/fpshud_recorder" ] && chmod +x "$BIN_DIR/fpshud_recorder"
 
 # 3. Copy optional system fonts if available on the host distro
 for f in \
@@ -261,6 +269,7 @@ echo "  - Overlay Library       : $LIB_DIR/libfpshud.so"
 echo "  - Vulkan Implicit Layer : $VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json"
 echo "  - OpenGL Wrapper Script : $BIN_DIR/fpshud"
 echo "  - Diagnostic CLI Tool   : $BIN_DIR/fpshud_test"
+echo "  - Screen Recorder Helper: $BIN_DIR/fpshud_recorder"
 echo ""
 echo "  Quick Start:"
 echo "  - Steam Launch Options  : FPS_HUD=1 %command%"
@@ -268,4 +277,5 @@ echo "  - Lutris / Heroic       : Add Environment Variable FPS_HUD=1"
 echo "  - Terminal (Vulkan)     : FPS_HUD=1 ./your_game"
 echo "  - Terminal (OpenGL)     : ~/.local/bin/fpshud ./your_game"
 echo "  - Open In-Game GUI      : Press [Insert], [F12], or [F10] in-game"
+echo "  - Screen Recording      : Press [F7] (Record) or [F8] (Instant Replay)"
 echo "=================================================================="

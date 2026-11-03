@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
+#include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
 #include "imgui.h"
@@ -132,6 +133,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
         ImGui::Render();
     }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    fpshud::RecorderController::instance().on_frame_present(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
 } // namespace

@@ -1,4 +1,5 @@
 #include "input_manager.hpp"
+#include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
 #include "imgui.h"
@@ -50,8 +51,7 @@ bool is_gui_toggle_key(unsigned int code, int mode) {
 bool is_hud_toggle_key(unsigned int code, int mode) {
     switch (mode) {
         case 0: return code == KEY_F11;
-        case 1: return code == KEY_F8;
-        case 2: return code == KEY_END;
+        case 1: return code == KEY_END;
         default: return code == KEY_F11;
     }
 }
@@ -59,9 +59,26 @@ bool is_hud_toggle_key(unsigned int code, int mode) {
 bool is_bench_toggle_key(unsigned int code, int mode) {
     switch (mode) {
         case 0: return code == KEY_F9;
-        case 1: return code == KEY_F7;
-        case 2: return code == KEY_PAGEUP;
+        case 1: return code == KEY_PAGEUP;
         default: return code == KEY_F9;
+    }
+}
+
+bool is_record_toggle_key(unsigned int code, int mode, bool alt_down) {
+    switch (mode) {
+        case 0: return code == KEY_F7;
+        case 1: return (code == KEY_F9 && alt_down);
+        case 2: return code == KEY_SCROLLLOCK;
+        default: return code == KEY_F7;
+    }
+}
+
+bool is_replay_save_key(unsigned int code, int mode, bool alt_down) {
+    switch (mode) {
+        case 0: return code == KEY_F8;
+        case 1: return (code == KEY_F10 && alt_down);
+        case 2: return code == KEY_PAUSE;
+        default: return code == KEY_F8;
     }
 }
 
@@ -162,6 +179,10 @@ void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width, 
                     if (cfg.gui_open || !down) io.AddMouseButtonEvent(2, down);
                 }
 
+                if (ev.code == KEY_LEFTALT || ev.code == KEY_RIGHTALT) {
+                    alt_pressed_ = down;
+                }
+
                 // Toggle shortcuts on key press (value == 1)
                 if (ev.value == 1) {
                     if (is_gui_toggle_key(ev.code, cfg.key_toggle_gui)) {
@@ -170,6 +191,10 @@ void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width, 
                         cfg.hud_visible = !cfg.hud_visible;
                     } else if (is_bench_toggle_key(ev.code, cfg.key_benchmark)) {
                         get_telemetry().toggle_benchmark();
+                    } else if (is_record_toggle_key(ev.code, cfg.key_record, alt_pressed_)) {
+                        RecorderController::instance().toggle_recording(cfg, display_width, display_height);
+                    } else if (is_replay_save_key(ev.code, cfg.key_replay, alt_pressed_)) {
+                        RecorderController::instance().save_instant_replay(cfg);
                     } else if (ev.code == KEY_ESC && cfg.gui_open) {
                         cfg.gui_open = false;
                     }
@@ -262,15 +287,27 @@ void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_
 
         KeyCode kc_f12 = fnKeysymToKeycode(dpy, XK_F12);
         KeyCode kc_ins = fnKeysymToKeycode(dpy, XK_Insert);
+        KeyCode kc_f7  = fnKeysymToKeycode(dpy, XK_F7);
+        KeyCode kc_f8  = fnKeysymToKeycode(dpy, XK_F8);
 
         bool f12_down = kc_f12 && (keys[kc_f12 >> 3] & (1 << (kc_f12 & 7)));
         bool ins_down = kc_ins && (keys[kc_ins >> 3] & (1 << (kc_ins & 7)));
+        bool f7_down  = kc_f7  && (keys[kc_f7  >> 3] & (1 << (kc_f7  & 7)));
+        bool f8_down  = kc_f8  && (keys[kc_f8  >> 3] & (1 << (kc_f8  & 7)));
 
         if ((f12_down && !prev_x11_f12_) || (ins_down && !prev_x11_insert_)) {
             cfg.gui_open = !cfg.gui_open;
         }
+        if (f7_down && !prev_x11_f7_) {
+            RecorderController::instance().toggle_recording(cfg, display_width, display_height);
+        }
+        if (f8_down && !prev_x11_f8_) {
+            RecorderController::instance().save_instant_replay(cfg);
+        }
         prev_x11_f12_ = f12_down;
         prev_x11_insert_ = ins_down;
+        prev_x11_f7_ = f7_down;
+        prev_x11_f8_ = f8_down;
     }
 
     if (cfg.gui_open && fnDefaultRoot && fnQueryPointer && evdev_devices_.empty()) {

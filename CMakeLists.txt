@@ -61,6 +61,7 @@ set(IMGUI_SOURCES
 add_library(fpshud SHARED
     src/config.cpp
     src/telemetry.cpp
+    src/recorder_ipc.cpp
     src/input_manager.cpp
     src/gui_menu.cpp
     src/overlay_ui.cpp
@@ -115,6 +116,35 @@ target_include_directories(fpshud_test PRIVATE
 )
 
 target_link_libraries(fpshud_test PRIVATE
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+)
+
+# Screen Recorder & Instant Replay Helper Daemon (On-Demand)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
+pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
+pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+pkg_check_modules(PULSE_SIMPLE REQUIRED IMPORTED_TARGET libpulse-simple)
+
+add_executable(fpshud_recorder
+    src/recorder_main.cpp
+    src/config.cpp
+)
+
+target_include_directories(fpshud_recorder PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(fpshud_recorder PRIVATE
+    PkgConfig::AVFORMAT
+    PkgConfig::AVCODEC
+    PkgConfig::AVUTIL
+    PkgConfig::SWSCALE
+    PkgConfig::SWRESAMPLE
+    PkgConfig::PULSE_SIMPLE
     Threads::Threads
     ${CMAKE_DL_LIBS}
 )

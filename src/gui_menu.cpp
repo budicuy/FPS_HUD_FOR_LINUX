@@ -1,13 +1,16 @@
 #include "gui_menu.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
+#include "recorder_ipc.hpp"
 
 #include "imgui.h"
 
+#include <unistd.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace fpshud {
@@ -22,6 +25,13 @@ bool g_startup_initialized = false;
 void set_status_message(const std::string& msg) {
     g_status_msg = msg;
     g_status_time = std::chrono::steady_clock::now();
+}
+
+void open_system_folder(const std::string& path) {
+    if (fork() == 0) {
+        execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
+        _exit(0);
+    }
 }
 
 void draw_section_header(const char* title, const ImVec4& color = ImVec4(0.38f, 0.84f, 1.0f, 1.0f)) {
@@ -497,8 +507,10 @@ void render_gui_menu(HudConfig& cfg,
             draw_section_header("");
 
             const char* gui_keys[] = {"Insert / F12 / F10", "Insert Only", "F10 Only", "Home Only", "F12 Only"};
-            const char* hud_keys[] = {"F11", "F8", "End"};
-            const char* bench_keys[] = {"F9", "F7", "PageUp"};
+            const char* hud_keys[] = {"F11", "End"};
+            const char* bench_keys[] = {"F9", "PageUp"};
+            const char* record_keys[] = {"F7", "Alt+F9", "ScrollLock"};
+            const char* replay_keys[] = {"F8", "Alt+F10", "Pause"};
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -533,6 +545,142 @@ void render_gui_menu(HudConfig& cfg,
                     set_status_message("Benchmark disimpan ke CSV!");
                 }
                 ImGui::PopStyleColor();
+            }
+
+            // Section 5: Screen Recorder & Instant Replay (On-Demand)
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            draw_section_header("Screen Recorder & Replay");
+            ImGui::TableSetColumnIndex(1);
+            draw_section_header("");
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Record Control");
+            ImGui::TableSetColumnIndex(1);
+
+            bool is_rec = RecorderController::instance().is_recording();
+            if (!is_rec) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.58f, 0.32f, 1.0f));
+                char btn_lbl[64];
+                std::snprintf(btn_lbl, sizeof(btn_lbl), "● Start Record (%s)", record_keybind_name(cfg.key_record));
+                if (ImGui::Button(btn_lbl, ImVec2(165.0f * scale, 28.0f * scale))) {
+                    RecorderController::instance().start_recording(cfg, display_width, display_height);
+                    set_status_message("Perekaman gameplay dimulai!");
+                }
+                ImGui::PopStyleColor();
+            } else {
+                float dur = RecorderController::instance().get_recording_duration();
+                int m = static_cast<int>(dur) / 60;
+                int s = static_cast<int>(dur) % 60;
+                char stop_lbl[64];
+                std::snprintf(stop_lbl, sizeof(stop_lbl), "■ Stop [REC %02d:%02d]", m, s);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.18f, 0.18f, 1.0f));
+                if (ImGui::Button(stop_lbl, ImVec2(165.0f * scale, 28.0f * scale))) {
+                    RecorderController::instance().stop_recording();
+                    set_status_message("Video berhasil disimpan!");
+                }
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::SameLine();
+            char rep_lbl[64];
+            std::snprintf(rep_lbl, sizeof(rep_lbl), "💾 Replay (%s)", replay_keybind_name(cfg.key_replay));
+            if (ImGui::Button(rep_lbl, ImVec2(145.0f * scale, 28.0f * scale))) {
+                RecorderController::instance().save_instant_replay(cfg);
+            }
+
+            // Video Resolution
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Video Resolution");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0f);
+            const char* res_items[] = {
+                "Native (100% Match Game)",
+                "1440p (2560x1440 QHD)",
+                "1080p (1920x1080 FHD)",
+                "720p (1280x720 HD)"
+            };
+            ImGui::Combo("##RecordResolution", &cfg.record_resolution, res_items, IM_ARRAYSIZE(res_items));
+
+            // FPS & Bitrate
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("FPS & Bitrate");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(140.0f * scale);
+            const char* fps_items[] = {"60 FPS (Rekomendasi)", "30 FPS", "120 FPS", "Match Display"};
+            int current_fps_idx = (cfg.record_fps == 30) ? 1 : ((cfg.record_fps == 120) ? 2 : ((cfg.record_fps == 0) ? 3 : 0));
+            if (ImGui::Combo("##RecordFps", &current_fps_idx, fps_items, IM_ARRAYSIZE(fps_items))) {
+                cfg.record_fps = (current_fps_idx == 1) ? 30 : ((current_fps_idx == 2) ? 120 : ((current_fps_idx == 3) ? 0 : 60));
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            const char* br_items[] = {"8 Mbps (Low)", "18 Mbps (Medium Rekomendasi)", "32 Mbps (High)", "50 Mbps (Ultra)"};
+            int current_br_idx = (cfg.record_bitrate_kbps <= 8000) ? 0 : ((cfg.record_bitrate_kbps <= 18000) ? 1 : ((cfg.record_bitrate_kbps <= 32000) ? 2 : 3));
+            if (ImGui::Combo("##RecordBitrate", &current_br_idx, br_items, IM_ARRAYSIZE(br_items))) {
+                cfg.record_bitrate_kbps = (current_br_idx == 0) ? 8000 : ((current_br_idx == 1) ? 18000 : ((current_br_idx == 2) ? 32000 : 50000));
+            }
+
+            // Audio & Format
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Audio & Format");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(150.0f * scale);
+            const char* audio_items[] = {"Game Audio Only", "Mikrofon Saja", "Game + Mic", "Mute (No Audio)"};
+            ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items, IM_ARRAYSIZE(audio_items));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            const char* container_items[] = {".mp4 (FastStart)", ".mkv (Matroska)", ".webm (WebM)"};
+            ImGui::Combo("##RecordContainer", &cfg.record_container, container_items, IM_ARRAYSIZE(container_items));
+
+            // Save Folder & Open Button
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Save Folder");
+            ImGui::TableSetColumnIndex(1);
+            std::string cur_dir = get_effective_record_dir(cfg);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.95f, 1.0f), "%s", cur_dir.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Open Folder")) {
+                open_system_folder(cur_dir);
+            }
+
+            // Record & Replay Keybindings
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Record / Replay Keys");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(145.0f * scale);
+            ImGui::Combo("##RecKey", &cfg.key_record, record_keys, IM_ARRAYSIZE(record_keys));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::Combo("##RepKey", &cfg.key_replay, replay_keys, IM_ARRAYSIZE(replay_keys));
+
+            // Instant Replay Toggle
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Instant Replay Buffer");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Checkbox("Enable Background Replay Buffer", &cfg.record_replay_enabled);
+            if (cfg.record_replay_enabled) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(100.0f * scale);
+                const char* dur_items[] = {"30 Detik", "60 Detik", "120 Detik"};
+                int current_dur_idx = (cfg.record_replay_duration_sec == 30) ? 0 : ((cfg.record_replay_duration_sec == 120) ? 2 : 1);
+                if (ImGui::Combo("##ReplayDur", &current_dur_idx, dur_items, IM_ARRAYSIZE(dur_items))) {
+                    cfg.record_replay_duration_sec = (current_dur_idx == 0) ? 30 : ((current_dur_idx == 2) ? 120 : 60);
+                }
             }
 
             ImGui::EndTable();

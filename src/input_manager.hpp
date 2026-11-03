@@ -43,6 +43,7 @@ private:
     float cursor_x_ = -1.0f;
     float cursor_y_ = -1.0f;
     bool mouse_buttons_[3] = {false, false, false};
+    bool alt_pressed_ = false;
 
     // Dynamic X11 fallback state
     void* x11_lib_ = nullptr;
@@ -50,6 +51,8 @@ private:
     bool x11_attempted_ = false;
     bool prev_x11_f12_ = false;
     bool prev_x11_insert_ = false;
+    bool prev_x11_f7_ = false;
+    bool prev_x11_f8_ = false;
 };
 
 InputManager& get_input_manager();

@@ -7,6 +7,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
+
+namespace fs = std::filesystem;
 
 namespace fpshud {
 
@@ -174,6 +178,16 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     std::fprintf(fp, "key_toggle_gui=%d\n", cfg.key_toggle_gui);
     std::fprintf(fp, "key_toggle_hud=%d\n", cfg.key_toggle_hud);
     std::fprintf(fp, "key_benchmark=%d\n", cfg.key_benchmark);
+    std::fprintf(fp, "key_record=%d\n", cfg.key_record);
+    std::fprintf(fp, "key_replay=%d\n", cfg.key_replay);
+    std::fprintf(fp, "record_resolution=%d\n", cfg.record_resolution);
+    std::fprintf(fp, "record_fps=%d\n", cfg.record_fps);
+    std::fprintf(fp, "record_bitrate_kbps=%d\n", cfg.record_bitrate_kbps);
+    std::fprintf(fp, "record_audio_source=%d\n", cfg.record_audio_source);
+    std::fprintf(fp, "record_container=%d\n", cfg.record_container);
+    std::fprintf(fp, "record_directory=%s\n", cfg.record_directory.c_str());
+    std::fprintf(fp, "record_replay_enabled=%d\n", cfg.record_replay_enabled ? 1 : 0);
+    std::fprintf(fp, "record_replay_duration_sec=%d\n", cfg.record_replay_duration_sec);
 
     std::fprintf(fp, "metrics=");
     for (size_t i = 0; i < cfg.metrics.size(); ++i) {
@@ -287,7 +301,37 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             cfg.key_toggle_hud = std::clamp(std::atoi(val.c_str()), 0, 2);
             parsed_any = true;
         } else if (key == "key_benchmark") {
-            cfg.key_benchmark = std::clamp(std::atoi(val.c_str()), 0, 2);
+            cfg.key_benchmark = std::clamp(std::atoi(val.c_str()), 0, 1);
+            parsed_any = true;
+        } else if (key == "key_record") {
+            cfg.key_record = std::clamp(std::atoi(val.c_str()), 0, 2);
+            parsed_any = true;
+        } else if (key == "key_replay") {
+            cfg.key_replay = std::clamp(std::atoi(val.c_str()), 0, 2);
+            parsed_any = true;
+        } else if (key == "record_resolution") {
+            cfg.record_resolution = std::clamp(std::atoi(val.c_str()), 0, 3);
+            parsed_any = true;
+        } else if (key == "record_fps") {
+            cfg.record_fps = std::clamp(std::atoi(val.c_str()), 0, 240);
+            parsed_any = true;
+        } else if (key == "record_bitrate_kbps") {
+            cfg.record_bitrate_kbps = std::clamp(std::atoi(val.c_str()), 1000, 100000);
+            parsed_any = true;
+        } else if (key == "record_audio_source") {
+            cfg.record_audio_source = std::clamp(std::atoi(val.c_str()), 0, 3);
+            parsed_any = true;
+        } else if (key == "record_container") {
+            cfg.record_container = std::clamp(std::atoi(val.c_str()), 0, 2);
+            parsed_any = true;
+        } else if (key == "record_directory") {
+            cfg.record_directory = val;
+            parsed_any = true;
+        } else if (key == "record_replay_enabled") {
+            cfg.record_replay_enabled = (std::atoi(val.c_str()) != 0);
+            parsed_any = true;
+        } else if (key == "record_replay_duration_sec") {
+            cfg.record_replay_duration_sec = std::clamp(std::atoi(val.c_str()), 10, 300);
             parsed_any = true;
         } else if (key == "metrics") {
             cfg.metrics.clear();
@@ -527,8 +571,7 @@ const char* gui_keybind_name(int idx) {
 const char* hud_keybind_name(int idx) {
     switch (idx) {
         case 0: return "F11";
-        case 1: return "F8";
-        case 2: return "End";
+        case 1: return "End";
     }
     return "F11";
 }
@@ -536,10 +579,49 @@ const char* hud_keybind_name(int idx) {
 const char* bench_keybind_name(int idx) {
     switch (idx) {
         case 0: return "F9";
-        case 1: return "F7";
-        case 2: return "PageUp";
+        case 1: return "PageUp";
     }
     return "F9";
+}
+
+const char* record_keybind_name(int idx) {
+    switch (idx) {
+        case 0: return "F7";
+        case 1: return "Alt+F9";
+        case 2: return "ScrollLock";
+    }
+    return "F7";
+}
+
+const char* replay_keybind_name(int idx) {
+    switch (idx) {
+        case 0: return "F8";
+        case 1: return "Alt+F10";
+        case 2: return "Pause";
+    }
+    return "F8";
+}
+
+std::string get_default_record_dir() {
+    if (const char* xdg_vid = std::getenv("XDG_VIDEOS_DIR"); xdg_vid && *xdg_vid) {
+        return std::string(xdg_vid) + "/FPSHUD";
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        std::error_code ec;
+        fs::path p_id = fs::path(home) / "Video" / "FPSHUD";
+        if (fs::exists(fs::path(home) / "Video", ec)) {
+            return p_id.string();
+        }
+        return (fs::path(home) / "Videos" / "FPSHUD").string();
+    }
+    return "/tmp/FPSHUD";
+}
+
+std::string get_effective_record_dir(const HudConfig& cfg) {
+    if (!cfg.record_directory.empty()) {
+        return cfg.record_directory;
+    }
+    return get_default_record_dir();
 }
 
 } // namespace fpshud
