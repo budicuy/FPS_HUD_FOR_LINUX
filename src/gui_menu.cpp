@@ -279,7 +279,7 @@ void render_gui_menu(HudConfig& cfg,
         // 3. Three-Column Split View Dashboard
         //    Col 1 (Left ~32%):   HUD Style, Typography, Colors & Hotkeys
         //    Col 2 (Center ~36%): 23 Hardware Telemetry Sensors Grid
-        //    Col 3 (Right ~32%):  Screen Recorder, Instant Replay & Benchmark Hub
+        //    Col 3 (Right ~32%):  Screen Recorder & Benchmark Hub
         // ====================================================================
         float footer_height = 42.0f * scale;
         float panel_height = ImGui::GetContentRegionAvail().y - footer_height;
@@ -666,13 +666,13 @@ void render_gui_menu(HudConfig& cfg,
         ImGui::SameLine(0.0f, col_gap);
 
         // --------------------------------------------------------------------
-        // COLUMN 3: Screen Recorder, Replay & Benchmark Hub
+        // COLUMN 3: Screen Recorder & Benchmark Hub
         // --------------------------------------------------------------------
         ImGui::BeginChild("##Col3_RecorderHub", ImVec2(col3_w, panel_height), true);
 
         draw_section_header("Screen Recorder & Tools", ImVec4(0.38f, 0.84f, 1.0f, 1.0f));
 
-        // Action Buttons Row 1: Record & Instant Replay
+        // Action Buttons Row 1: Primary Record Trigger (Full Width)
         float btn_row_w = ImGui::GetContentRegionAvail().x;
         float btn_half_w = (btn_row_w - (6.0f * scale)) * 0.50f;
 
@@ -682,7 +682,7 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.70f, 0.38f, 1.0f));
             char btn_lbl[64];
             std::snprintf(btn_lbl, sizeof(btn_lbl), "[REC] Start Record (%s)", record_keybind_name(cfg.key_record));
-            if (ImGui::Button(btn_lbl, ImVec2(btn_half_w, 28.0f * scale))) {
+            if (ImGui::Button(btn_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
                 RecorderController::instance().start_recording(cfg, display_width, display_height);
                 set_status_message("Perekaman gameplay dimulai!");
             }
@@ -695,24 +695,14 @@ void render_gui_menu(HudConfig& cfg,
             std::snprintf(stop_lbl, sizeof(stop_lbl), "[STOP] REC %02d:%02d", m, s);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.18f, 0.18f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
-            if (ImGui::Button(stop_lbl, ImVec2(btn_half_w, 28.0f * scale))) {
+            if (ImGui::Button(stop_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
                 RecorderController::instance().stop_recording();
                 set_status_message("Video berhasil disimpan!");
             }
             ImGui::PopStyleColor(2);
         }
 
-        ImGui::SameLine(0.0f, 6.0f * scale);
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.42f, 0.65f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.52f, 0.78f, 1.0f));
-        char rep_lbl[64];
-        std::snprintf(rep_lbl, sizeof(rep_lbl), "[REP] Instant Replay (%s)", replay_keybind_name(cfg.key_replay));
-        if (ImGui::Button(rep_lbl, ImVec2(btn_half_w, 28.0f * scale))) {
-            RecorderController::instance().save_instant_replay(cfg);
-        }
-        ImGui::PopStyleColor(2);
-
-        // Action Buttons Row 2: Benchmark & Open Folder
+        // Action Buttons Row 2: Secondary Tools (Benchmark & Open Folder)
         if (!data.benchmark_active) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.45f, 0.12f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.68f, 0.55f, 0.16f, 1.0f));
@@ -837,27 +827,9 @@ void render_gui_menu(HudConfig& cfg,
             const char* audio_items[] = {"Game Audio Saja", "Mikrofon Saja", "Game + Mikrofon", "Mute (Tanpa Audio)"};
             ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items, IM_ARRAYSIZE(audio_items));
 
-            // Instant Replay Buffer
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text("Replay Buffer");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Checkbox("##ReplayBufferToggle", &cfg.record_replay_enabled);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::BeginDisabled(!cfg.record_replay_enabled);
-            const char* dur_items[] = {"30 Detik", "60 Detik", "120 Detik"};
-            int current_dur_idx = (cfg.record_replay_duration_sec == 30) ? 0 : ((cfg.record_replay_duration_sec == 120) ? 2 : 1);
-            if (ImGui::Combo("##ReplayDur", &current_dur_idx, dur_items, IM_ARRAYSIZE(dur_items))) {
-                cfg.record_replay_duration_sec = (current_dur_idx == 0) ? 30 : ((current_dur_idx == 2) ? 120 : 60);
-            }
-            ImGui::EndDisabled();
-
             // Keybindings Section
             const char* bench_keys[] = {"F9", "PageUp"};
             const char* record_keys[] = {"F7", "Alt+F9", "ScrollLock"};
-            const char* replay_keys[] = {"F8", "Alt+F10", "Pause"};
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -866,14 +838,6 @@ void render_gui_menu(HudConfig& cfg,
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::Combo("##RecKey", &cfg.key_record, record_keys, IM_ARRAYSIZE(record_keys));
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text("Replay Key");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::Combo("##RepKey", &cfg.key_replay, replay_keys, IM_ARRAYSIZE(replay_keys));
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
