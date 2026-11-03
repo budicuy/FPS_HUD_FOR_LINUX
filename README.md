@@ -38,8 +38,8 @@ With traditional Linux overlays, customizing what appears on screen usually mean
 FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage, uses **Dear ImGui** to draw both the on-screen HUD and the in-game settings menu, and hooks directly into **Vulkan** (as a standard Vulkan Implicit Layer) and **OpenGL** (`LD_PRELOAD`). Fonts are embedded directly inside the library so text always looks sharp, even inside containerized environments like Steam Linux Runtime and Proton.
 
 ### What features are inside?
-- **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 23 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder, Instant Replay & Benchmark Hub).
-- **Hardware-Accelerated Screen Recording & Instant Replay (`F7` / `F8`)**: Built-in zero-stutter video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), a rolling 30–120s instant replay buffer, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
+- **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 23 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder & Benchmark Hub).
+- **Hardware-Accelerated Screen Recording (`F7`)**: Built-in zero-stutter video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), prominent 1-click recording, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
 - **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 23 sensors), or save your own **Custom** preset.
 - **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs**, **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
 - **Easy-to-Read Two-Tone Design & Thermal Warnings**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings when your GPU or CPU runs hot.
@@ -58,7 +58,7 @@ FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage
 2. [Installation & Sensor Permissions](#2-installation--sensor-permissions)
 3. [How to Use in Steam, Lutris, Heroic & Terminal](#3-how-to-use-in-steam-lutris-heroic--terminal)
 4. [In-Game GUI Guide & Keyboard Shortcuts](#4-in-game-gui-guide--keyboard-shortcuts)
-5. [Hardware-Accelerated Screen Recording & Instant Replay](#5-hardware-accelerated-screen-recording--instant-replay)
+5. [Hardware-Accelerated Screen Recording](#5-hardware-accelerated-screen-recording)
 6. [Supported Hardware & All 23 Sensors](#6-supported-hardware--all-23-sensors)
 7. [Tech Stack & System Architecture](#7-tech-stack--system-architecture)
 8. [Developer Guide (Building from Source, Sanitizers & Testing)](#8-developer-guide-building-from-source-sanitizers--testing)
@@ -73,14 +73,13 @@ FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage
   - `FPS_HUD=1`: Turns on the HUD overlay, Screen Recorder, and the In-Game GUI Configurator.
   - `FPS_HUD=0` (or unset): Completely disabled with zero background impact.
 - **3-Column Split View In-Game GUI (`FPSHUD Configuration Tool`)**:
-  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Center: 23 Live Hardware Sensors & Quick Filters | Right: Screen Recorder, Replay & Benchmark Hub).
+  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Center: 23 Live Hardware Sensors & Quick Filters | Right: Screen Recorder & Benchmark Hub).
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
   - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
-- **Low-Overhead Screen Recorder & Instant Replay Hub**:
+- **Hardware-Accelerated Screen Recording Hub**:
   - Dedicated background recording daemon (`fpshud_recorder`) with zero frame stutter, using triple-buffered POSIX Shared Memory IPC.
   - Supports industry-standard **HEVC (H.265 / `hvc1`)** and **H.264** with **Adaptive CQP (CQ 16–30)** for crisp, artifact-free gameplay video.
-  - Rolling **30s, 60s, or 120s Instant Replay** buffer saved with one click or hotkey (**`F8`**) directly to `~/Videos/FPSHUD`.
-  - Multi-source audio recording (Game Audio, Microphone, Mixed, or Mute) via PulseAudio/PipeWire.
+  - Multi-source audio recording (Game Audio, Microphone, Mixed, or Mute) via PulseAudio/PipeWire saved directly to `~/Videos/FPSHUD`.
 - **Universal Multi-Vendor Hardware Support**:
   - **NVIDIA**: Uses `libnvidia-ml.so.1` (NVML) dynamically.
   - **AMD Radeon & APUs (`amdgpu`)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, and combines shared `GTT` memory on APUs/Steam Deck.
@@ -155,7 +154,6 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 | **`Insert` / `F12` / `F10`** | Open or Close the **`FPSHUD Configuration Tool`** menu |
 | **`F11`** | Quickly hide or show the HUD overlay without opening the menu |
 | **`F7`** | Start or Stop **Hardware-Accelerated Screen Recording** (`~/Videos/FPSHUD`) |
-| **`F8`** | Save **Instant Replay** (last 60s gameplay clip) |
 | **`F9`** | Start or Stop **CSV Benchmark Recording** (`~/Documents/fpshud_benchmark.csv`) |
 | **`ESC`** | Close the GUI menu and return mouse control to the game |
 
@@ -167,7 +165,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 
 ---
 
-## 5. Hardware-Accelerated Screen Recording & Instant Replay
+## 5. Hardware-Accelerated Screen Recording
 
 FPSHUD includes a dedicated, lightweight background screen recording daemon (`fpshud_recorder`) that runs decoupled from the game process. Frames are submitted via triple-buffered POSIX Shared Memory (`/dev/shm`), ensuring that hardware video encoding never introduces frame stutter or micro-freezes to your gameplay.
 
@@ -179,20 +177,15 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 | **Rate Control** | **Adaptive CQP (Constant Quantization Parameter)** or **Fixed VBR** | **Adaptive CQP (Level 22)**: dynamically allocates bitrates based on scene complexity so fast action never pixelates. |
 | **CQP Levels** | Fine-tune visual quality from **CQ 16** (Near-lossless, higher bitrate) to **CQ 30** (Maximum compression). | **CQ 20 - 22** |
 | **Framerate & Resolution** | Native (Matches game resolution), 1080p, 720p, or 1440p at **30, 60, 120, or 144 FPS**. | **Native @ 60 FPS** |
-| **Instant Replay Buffer** | Rolling circular RAM buffer holding the last **30, 60, or 120 seconds** of gameplay. Press **`F8`** anytime to save the clip. | **60 Seconds** |
 | **Audio Capture** | Low-latency audio recording via PulseAudio / PipeWire: **Game Only**, **Microphone Only**, **Game + Microphone (Stereo Downmixed)**, or **Mute**. | **Game Audio Only** |
 | **Storage Destination** | Clips automatically saved to `~/Videos/FPSHUD/` with timestamped filenames (`FPSHUD_REC_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
 
-### How to Use Screen Recorder & Instant Replay
+### How to Use Screen Recorder
 
-1. **Start / Stop Full Recording (`F7`)**:
+1. **Start / Stop Recording (`F7`)**:
    - Press **`F7`** in-game (or click **`[REC] Start Record`** in Column 3 of the GUI).
    - An in-game status toast confirms recording has started. Press **`F7`** again to finalize the MP4/MKV video file.
-2. **Save Instant Replay Clip (`F8`)**:
-   - Turn on **Replay Buffer** in the GUI (Column 3).
-   - Whenever an epic moment happens in-game, press **`F8`** (or click **`[REPLAY]`**).
-   - FPSHUD flushes the rolling buffer to an MP4 video file within milliseconds without interrupting your match.
-3. **Open System Folder**:
+2. **Open System Folder**:
    - Click the **`Open System Folder`** button in the in-game GUI menu to open your recordings directory directly in your file manager (Dolphin, Nautilus, Nemo, Thunar, etc.).
 
 ---

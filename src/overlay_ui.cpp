@@ -711,7 +711,7 @@ void render_overlay_ui(HudConfig& cfg,
             draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
         }
 
-        // Show recent toast notification (e.g. video saved, replay saved) on HUD
+        // Show recent toast notification (e.g. video saved, benchmark saved) on HUD
         std::string toast_msg;
         if (RecorderController::instance().get_recent_toast(toast_msg)) {
             draw_crisp_text(toast_msg.c_str(), IM_COL32(60, 245, 120, fg_alpha), cfg);

@@ -38,8 +38,8 @@ Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, me
 FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, memanfaatkan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
 
 ### Fitur apa saja yang ada di dalamnya?
-- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 23 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware, Instant Replay & Benchmark).
-- **Perekam Layar Hardware & Instant Replay Bebas Lag (`F7` / `F8`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang tidak membebani game engine, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), buffer putar ulang instan 30–120 detik, dan perekaman audio (Game, Mic, atau Campuran).
+- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 23 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
+- **Perekam Layar Hardware Bebas Lag (`F7`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang tidak membebani game engine, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), tombol rekam 1-klik, dan perekaman audio (Game, Mic, atau Campuran).
 - **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 23 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
@@ -58,7 +58,7 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 2. [Instalasi & Izin Akses Sensor](#2-instalasi--izin-akses-sensor)
 3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)
 4. [Panduan Menu In-Game GUI & Tombol Shortcut](#4-panduan-menu-in-game-gui--tombol-shortcut)
-5. [Perekam Layar Hardware & Instant Replay](#5-perekam-layar-hardware--instant-replay)
+5. [Perekam Layar Hardware](#5-perekam-layar-hardware)
 6. [Dukungan Perangkat Keras & Daftar 23 Sensor](#6-dukungan-perangkat-keras--daftar-23-sensor)
 7. [Tech Stack & Arsitektur Sistem](#7-tech-stack--arsitektur-sistem)
 8. [Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)](#8-panduan-pengembang-build-dari-source-sanitizers--pengujian)
@@ -71,16 +71,15 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 
 - **Aktivasi Simpel (`FPS_HUD=1` / `FPS_HUD=0`)**:
   - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, dan menu In-Game GUI Configurator.
-  - `FPS_HUD=0` (atau dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
+  - `FPS_HUD=0` (or dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
-  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 23 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar, Replay Instan & Benchmark).
+  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 23 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
-- **Perekam Layar Hardware & Replay Instan Zero-Stutter**:
+- **Perekam Layar Hardware Zero-Stutter**:
   - Companion daemon khusus (`fpshud_recorder`) yang berjalan terpisah dengan zero copy lewat triple-buffered POSIX Shared Memory IPC.
   - Mendukung standar video modern **HEVC (H.265 / `hvc1`)** dan **H.264** dengan kualitas **Adaptive CQP (CQ 16–30)** untuk hasil rekaman tajam tanpa artifak piksel.
-  - Fitur **Instant Replay 30s, 60s, atau 120s** yang menyimpan klip momen game sebelumnya secara instan via tombol **`F8`** ke `~/Videos/FPSHUD`.
-  - Perekaman audio multi-sumber (Game Audio, Mikrofon, Campuran, atau Mute) via PulseAudio/PipeWire.
+  - Perekaman audio multi-sumber (Game Audio, Mikrofon, Campuran, atau Mute) via PulseAudio/PipeWire yang langsung tersimpan rapi ke folder `~/Videos/FPSHUD`.
 - **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
   - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
   - **AMD Radeon & APU (`amdgpu`)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, serta menggabungkan memori *Shared GTT* pada APU/Steam Deck.
@@ -153,7 +152,6 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 | **`Insert` / `F12` / `F10`** | Membuka atau Menutup menu **`FPSHUD Configuration Tool`** |
 | **`F11`** | Menyembunyikan atau Menampilkan HUD dengan cepat tanpa membuka menu |
 | **`F7`** | Memulai atau Menghentikan **Screen Recorder Ringan** (`~/Videos/FPSHUD`) |
-| **`F8`** | Menyimpan **Instant Replay** (klip 60 detik gameplay terakhir) |
 | **`F9`** | Memulai atau Menghentikan perekaman **Benchmark CSV** |
 | **`ESC`** | Menutup menu GUI dan mengembalikan kursor mouse ke dalam game |
 
@@ -165,7 +163,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 
 ---
 
-## 5. Perekam Layar Hardware & Instant Replay
+## 5. Perekam Layar Hardware
 
 FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat ringan (`fpshud_recorder`) dan berjalan terpisah dari proses game utama. Frame dikirimkan melalui triple-buffered POSIX Shared Memory (`/dev/shm`), memastikan bahwa proses encoding video hardware tidak pernah menyebabkan stutter (*frame drop*) atau *micro-freeze* pada permainan Anda.
 
@@ -177,20 +175,15 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 | **Kontrol Bitrate** | **Adaptive CQP (Constant Quantization Parameter)** atau **Fixed VBR** | **Adaptive CQP (Level 22)**: mengalokasikan bitrate secara dinamis berdasarkan kompleksitas adegan sehingga aksi cepat tetap tajam tanpa pecah piksel. |
 | **Tingkat Kualitas CQP** | Sesuaikan kualitas visual dari **CQ 16** (*Near-lossless*, bitrate tinggi) hingga **CQ 30** (Kompresi maksimal). | **CQ 20 - 22** |
 | **Framerate & Resolusi** | Native (Sesuai resolusi game), 1080p, 720p, atau 1440p pada **30, 60, 120, atau 144 FPS**. | **Native @ 60 FPS** |
-| **Buffer Instant Replay** | Buffer RAM memutar (*circular buffer*) yang menyimpan **30, 60, atau 120 detik** terakhir gameplay. Tekan **`F8`** kapan saja untuk menyimpan klip. | **60 Detik** |
 | **Perekaman Audio** | Rekam audio latensi rendah via PulseAudio / PipeWire: **Hanya Game**, **Hanya Mikrofon**, **Game + Mikrofon (Stereo Downmixed)**, atau **Mute**. | **Hanya Audio Game** |
 | **Lokasi Penyimpanan** | Klip video otomatis disimpan ke folder `~/Videos/FPSHUD/` dengan nama file berstempel waktu (`FPSHUD_REC_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
 
-### Cara Menggunakan Perekam Layar & Instant Replay
+### Cara Menggunakan Perekam Layar
 
 1. **Mulai / Hentikan Perekaman Penuh (`F7`)**:
    - Tekan **`F7`** di dalam game (atau klik tombol **`[REC] Start Record`** pada Kolom 3 di GUI).
    - Indikator notifikasi in-game akan mengonfirmasi bahwa perekaman telah dimulai. Tekan **`F7`** kembali untuk menyelesaikan dan menyimpan file video MP4/MKV.
-2. **Simpan Klip Instant Replay (`F8`)**:
-   - Aktifkan **Replay Buffer** di menu GUI (Kolom 3).
-   - Kapan pun momen hebat terjadi di dalam game, tekan **`F8`** (atau klik **`[REPLAY]`**).
-   - FPSHUD akan memindahkan buffer memori ke file video MP4 dalam hitungan milidetik tanpa mengganggu pertandingan Anda.
-3. **Buka Folder Rekaman**:
+2. **Buka Folder Rekaman**:
    - Klik tombol **`Open System Folder`** di menu GUI in-game untuk membuka direktori rekaman langsung di file manager desktop Anda (Dolphin, Nautilus, Nemo, Thunar, dll.).
 
 ---
