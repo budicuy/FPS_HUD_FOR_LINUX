@@ -97,7 +97,7 @@ private:
     void send_command(RecorderCommand cmd, const void* payload = nullptr, size_t payload_sz = 0);
     void update_status_sync();
 
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     std::atomic<bool> is_recording_{false};
     std::atomic<bool> is_replay_active_{false};
     std::atomic<float> elapsed_sec_{0.0f};

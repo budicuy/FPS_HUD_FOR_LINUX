@@ -74,6 +74,28 @@ chmod +x "$LIB_DIR/libfpshud.so"
 [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
 [ -f "$BIN_DIR/fpshud_recorder" ] && chmod +x "$BIN_DIR/fpshud_recorder"
 
+# Verify if prebuilt fpshud_recorder works on this distro
+if [ -f "$BIN_DIR/fpshud_recorder" ] && ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
+    echo "[*] Notice: Host FFmpeg library version differs from prebuilt binary."
+    echo "    Compiling native fpshud_recorder for this system..."
+    if command -v git >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1; then
+        if pkg-config --exists libavformat libavcodec libpulse-simple 2>/dev/null; then
+            REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
+            git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REC_TMP/src" 2>/dev/null || true
+            if [ -f "$REC_TMP/src/src/recorder_main.cpp" ]; then
+                g++ -O3 -std=c++20 "$REC_TMP/src/src/recorder_main.cpp" "$REC_TMP/src/src/config.cpp" \
+                    -I"$REC_TMP/src/src" \
+                    $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
+                    -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && chmod +x "$BIN_DIR/fpshud_recorder" || true
+                if ! ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
+                    echo "[✓] Native fpshud_recorder compiled successfully!"
+                fi
+            fi
+            rm -rf "$REC_TMP"
+        fi
+    fi
+fi
+
 # 3. Copy optional system fonts if available on the host distro
 for f in \
     /usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf \

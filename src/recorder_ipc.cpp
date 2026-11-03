@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -17,6 +18,8 @@
 #include <cstring>
 #include <filesystem>
 #include <thread>
+
+extern char** environ;
 
 namespace fs = std::filesystem;
 
@@ -98,18 +101,18 @@ uint32_t RecorderController::get_recorded_frames() const {
 }
 
 std::string RecorderController::get_last_saved_path() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return last_saved_file_;
 }
 
 void RecorderController::set_toast(const std::string& msg) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     toast_msg_ = msg;
     toast_time_ = std::chrono::steady_clock::now();
 }
 
 bool RecorderController::get_recent_toast(std::string& out_msg) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (toast_msg_.empty()) return false;
     auto now = std::chrono::steady_clock::now();
     double sec = std::chrono::duration<double>(now - toast_time_).count();
@@ -129,19 +132,26 @@ void RecorderController::toggle_recording(const HudConfig& cfg, float display_w,
 }
 
 void RecorderController::start_recording(const HudConfig& cfg, float display_w, float display_h) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (is_recording_.load(std::memory_order_relaxed)) {
         return;
     }
 
     if (!spawn_helper_process(cfg, display_w, display_h)) {
-        set_toast("[!] Gagal memulai fpshud_recorder helper!");
+        is_recording_.store(false, std::memory_order_relaxed);
+        set_toast("[!] Gagal menjalankan fpshud_recorder binary.");
         return;
     }
 
     connect_socket();
     if (socket_fd_ < 0) {
-        set_toast("[!] Gagal koneksi socket recorder!");
+        if (helper_pid_ > 0) {
+            kill(helper_pid_, SIGTERM);
+            waitpid(helper_pid_, nullptr, WNOHANG);
+            helper_pid_ = -1;
+        }
+        is_recording_.store(false, std::memory_order_relaxed);
+        set_toast("[!] Gagal menghubungkan ke recorder daemon.");
         return;
     }
 
@@ -173,7 +183,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
 }
 
 void RecorderController::stop_recording() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!is_recording_.load(std::memory_order_relaxed)) {
         return;
     }
@@ -219,7 +229,7 @@ void RecorderController::stop_recording() {
 }
 
 void RecorderController::save_instant_replay(const HudConfig& cfg) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (socket_fd_ >= 0) {
         send_command(RecorderCommand::SaveReplay, nullptr, 0);
 
@@ -240,43 +250,44 @@ void RecorderController::save_instant_replay(const HudConfig& cfg) {
 
 bool RecorderController::spawn_helper_process(const HudConfig& cfg, float display_w, float display_h) {
     if (helper_pid_ > 0) {
-        // Already running
-        return true;
+        int status = 0;
+        pid_t p = waitpid(helper_pid_, &status, WNOHANG);
+        if (p == 0) {
+            return true;
+        }
+        helper_pid_ = -1;
     }
 
     std::string bin_path = get_helper_binary_path();
     unlink(socket_path_.c_str());
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        return false;
-    }
+    std::string w_str = std::to_string(static_cast<int>(display_w));
+    std::string h_str = std::to_string(static_cast<int>(display_h));
+    std::string fps_str = std::to_string((cfg.record_fps > 0) ? cfg.record_fps : 60);
+    std::string br_str = std::to_string(cfg.record_bitrate_kbps);
+    std::string dir_str = get_effective_record_dir(cfg);
 
-    if (pid == 0) {
-        // Child Process: execute fpshud_recorder
-        std::string w_str = std::to_string(static_cast<int>(display_w));
-        std::string h_str = std::to_string(static_cast<int>(display_h));
-        std::string fps_str = std::to_string((cfg.record_fps > 0) ? cfg.record_fps : 60);
-        std::string br_str = std::to_string(cfg.record_bitrate_kbps);
-        std::string dir_str = get_effective_record_dir(cfg);
+    char* argv[] = {
+        const_cast<char*>(bin_path.c_str()),
+        const_cast<char*>("--socket"), const_cast<char*>(socket_path_.c_str()),
+        const_cast<char*>("--width"), const_cast<char*>(w_str.c_str()),
+        const_cast<char*>("--height"), const_cast<char*>(h_str.c_str()),
+        const_cast<char*>("--fps"), const_cast<char*>(fps_str.c_str()),
+        const_cast<char*>("--bitrate"), const_cast<char*>(br_str.c_str()),
+        const_cast<char*>("--dir"), const_cast<char*>(dir_str.c_str()),
+        nullptr
+    };
 
-        char* argv[] = {
-            const_cast<char*>(bin_path.c_str()),
-            const_cast<char*>("--socket"), const_cast<char*>(socket_path_.c_str()),
-            const_cast<char*>("--width"), const_cast<char*>(w_str.c_str()),
-            const_cast<char*>("--height"), const_cast<char*>(h_str.c_str()),
-            const_cast<char*>("--fps"), const_cast<char*>(fps_str.c_str()),
-            const_cast<char*>("--bitrate"), const_cast<char*>(br_str.c_str()),
-            const_cast<char*>("--dir"), const_cast<char*>(dir_str.c_str()),
-            nullptr
-        };
-
-        execvp(bin_path.c_str(), argv);
-        // If execvp fails, try searching in ~/.local/bin directly
+    pid_t pid = 0;
+    int res = posix_spawnp(&pid, bin_path.c_str(), nullptr, nullptr, argv, environ);
+    if (res != 0 || pid <= 0) {
+        // Fallback to ~/.local/bin/fpshud_recorder
         std::string fallback = std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/.local/bin/fpshud_recorder";
         argv[0] = const_cast<char*>(fallback.c_str());
-        execv(fallback.c_str(), argv);
-        ::_exit(127);
+        res = posix_spawnp(&pid, fallback.c_str(), nullptr, nullptr, argv, environ);
+        if (res != 0 || pid <= 0) {
+            return false;
+        }
     }
 
     helper_pid_ = pid;
@@ -293,12 +304,20 @@ void RecorderController::connect_socket() {
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
 
-    // Helper process needs a moment to initialize socket listener (up to 300ms)
+    // Helper process needs a moment to initialize socket listener (up to 250ms)
     bool connected = false;
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 25; ++i) {
         if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
             connected = true;
             break;
+        }
+        // Early abort if helper child process terminated prematurely (e.g. library missing)
+        if (helper_pid_ > 0) {
+            int st = 0;
+            if (waitpid(helper_pid_, &st, WNOHANG) > 0) {
+                helper_pid_ = -1;
+                break;
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
