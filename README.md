@@ -100,13 +100,30 @@ FPSHUD is written in **modern C++20** for maximum speed and minimal memory usage
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
-> [!NOTE]
-> During installation, the script will prompt for optional `sudo` permission. Granting it will automatically configure:
-> 1. **RAM Speed & Generation** (`DDR4 / DDR5 / LPDDR5` in `MT/s`).
-> 2. **CPU Power Consumption** (`intel-rapl` / `amd-rapl` in Watts).
-> 3. **Wayland Hotkeys & Mouse Input** (`/dev/input/event*` for `Insert` / `F12` in-game GUI).
+
+### Hardware Sensor Permissions (STRONGLY RECOMMENDED)
+> [!IMPORTANT]
+> When the installer prompts for **`sudo` access**, it is **strongly recommended to approve it**.
 >
-> If you decline or run non-interactively without sudo, the installation continues cleanly and non-privileged sensors will function normally.
+> By default, the Linux kernel restricts reading certain hardware counters for unprivileged user accounts:
+> 1. **CPU Package Power (Watts via RAPL)**: Kernel security mitigations for CVE-2020-8694 (Platypus) restrict `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`). Sudo installs a standard Linux udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) that safely grants read-only permission (`0444`) to regular users.
+> 2. **RAM Speed (MT/s) & Generation (DDR4 / DDR5)**: Raw SMBIOS DMI tables in `/sys/firmware/dmi/entries/` are restricted to root. Sudo performs a quick one-time probe and saves the metadata to `~/.local/share/fpshud/ram_info` (owned by your normal user).
+> 3. **Wayland Hotkeys & Mouse Capture (`Insert` / `F12`)**: On Wayland compositors (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), security isolation prevents applications from capturing global hotkeys and mouse clicks across windows. Sudo installs `/etc/udev/rules.d/99-fpshud-input.rules` and adds your user to the standard `input` group.
+
+> [!NOTE]
+> **Forgot or skipped sudo during installation? No need to reinstall!**  
+> You can configure all sensor permissions at any time with a single command:
+> ```bash
+> fpshud --setup
+> ```
+> To verify whether all hardware sensors are readable by your account:
+> ```bash
+> fpshud --status
+> ```
+
+> [!TIP]
+> **Security & Privacy Guarantee:**  
+> Games and applications are **NEVER** run as root or with sudo. All games run strictly with your standard user permissions. Sudo is only used during setup to register system udev rules and read SMBIOS tables.
 
 ### 1-Command Uninstallation (Clean Removal)
 ```bash

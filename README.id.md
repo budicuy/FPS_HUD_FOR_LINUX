@@ -98,13 +98,30 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
-> [!NOTE]
-> Saat instalasi berjalan, skrip akan menawarkan izin `sudo` opsional. Jika disetujui, installer akan mengonfigurasi otomatis:
-> 1. **Kecepatan & Generasi RAM** (`DDR4 / DDR5 / LPDDR5` dalam `MT/s`).
-> 2. **Sensor Daya CPU** (`intel-rapl` / `amd-rapl` dalam Watt).
-> 3. **Shortcut Keyboard & Mouse Wayland** (`/dev/input/event*` untuk menu GUI `Insert` / `F12`).
+
+### Izin Sensor Hardware (SANGAT DISARANKAN)
+> [!IMPORTANT]
+> Saat instalasi meminta **izin akses `sudo`**, Anda **sangat disarankan untuk menyetujuinya**.
 >
-> Jika kamu memilih melewati sudo atau menginstal secara non-interaktif, instalasi tetap berhasil dan seluruh sensor non-privilege tetap berfungsi normal.
+> Secara bawaan, kebijakan keamanan kernel Linux membatasi pembacaan beberapa counter perangkat keras bagi akun pengguna biasa:
+> 1. **Daya CPU / Konsumsi Listrik (Watt via RAPL)**: Mitigasi keamanan kernel untuk celah CVE-2020-8694 (Platypus) membatasi file `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`). Sudo akan memasang aturan udev Linux standar (`/etc/udev/rules.d/99-fpshud-rapl.rules`) yang dengan aman memberikan hak baca saja (`0444`) bagi pengguna biasa.
+> 2. **Kecepatan RAM (MT/s) & Generasi Memori (DDR4 / DDR5)**: Tabel raw SMBIOS DMI pada `/sys/firmware/dmi/entries/` dibatasi untuk root. Sudo akan melakukan deteksi cepat sekali saja dan menyimpan hasilnya ke `~/.local/share/fpshud/ram_info` (berpemilik pengguna biasa).
+> 3. **Shortcut Keyboard & Mouse Wayland (`Insert` / `F12`)**: Pada sistem desktop Wayland (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), isolasi keamanan mencegah aplikasi membaca tombol keyboard dan klik mouse lintas jendela. Sudo akan memasang `/etc/udev/rules.d/99-fpshud-input.rules` dan menambahkan pengguna Anda ke grup standar `input`.
+
+> [!NOTE]
+> **Lupa atau melewatkan sudo saat instalasi? Tidak perlu install ulang!**  
+> Anda dapat mengonfigurasi seluruh izin sensor hardware kapan saja cukup dengan 1 perintah:
+> ```bash
+> fpshud --setup
+> ```
+> Untuk memeriksa status izin sensor hardware kapan saja:
+> ```bash
+> fpshud --status
+> ```
+
+> [!TIP]
+> **Jaminan Keamanan & Privasi:**  
+> Game dan aplikasi **TIDAK PERNAH** dijalankan sebagai root atau dengan sudo. Seluruh game dijalankan murni dengan hak akses pengguna biasa Anda. Hak sudo hanya digunakan satu kali saat konfigurasi untuk mendaftarkan aturan udev dan membaca tabel SMBIOS.
 
 ### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)
 ```bash
