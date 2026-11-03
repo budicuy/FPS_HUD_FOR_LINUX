@@ -104,6 +104,10 @@ struct DeviceData {
     PFN_vkCmdCopyImageToBuffer CmdCopyImageToBuffer = nullptr;
     PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
     PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges = nullptr;
+
+    // Zero-Copy DMA-BUF export support (VK_KHR_external_memory_fd)
+    bool has_dma_buf_support = false;
+    PFN_vkGetMemoryFdKHR GetMemoryFdKHR = nullptr;
 };
 
 struct SwapchainData {
@@ -672,6 +676,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     LOAD_DEV_FN(CmdPipelineBarrier);
     LOAD_DEV_FN(InvalidateMappedMemoryRanges);
     #undef LOAD_DEV_FN
+
+    dd->GetMemoryFdKHR = reinterpret_cast<PFN_vkGetMemoryFdKHR>(fpGetDeviceProcAddr(*pDevice, "vkGetMemoryFdKHR"));
+    if (dd->GetMemoryFdKHR) {
+        dd->has_dma_buf_support = true;
+    }
 
     uint32_t chosen_family = 0;
     if (dd->instance_data && dd->instance_data->GetPhysicalDeviceQueueFamilyProperties) {

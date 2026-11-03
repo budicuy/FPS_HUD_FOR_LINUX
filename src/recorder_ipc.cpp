@@ -167,6 +167,9 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
     payload.container = cfg.record_container;
     payload.replay_enabled = cfg.record_replay_enabled ? 1 : 0;
     payload.replay_sec = cfg.record_replay_duration_sec;
+    payload.codec = static_cast<uint32_t>(cfg.record_codec);
+    payload.quality_mode = static_cast<uint32_t>(cfg.record_quality_mode);
+    payload.cq_level = static_cast<uint32_t>(cfg.record_cq_level);
 
     std::string save_dir = get_effective_record_dir(cfg);
     std::error_code ec;
@@ -278,6 +281,9 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
     std::string h_str = std::to_string(static_cast<int>(display_h));
     std::string fps_str = std::to_string((cfg.record_fps > 0) ? cfg.record_fps : 60);
     std::string br_str = std::to_string(cfg.record_bitrate_kbps);
+    std::string codec_str = (cfg.record_codec == 1) ? "hevc" : "h264";
+    std::string qmode_str = std::to_string(cfg.record_quality_mode);
+    std::string cq_str = std::to_string(cfg.record_cq_level);
     std::string dir_str = get_effective_record_dir(cfg);
 
     char* argv[] = {
@@ -288,6 +294,9 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
         const_cast<char*>("--height"), const_cast<char*>(h_str.c_str()),
         const_cast<char*>("--fps"), const_cast<char*>(fps_str.c_str()),
         const_cast<char*>("--bitrate"), const_cast<char*>(br_str.c_str()),
+        const_cast<char*>("--codec"), const_cast<char*>(codec_str.c_str()),
+        const_cast<char*>("--cqp-mode"), const_cast<char*>(qmode_str.c_str()),
+        const_cast<char*>("--cqp"), const_cast<char*>(cq_str.c_str()),
         const_cast<char*>("--dir"), const_cast<char*>(dir_str.c_str()),
         nullptr
     };

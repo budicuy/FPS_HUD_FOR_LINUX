@@ -207,6 +207,29 @@ void run_all_devices_and_features_suite() {
                    "All 3 built-in presets, 23 metrics & GUI scale INI persistence verified");
     }
 
+    {
+        HudConfig rec_cfg;
+        rec_cfg.record_codec = 1;         // HEVC
+        rec_cfg.record_quality_mode = 0;  // Adaptive CQP
+        rec_cfg.record_cq_level = 20;     // CQ 20
+        rec_cfg.record_fps = 60;
+        rec_cfg.record_container = 0;     // MP4
+
+        save_ini_file("/tmp/test_recorder_cfg.ini", rec_cfg, "Test Recorder Config");
+        HudConfig loaded_rec_cfg;
+        load_ini_file("/tmp/test_recorder_cfg.ini", loaded_rec_cfg);
+
+        bool rec_ok = (loaded_rec_cfg.record_codec == 1 &&
+                       loaded_rec_cfg.record_quality_mode == 0 &&
+                       loaded_rec_cfg.record_cq_level == 20 &&
+                       loaded_rec_cfg.record_fps == 60 &&
+                       loaded_rec_cfg.record_container == 0);
+
+        check_cond(rec_ok,
+                   "0.1 Industry-Standard HEVC + CQP Config",
+                   "HEVC (hvc1), Adaptive CQP & Rate Control INI persistence verified");
+    }
+
     const fs::path base = "/tmp/fpshud_mock_hw";
     std::error_code ec;
 

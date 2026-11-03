@@ -185,6 +185,9 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     std::fprintf(fp, "record_bitrate_kbps=%d\n", cfg.record_bitrate_kbps);
     std::fprintf(fp, "record_audio_source=%d\n", cfg.record_audio_source);
     std::fprintf(fp, "record_container=%d\n", cfg.record_container);
+    std::fprintf(fp, "record_codec=%d\n", cfg.record_codec);
+    std::fprintf(fp, "record_quality_mode=%d\n", cfg.record_quality_mode);
+    std::fprintf(fp, "record_cq_level=%d\n", cfg.record_cq_level);
     std::fprintf(fp, "record_directory=%s\n", cfg.record_directory.c_str());
     std::fprintf(fp, "record_replay_enabled=%d\n", cfg.record_replay_enabled ? 1 : 0);
     std::fprintf(fp, "record_replay_duration_sec=%d\n", cfg.record_replay_duration_sec);
@@ -323,6 +326,15 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             parsed_any = true;
         } else if (key == "record_container") {
             cfg.record_container = std::clamp(std::atoi(val.c_str()), 0, 2);
+            parsed_any = true;
+        } else if (key == "record_codec") {
+            cfg.record_codec = std::clamp(std::atoi(val.c_str()), 0, 1);
+            parsed_any = true;
+        } else if (key == "record_quality_mode") {
+            cfg.record_quality_mode = std::clamp(std::atoi(val.c_str()), 0, 1);
+            parsed_any = true;
+        } else if (key == "record_cq_level") {
+            cfg.record_cq_level = std::clamp(std::atoi(val.c_str()), 16, 30);
             parsed_any = true;
         } else if (key == "record_directory") {
             cfg.record_directory = val;

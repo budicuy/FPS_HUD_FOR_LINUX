@@ -115,6 +115,12 @@ struct HudConfig {
     int record_audio_source = 0;
     // record_container: 0=.mp4 (FastStart), 1=.mkv, 2=.webm
     int record_container = 0;
+    // record_codec: 0=H.264 (AVC), 1=HEVC (H.265 - 50% Hemat Disk, Rekomendasi)
+    int record_codec = 1;
+    // record_quality_mode: 0=CQP (Kualitas Adaptif - Rekomendasi), 1=Fixed VBR
+    int record_quality_mode = 0;
+    // record_cq_level: 16-30 (18=Ultra, 22=Balanced/Default, 26=Performance)
+    int record_cq_level = 22;
     // record_directory: default ~/Videos/FPSHUD
     std::string record_directory;
     // record_replay_enabled: false (default)

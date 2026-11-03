@@ -91,6 +91,9 @@ int main(int argc, char* argv[]) {
     int target_height = 1080;
     int target_fps = 60;
     int target_bitrate_kbps = 18000;
+    std::string codec_choice = "hevc";
+    int quality_mode = 0; // 0 = CQP, 1 = Fixed VBR
+    int target_cq = 22;   // 16 - 30
     std::string save_dir;
 
     for (int i = 1; i < argc; ++i) {
@@ -101,6 +104,9 @@ int main(int argc, char* argv[]) {
         else if (arg == "--height" && i + 1 < argc) target_height = std::max(360, std::atoi(argv[++i]));
         else if (arg == "--fps" && i + 1 < argc) target_fps = std::clamp(std::atoi(argv[++i]), 15, 240);
         else if (arg == "--bitrate" && i + 1 < argc) target_bitrate_kbps = std::clamp(std::atoi(argv[++i]), 1000, 100000);
+        else if (arg == "--codec" && i + 1 < argc) codec_choice = argv[++i];
+        else if (arg == "--cqp-mode" && i + 1 < argc) quality_mode = std::clamp(std::atoi(argv[++i]), 0, 1);
+        else if (arg == "--cqp" && i + 1 < argc) target_cq = std::clamp(std::atoi(argv[++i]), 16, 30);
         else if (arg == "--dir" && i + 1 < argc) save_dir = argv[++i];
     }
 
@@ -188,6 +194,9 @@ int main(int argc, char* argv[]) {
         if (start_cfg.fps > 0) target_fps = start_cfg.fps;
         if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = start_cfg.bitrate_kbps;
         if (start_cfg.save_dir[0] != '\0') save_dir = start_cfg.save_dir;
+        codec_choice = (start_cfg.codec == 1) ? "hevc" : "h264";
+        quality_mode = (start_cfg.quality_mode == 1) ? 1 : 0;
+        if (start_cfg.cq_level >= 16 && start_cfg.cq_level <= 30) target_cq = start_cfg.cq_level;
     }
 
     if (save_dir.empty()) {
@@ -203,8 +212,10 @@ int main(int argc, char* argv[]) {
     std::string ext = (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
     std::string out_filename = (fs::path(save_dir) / generate_timestamp_filename("FPSHUD", ext)).string();
 
-    std::fprintf(stderr, "[FPSHUD Recorder] Starting session: %dx%d @ %d FPS, %d kbps -> %s\n",
-                 target_width, target_height, target_fps, target_bitrate_kbps, out_filename.c_str());
+    std::fprintf(stderr, "[FPSHUD Recorder] Starting session: %dx%d @ %d FPS [%s, %s] -> %s\n",
+                 target_width, target_height, target_fps, codec_choice.c_str(),
+                 (quality_mode == 0) ? ("CQP " + std::to_string(target_cq)).c_str() : (std::to_string(target_bitrate_kbps) + "k VBR").c_str(),
+                 out_filename.c_str());
 
     // 3. Initialize FFmpeg Output Format & Video Encoder
     av_log_set_level(AV_LOG_WARNING);
@@ -217,28 +228,51 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Find best hardware video encoder: NVENC -> VA-API -> libx264
+    // Find best hardware video encoder: HEVC (hevc_nvenc -> hevc_vaapi -> libx265) or H.264 (h264_nvenc -> h264_vaapi -> libx264)
     const AVCodec* vcodec = nullptr;
     bool is_nvenc = false;
     bool is_vaapi = false;
 
-    vcodec = avcodec_find_encoder_by_name("h264_nvenc");
-    if (vcodec) {
-        is_nvenc = true;
-    } else {
-        vcodec = avcodec_find_encoder_by_name("h264_vaapi");
+    if (codec_choice == "hevc") {
+        vcodec = avcodec_find_encoder_by_name("hevc_nvenc");
         if (vcodec) {
-            is_vaapi = true;
+            is_nvenc = true;
         } else {
-            vcodec = avcodec_find_encoder_by_name("libx264");
-            if (!vcodec) {
-                vcodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+            vcodec = avcodec_find_encoder_by_name("hevc_vaapi");
+            if (vcodec) {
+                is_vaapi = true;
+            } else {
+                vcodec = avcodec_find_encoder_by_name("libx265");
+                if (!vcodec) {
+                    vcodec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+                }
+            }
+        }
+        if (!vcodec) {
+            std::fprintf(stderr, "[FPSHUD Recorder] HEVC encoder not available, falling back to H.264.\n");
+            codec_choice = "h264";
+        }
+    }
+
+    if (!vcodec) {
+        vcodec = avcodec_find_encoder_by_name("h264_nvenc");
+        if (vcodec) {
+            is_nvenc = true;
+        } else {
+            vcodec = avcodec_find_encoder_by_name("h264_vaapi");
+            if (vcodec) {
+                is_vaapi = true;
+            } else {
+                vcodec = avcodec_find_encoder_by_name("libx264");
+                if (!vcodec) {
+                    vcodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+                }
             }
         }
     }
 
     if (!vcodec) {
-        std::fprintf(stderr, "[FPSHUD Recorder] No suitable H.264 encoder found.\n");
+        std::fprintf(stderr, "[FPSHUD Recorder] No suitable video encoder found.\n");
         avformat_free_context(oc);
         close(client_fd);
         close(server_fd);
@@ -246,7 +280,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::fprintf(stderr, "[FPSHUD Recorder] Using Video Encoder: %s\n", vcodec->name);
+    std::fprintf(stderr, "[FPSHUD Recorder] Using Video Encoder: %s (%s)\n", vcodec->name, codec_choice.c_str());
 
     AVStream* vstream = avformat_new_stream(oc, nullptr);
     AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
@@ -258,20 +292,45 @@ int main(int argc, char* argv[]) {
     vstream->time_base = vctx->time_base;
     vctx->framerate = AVRational{target_fps, 1};
     vctx->pix_fmt = (is_nvenc || is_vaapi) ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
-    vctx->bit_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
     vctx->gop_size = target_fps * 2; // 2-second keyframe interval
     vctx->max_b_frames = 0;          // Low latency for gameplay capture
 
-    if (is_nvenc) {
-        av_opt_set(vctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
-        av_opt_set(vctx->priv_data, "tune", "ll", 0);   // Low latency
-        av_opt_set(vctx->priv_data, "rc", "vbr", 0);
-    } else if (is_vaapi) {
-        av_opt_set(vctx->priv_data, "rc_mode", "CBR", 0);
+    if (quality_mode == 0) {
+        // CQP Mode (Adaptive Constant Quantization Parameter)
+        if (is_nvenc) {
+            av_opt_set(vctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
+            av_opt_set(vctx->priv_data, "tune", "ll", 0);   // Low latency
+            av_opt_set(vctx->priv_data, "rc", "constqp", 0);
+            av_opt_set_int(vctx->priv_data, "qp", target_cq, 0);
+            av_opt_set(vctx->priv_data, "spatial-aq", "1", 0);  // Preserves HUD text and sharp UI fonts
+            av_opt_set(vctx->priv_data, "temporal-aq", "1", 0); // Bitrate savings on static/dialogue scenes
+            std::fprintf(stderr, "[FPSHUD Recorder] NVENC Adaptive CQP: CQ=%d, Spatial-AQ=ON, Temporal-AQ=ON\n", target_cq);
+        } else if (is_vaapi) {
+            av_opt_set(vctx->priv_data, "rc_mode", "CQP", 0);
+            av_opt_set_int(vctx->priv_data, "qp", target_cq, 0);
+            std::fprintf(stderr, "[FPSHUD Recorder] VA-API CQP: QP=%d\n", target_cq);
+        } else {
+            av_opt_set(vctx->priv_data, "preset", "ultrafast", 0);
+            av_opt_set(vctx->priv_data, "tune", "zerolatency", 0);
+            av_opt_set_int(vctx->priv_data, "crf", target_cq, 0);
+            std::fprintf(stderr, "[FPSHUD Recorder] Software CRF: %d\n", target_cq);
+        }
     } else {
-        // libx264 ultrafast fallback
-        av_opt_set(vctx->priv_data, "preset", "ultrafast", 0);
-        av_opt_set(vctx->priv_data, "tune", "zerolatency", 0);
+        // VBR Mode (Target Bitrate)
+        vctx->bit_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
+        if (is_nvenc) {
+            av_opt_set(vctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
+            av_opt_set(vctx->priv_data, "tune", "ll", 0);   // Low latency
+            av_opt_set(vctx->priv_data, "rc", "vbr", 0);
+            std::fprintf(stderr, "[FPSHUD Recorder] NVENC VBR: %d kbps\n", target_bitrate_kbps);
+        } else if (is_vaapi) {
+            av_opt_set(vctx->priv_data, "rc_mode", "CBR", 0);
+            std::fprintf(stderr, "[FPSHUD Recorder] VA-API CBR: %d kbps\n", target_bitrate_kbps);
+        } else {
+            av_opt_set(vctx->priv_data, "preset", "ultrafast", 0);
+            av_opt_set(vctx->priv_data, "tune", "zerolatency", 0);
+            std::fprintf(stderr, "[FPSHUD Recorder] Software VBR: %d kbps\n", target_bitrate_kbps);
+        }
     }
 
     if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
@@ -288,6 +347,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     avcodec_parameters_from_context(vstream->codecpar, vctx);
+    if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
+        vstream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+    }
 
     // 4. Initialize Audio Stream via PulseAudio / PipeWire
     AVStream* astream = nullptr;
@@ -339,6 +401,11 @@ int main(int argc, char* argv[]) {
     AVDictionary* opt_dict = nullptr;
     av_dict_set(&opt_dict, "movflags", "+faststart", 0);
     av_dict_set(&opt_dict, "flush_packets", "0", 0);
+
+    // If HEVC inside MP4, set universal 'hvc1' tag so Haruna, VLC, MPV, browsers playback correctly
+    if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
+        av_dict_set(&opt_dict, "tag:v", "hvc1", 0);
+    }
 
     if (!(oc->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {

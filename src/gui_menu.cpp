@@ -591,54 +591,72 @@ void render_gui_menu(HudConfig& cfg,
                 RecorderController::instance().save_instant_replay(cfg);
             }
 
-            // Video Resolution
+            // Video Resolution & FPS
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Video Resolution");
+            ImGui::Text("Resolution & FPS");
             ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::SetNextItemWidth(170.0f * scale);
             const char* res_items[] = {
-                "Native (100% Match Game)",
+                "Native (Match Game)",
                 "1440p (2560x1440 QHD)",
                 "1080p (1920x1080 FHD)",
                 "720p (1280x720 HD)"
             };
             ImGui::Combo("##RecordResolution", &cfg.record_resolution, res_items, IM_ARRAYSIZE(res_items));
-
-            // FPS & Bitrate
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text("FPS & Bitrate");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(140.0f * scale);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
             const char* fps_items[] = {"60 FPS (Rekomendasi)", "30 FPS", "120 FPS", "Match Display"};
             int current_fps_idx = (cfg.record_fps == 30) ? 1 : ((cfg.record_fps == 120) ? 2 : ((cfg.record_fps == 0) ? 3 : 0));
             if (ImGui::Combo("##RecordFps", &current_fps_idx, fps_items, IM_ARRAYSIZE(fps_items))) {
                 cfg.record_fps = (current_fps_idx == 1) ? 30 : ((current_fps_idx == 2) ? 120 : ((current_fps_idx == 3) ? 0 : 60));
             }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(-1.0f);
-            const char* br_items[] = {"8 Mbps (Low)", "18 Mbps (Medium Rekomendasi)", "32 Mbps (High)", "50 Mbps (Ultra)"};
-            int current_br_idx = (cfg.record_bitrate_kbps <= 8000) ? 0 : ((cfg.record_bitrate_kbps <= 18000) ? 1 : ((cfg.record_bitrate_kbps <= 32000) ? 2 : 3));
-            if (ImGui::Combo("##RecordBitrate", &current_br_idx, br_items, IM_ARRAYSIZE(br_items))) {
-                cfg.record_bitrate_kbps = (current_br_idx == 0) ? 8000 : ((current_br_idx == 1) ? 18000 : ((current_br_idx == 2) ? 32000 : 50000));
-            }
 
-            // Audio & Format
+            // Codec & Container
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Audio & Format");
+            ImGui::Text("Codec & Container");
             ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(150.0f * scale);
-            const char* audio_items[] = {"Game Audio Only", "Mikrofon Saja", "Game + Mic", "Mute (No Audio)"};
-            ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items, IM_ARRAYSIZE(audio_items));
+            ImGui::SetNextItemWidth(170.0f * scale);
+            const char* codec_items[] = {"H.264 (AVC Universal)", "HEVC (H.265 Hemat 50%)"};
+            ImGui::Combo("##RecordCodec", &cfg.record_codec, codec_items, IM_ARRAYSIZE(codec_items));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1.0f);
             const char* container_items[] = {".mp4 (FastStart)", ".mkv (Matroska)", ".webm (WebM)"};
             ImGui::Combo("##RecordContainer", &cfg.record_container, container_items, IM_ARRAYSIZE(container_items));
+
+            // Quality / Rate Control
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Quality Control");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(170.0f * scale);
+            const char* qmode_items[] = {"CQP Adaptif (AQ ON)", "Fixed Bitrate (VBR)"};
+            ImGui::Combo("##RecordQMode", &cfg.record_quality_mode, qmode_items, IM_ARRAYSIZE(qmode_items));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (cfg.record_quality_mode == 0) {
+                ImGui::SliderInt("##RecordCQ", &cfg.record_cq_level, 16, 28, "CQ %d (18=Ultra, 22=Bal)");
+            } else {
+                const char* br_items[] = {"8 Mbps (Low)", "18 Mbps (Medium)", "32 Mbps (High)", "50 Mbps (Ultra)"};
+                int current_br_idx = (cfg.record_bitrate_kbps <= 8000) ? 0 : ((cfg.record_bitrate_kbps <= 18000) ? 1 : ((cfg.record_bitrate_kbps <= 32000) ? 2 : 3));
+                if (ImGui::Combo("##RecordBitrate", &current_br_idx, br_items, IM_ARRAYSIZE(br_items))) {
+                    cfg.record_bitrate_kbps = (current_br_idx == 0) ? 8000 : ((current_br_idx == 1) ? 18000 : ((current_br_idx == 2) ? 32000 : 50000));
+                }
+            }
+
+            // Audio Source
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Audio Source");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0f);
+            const char* audio_items[] = {"Game Audio Saja (Monitor)", "Mikrofon Saja", "Game + Mikrofon", "Mute (Tanpa Audio)"};
+            ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items, IM_ARRAYSIZE(audio_items));
 
             // Save Folder & Open Button
             ImGui::TableNextRow();

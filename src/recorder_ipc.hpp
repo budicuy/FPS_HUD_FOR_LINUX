@@ -47,6 +47,9 @@ struct IpcStartPayload {
     uint32_t container = 0;
     uint32_t replay_enabled = 0;
     uint32_t replay_sec = 60;
+    uint32_t codec = 1;        // 0 = H.264, 1 = HEVC (H.265)
+    uint32_t quality_mode = 0; // 0 = CQP Adaptif, 1 = Fixed VBR
+    uint32_t cq_level = 22;    // CQP 16-30
     char save_dir[256] = {0};
     char filename_prefix[64] = {0};
 };
