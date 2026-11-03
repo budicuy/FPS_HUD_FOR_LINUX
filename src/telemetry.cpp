@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -704,7 +705,7 @@ void TelemetryCollector::on_frame() {
 }
 
 void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_update) {
-    if (dt_ms <= 0.001f || dt_ms > 5000.0f) {
+    if (std::isnan(dt_ms) || std::isinf(dt_ms) || dt_ms <= 0.001f || dt_ms > 5000.0f) {
         return;
     }
 
@@ -730,7 +731,7 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
 
     // Update 120-frame graph ring buffer (render thread only, zero lock!)
     graph_ft_ms_[graph_offset_] = ema_frametime_ms_;
-    graph_fps_[graph_offset_] = 1000.0f / ema_frametime_ms_;
+    graph_fps_[graph_offset_] = (ema_frametime_ms_ > 0.001f) ? (1000.0f / ema_frametime_ms_) : 0.0f;
     graph_offset_ = (graph_offset_ + 1) % static_cast<int>(kGraphHistorySize);
 
     // Record frame into Benchmark buffer only when benchmark is active
@@ -779,7 +780,7 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
     if (since_update_ms >= 200.0f || displayed_fps_.load(std::memory_order_relaxed) == 0.0f || force_display_update) {
         last_fps_display_update_ = now;
         displayed_frametime_ms_.store(ema_frametime_ms_, std::memory_order_relaxed);
-        displayed_fps_.store(1000.0f / ema_frametime_ms_, std::memory_order_relaxed);
+        displayed_fps_.store((ema_frametime_ms_ > 0.001f) ? (1000.0f / ema_frametime_ms_) : 0.0f, std::memory_order_relaxed);
 
         if (ft_ring_count_ > 0) {
             std::array<float, kFrameWindowSize> recent_ft{};
@@ -820,9 +821,9 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
                     accum_ms += ft;
                 }
 
-                if (accum_ms <= 0.0001) return 1000.0f / recent_ft[0];
+                if (accum_ms <= 0.0001) return (recent_count > 0 && recent_ft[0] > 0.0001f) ? (1000.0f / recent_ft[0]) : 0.0f;
                 double effective_tail_ft_ms = weighted_ft_sum / accum_ms;
-                return static_cast<float>(1000.0 / effective_tail_ft_ms);
+                return (effective_tail_ft_ms > 0.0001) ? static_cast<float>(1000.0 / effective_tail_ft_ms) : 0.0f;
             };
 
             float fps_1low = calc_time_weighted_low_fps(0.01);

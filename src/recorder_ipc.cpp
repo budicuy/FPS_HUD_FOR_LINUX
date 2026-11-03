@@ -243,6 +243,7 @@ void RecorderController::stop_recording() {
 }
 
 void RecorderController::save_instant_replay(const HudConfig& cfg) {
+    (void)cfg;
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (socket_fd_ >= 0) {
         send_command(RecorderCommand::SaveReplay, nullptr, 0);
@@ -514,11 +515,19 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
     }
 
     auto* hdr = reinterpret_cast<ShmFrameHeader*>(shm_base_);
+    if (!hdr) return;
+
     uint32_t cur_slot = hdr->write_slot.load(std::memory_order_relaxed);
     uint32_t next_slot = (cur_slot + 1) % 3;
 
-    uint8_t* dst = reinterpret_cast<uint8_t*>(shm_base_) + hdr->offset[next_slot];
-    std::memcpy(dst, pixels, static_cast<size_t>(width) * height * 4);
+    size_t frame_bytes = static_cast<size_t>(width) * height * 4;
+    size_t slot_offset = hdr->offset[next_slot];
+    if (slot_offset + frame_bytes > shm_size_) {
+        return; // Guard against SHM buffer overflow
+    }
+
+    uint8_t* dst = reinterpret_cast<uint8_t*>(shm_base_) + slot_offset;
+    std::memcpy(dst, pixels, frame_bytes);
 
     hdr->format = format;
     hdr->flip_y = flip_y ? 1 : 0;
@@ -544,6 +553,8 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
 }
 
 void RecorderController::on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd) {
+    (void)width;
+    (void)height;
     (void)dmabuf_fd;
     if (!is_recording_.load(std::memory_order_relaxed)) {
         return;

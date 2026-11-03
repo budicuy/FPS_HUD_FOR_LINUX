@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -126,17 +127,32 @@ std::string get_custom_preset_file_path() {
 }
 
 void ensure_parent_dir(const std::string& file_path) {
-    auto slash = file_path.find_last_of('/');
-    if (slash == std::string::npos || slash == 0) return;
-    std::string dir = file_path.substr(0, slash);
-    std::string cur;
-    for (size_t i = 0; i < dir.size(); ++i) {
-        cur.push_back(dir[i]);
-        if (dir[i] == '/' && i > 0) {
-            ::mkdir(cur.c_str(), 0755);
-        }
+    if (file_path.empty()) return;
+    std::error_code ec;
+    fs::path p(file_path);
+    if (p.has_parent_path()) {
+        fs::create_directories(p.parent_path(), ec);
     }
-    ::mkdir(dir.c_str(), 0755);
+}
+
+static inline int safe_strtoi(const std::string& str, int fallback = 0) {
+    if (str.empty()) return fallback;
+    char* end = nullptr;
+    errno = 0;
+    long v = std::strtol(str.c_str(), &end, 10);
+    if (errno != 0 || end == str.c_str()) return fallback;
+    if (v < std::numeric_limits<int>::min()) return std::numeric_limits<int>::min();
+    if (v > std::numeric_limits<int>::max()) return std::numeric_limits<int>::max();
+    return static_cast<int>(v);
+}
+
+static inline float safe_strtof(const std::string& str, float fallback = 0.0f) {
+    if (str.empty()) return fallback;
+    char* end = nullptr;
+    errno = 0;
+    float v = std::strtof(str.c_str(), &end);
+    if (errno != 0 || end == str.c_str() || std::isnan(v) || std::isinf(v)) return fallback;
+    return v;
 }
 
 } // namespace
@@ -233,29 +249,29 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             cfg.active_preset = val;
             parsed_any = true;
         } else if (key == "gui_scale") {
-            cfg.gui_scale = std::clamp(std::strtof(val.c_str(), nullptr), 0.50f, 2.00f);
+            cfg.gui_scale = std::clamp(safe_strtof(val, 1.0f), 0.50f, 2.00f);
             parsed_any = true;
         } else if (key == "hud_visible") {
-            cfg.hud_visible = (std::atoi(val.c_str()) != 0);
+            cfg.hud_visible = (safe_strtoi(val, 1) != 0);
             parsed_any = true;
         } else if (key == "layout") {
-            int v = std::clamp(std::atoi(val.c_str()), 0, 5);
+            int v = std::clamp(safe_strtoi(val, 0), 0, 5);
             cfg.layout = static_cast<LayoutPosition>(v);
             parsed_any = true;
         } else if (key == "arrangement") {
-            int v = std::clamp(std::atoi(val.c_str()), 0, 2);
+            int v = std::clamp(safe_strtoi(val, 0), 0, 2);
             cfg.arrangement = static_cast<ArrangementMode>(v);
             parsed_any = true;
         } else if (key == "background") {
-            int v = std::clamp(std::atoi(val.c_str()), 0, 2);
+            int v = std::clamp(safe_strtoi(val, 0), 0, 2);
             cfg.background = static_cast<BackgroundStyle>(v);
             parsed_any = true;
         } else if (key == "font_family") {
-            int v = std::clamp(std::atoi(val.c_str()), 0, 3);
+            int v = std::clamp(safe_strtoi(val, 0), 0, 3);
             cfg.font_family = static_cast<FontFamily>(v);
             parsed_any = true;
         } else if (key == "font_size_px") {
-            cfg.font_size_px = std::clamp(std::strtof(val.c_str(), nullptr), 10.0f, 64.0f);
+            cfg.font_size_px = std::clamp(safe_strtof(val, 24.0f), 10.0f, 64.0f);
             cfg.font_scale = cfg.font_size_px / kAtlasBaseFontSizePx;
             parsed_any = true;
         } else if (key == "text_color") {
@@ -268,82 +284,82 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             }
             parsed_any = true;
         } else if (key == "text_opacity") {
-            cfg.text_opacity = std::clamp(std::strtof(val.c_str(), nullptr), 0.05f, 1.0f);
+            cfg.text_opacity = std::clamp(safe_strtof(val, 1.0f), 0.05f, 1.0f);
             parsed_any = true;
         } else if (key == "bg_alpha") {
-            cfg.bg_alpha = std::clamp(std::strtof(val.c_str(), nullptr), 0.0f, 1.0f);
+            cfg.bg_alpha = std::clamp(safe_strtof(val, 0.40f), 0.0f, 1.0f);
             parsed_any = true;
         } else if (key == "outline_enabled") {
-            cfg.outline_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.outline_enabled = (safe_strtoi(val, 0) != 0);
             parsed_any = true;
         } else if (key == "outline_thickness") {
-            cfg.outline_thickness = std::clamp(std::strtof(val.c_str(), nullptr), 0.0f, 6.0f);
+            cfg.outline_thickness = std::clamp(safe_strtof(val, 1.4f), 0.0f, 6.0f);
             parsed_any = true;
         } else if (key == "shadow_enabled") {
-            cfg.shadow_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.shadow_enabled = (safe_strtoi(val, 0) != 0);
             parsed_any = true;
         } else if (key == "shadow_offset") {
-            cfg.shadow_offset = std::clamp(std::strtof(val.c_str(), nullptr), 0.0f, 10.0f);
+            cfg.shadow_offset = std::clamp(safe_strtof(val, 2.0f), 0.0f, 10.0f);
             parsed_any = true;
         } else if (key == "shadow_opacity") {
-            cfg.shadow_opacity = std::clamp(std::strtof(val.c_str(), nullptr), 0.0f, 1.0f);
+            cfg.shadow_opacity = std::clamp(safe_strtof(val, 0.70f), 0.0f, 1.0f);
             parsed_any = true;
         } else if (key == "category_colors_enabled") {
-            cfg.category_colors_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.category_colors_enabled = (safe_strtoi(val, 1) != 0);
             parsed_any = true;
         } else if (key == "thermal_warnings_enabled") {
-            cfg.thermal_warnings_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.thermal_warnings_enabled = (safe_strtoi(val, 1) != 0);
             parsed_any = true;
         } else if (key == "hud_graph_enabled") {
-            cfg.hud_graph_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.hud_graph_enabled = (safe_strtoi(val, 0) != 0);
             parsed_any = true;
         } else if (key == "key_toggle_gui") {
-            cfg.key_toggle_gui = std::clamp(std::atoi(val.c_str()), 0, 4);
+            cfg.key_toggle_gui = std::clamp(safe_strtoi(val, 0), 0, 4);
             parsed_any = true;
         } else if (key == "key_toggle_hud") {
-            cfg.key_toggle_hud = std::clamp(std::atoi(val.c_str()), 0, 2);
+            cfg.key_toggle_hud = std::clamp(safe_strtoi(val, 0), 0, 2);
             parsed_any = true;
         } else if (key == "key_benchmark") {
-            cfg.key_benchmark = std::clamp(std::atoi(val.c_str()), 0, 1);
+            cfg.key_benchmark = std::clamp(safe_strtoi(val, 0), 0, 1);
             parsed_any = true;
         } else if (key == "key_record") {
-            cfg.key_record = std::clamp(std::atoi(val.c_str()), 0, 2);
+            cfg.key_record = std::clamp(safe_strtoi(val, 0), 0, 2);
             parsed_any = true;
         } else if (key == "key_replay") {
-            cfg.key_replay = std::clamp(std::atoi(val.c_str()), 0, 2);
+            cfg.key_replay = std::clamp(safe_strtoi(val, 0), 0, 2);
             parsed_any = true;
         } else if (key == "record_resolution") {
-            cfg.record_resolution = std::clamp(std::atoi(val.c_str()), 0, 3);
+            cfg.record_resolution = std::clamp(safe_strtoi(val, 0), 0, 3);
             parsed_any = true;
         } else if (key == "record_fps") {
-            cfg.record_fps = std::clamp(std::atoi(val.c_str()), 0, 240);
+            cfg.record_fps = std::clamp(safe_strtoi(val, 60), 0, 240);
             parsed_any = true;
         } else if (key == "record_bitrate_kbps") {
-            cfg.record_bitrate_kbps = std::clamp(std::atoi(val.c_str()), 1000, 100000);
+            cfg.record_bitrate_kbps = std::clamp(safe_strtoi(val, 15000), 1000, 100000);
             parsed_any = true;
         } else if (key == "record_audio_source") {
-            cfg.record_audio_source = std::clamp(std::atoi(val.c_str()), 0, 3);
+            cfg.record_audio_source = std::clamp(safe_strtoi(val, 0), 0, 3);
             parsed_any = true;
         } else if (key == "record_container") {
-            cfg.record_container = std::clamp(std::atoi(val.c_str()), 0, 2);
+            cfg.record_container = std::clamp(safe_strtoi(val, 0), 0, 2);
             parsed_any = true;
         } else if (key == "record_codec") {
-            cfg.record_codec = std::clamp(std::atoi(val.c_str()), 0, 1);
+            cfg.record_codec = std::clamp(safe_strtoi(val, 0), 0, 1);
             parsed_any = true;
         } else if (key == "record_quality_mode") {
-            cfg.record_quality_mode = std::clamp(std::atoi(val.c_str()), 0, 1);
+            cfg.record_quality_mode = std::clamp(safe_strtoi(val, 0), 0, 1);
             parsed_any = true;
         } else if (key == "record_cq_level") {
-            cfg.record_cq_level = std::clamp(std::atoi(val.c_str()), 16, 30);
+            cfg.record_cq_level = std::clamp(safe_strtoi(val, 20), 16, 30);
             parsed_any = true;
         } else if (key == "record_directory") {
             cfg.record_directory = val;
             parsed_any = true;
         } else if (key == "record_replay_enabled") {
-            cfg.record_replay_enabled = (std::atoi(val.c_str()) != 0);
+            cfg.record_replay_enabled = (safe_strtoi(val, 0) != 0);
             parsed_any = true;
         } else if (key == "record_replay_duration_sec") {
-            cfg.record_replay_duration_sec = std::clamp(std::atoi(val.c_str()), 10, 300);
+            cfg.record_replay_duration_sec = std::clamp(safe_strtoi(val, 30), 10, 300);
             parsed_any = true;
         } else if (key == "metrics") {
             cfg.metrics.clear();
