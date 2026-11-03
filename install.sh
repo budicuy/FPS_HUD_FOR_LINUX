@@ -31,6 +31,10 @@ if [ -f "./build/libfpshud.so" ]; then
         cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
         cp -f "./build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
     fi
+    if [ -f "./build/fpshud_recorder_bin" ]; then
+        cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+        cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    fi
     INSTALLED_BIN=1
 elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
     echo "[*] Extracting from local prebuilt package..."
@@ -40,6 +44,10 @@ elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
     if [ -f "$TMP_DIR/fpshud_recorder" ]; then
         cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
         cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+    fi
+    if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+        cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+        cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
     fi
     INSTALLED_BIN=1
 fi
@@ -60,6 +68,11 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
             cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
             chmod +x "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
         fi
+        if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+            cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+            cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+            chmod +x "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        fi
         INSTALLED_BIN=1
     else
         echo "[!] Failed to download prebuilt binary. Falling back to source build..."
@@ -76,6 +89,10 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
             cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
             cp -f "$TMP_DIR/build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
         fi
+        if [ -f "$TMP_DIR/build/fpshud_recorder_bin" ]; then
+            cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+            cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        fi
         INSTALLED_BIN=1
     fi
 fi
@@ -84,9 +101,13 @@ chmod +x "$LIB_DIR/libfpshud.so"
 [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
 [ -f "$BIN_DIR/fpshud_recorder" ] && chmod +x "$BIN_DIR/fpshud_recorder"
 [ -f "$LIB_DIR/fpshud_recorder" ] && chmod +x "$LIB_DIR/fpshud_recorder"
+[ -f "$BIN_DIR/fpshud_recorder_bin" ] && chmod +x "$BIN_DIR/fpshud_recorder_bin"
+[ -f "$LIB_DIR/fpshud_recorder_bin" ] && chmod +x "$LIB_DIR/fpshud_recorder_bin"
 
 # Verify if prebuilt fpshud_recorder works on this distro
-if [ -f "$BIN_DIR/fpshud_recorder" ] && ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
+REC_CHECK_TARGET="$BIN_DIR/fpshud_recorder_bin"
+[ ! -f "$REC_CHECK_TARGET" ] && REC_CHECK_TARGET="$BIN_DIR/fpshud_recorder"
+if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not found"; then
     echo "[*] Notice: Host FFmpeg library version differs from prebuilt binary."
     echo "    Compiling native fpshud_recorder for this system..."
     if command -v git >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1; then
@@ -99,9 +120,11 @@ if [ -f "$BIN_DIR/fpshud_recorder" ] && ldd "$BIN_DIR/fpshud_recorder" 2>&1 | gr
                     $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
                     -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
                     -Wl,--disable-new-dtags \
-                    -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && chmod +x "$BIN_DIR/fpshud_recorder" || true
+                    -o "$LIB_DIR/fpshud_recorder_bin" 2>/dev/null && chmod +x "$LIB_DIR/fpshud_recorder_bin" || true
+                cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin" 2>/dev/null || true
+                gcc -O3 "$REC_TMP/src/src/recorder_launcher.c" -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && chmod +x "$BIN_DIR/fpshud_recorder" || true
                 cp -f "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder" 2>/dev/null || true
-                if ! ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
+                if ! ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not found"; then
                     echo "[✓] Native fpshud_recorder compiled successfully!"
                 fi
             fi

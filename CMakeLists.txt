@@ -133,16 +133,16 @@ endif()
 
 if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
     TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE_SIMPLE)
-    add_executable(fpshud_recorder
+    add_executable(fpshud_recorder_bin
         src/recorder_main.cpp
         src/config.cpp
     )
 
-    target_include_directories(fpshud_recorder PRIVATE
+    target_include_directories(fpshud_recorder_bin PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 
-    target_link_libraries(fpshud_recorder PRIVATE
+    target_link_libraries(fpshud_recorder_bin PRIVATE
         PkgConfig::AVFORMAT
         PkgConfig::AVCODEC
         PkgConfig::AVUTIL
@@ -153,14 +153,23 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
         ${CMAKE_DL_LIBS}
     )
 
-    set_target_properties(fpshud_recorder PROPERTIES
+    set_target_properties(fpshud_recorder_bin PROPERTIES
         BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
         INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
     )
-    target_link_options(fpshud_recorder PRIVATE
+    target_link_options(fpshud_recorder_bin PRIVATE
         "-Wl,--disable-new-dtags"
     )
-    message(STATUS "Screen Recorder: ENABLED (fpshud_recorder will be built)")
+
+    # Universal lightweight container-aware launcher
+    add_executable(fpshud_recorder
+        src/recorder_launcher.c
+    )
+    target_link_libraries(fpshud_recorder PRIVATE
+        ${CMAKE_DL_LIBS}
+    )
+
+    message(STATUS "Screen Recorder: ENABLED (fpshud_recorder & fpshud_recorder_bin will be built)")
 else()
     message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse-simple not found)")
 endif()

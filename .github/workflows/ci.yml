@@ -29,7 +29,7 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
-          strip -s build/libfpshud.so build/fpshud_test build/fpshud_recorder
+          strip -s build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
 
       - name: Run Multi-Device Simulation & Feature Verification Suite
         run: |
@@ -38,7 +38,7 @@ jobs:
       - name: Package Portable Release Archive
         run: |
           mkdir -p release_pkg
-          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud_test fpshud_recorder
+          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud_test fpshud_recorder fpshud_recorder_bin
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
