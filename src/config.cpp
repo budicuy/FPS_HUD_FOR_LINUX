@@ -53,21 +53,27 @@ std::string trim_copy(std::string s) {
     return s;
 }
 
-void add_unique_metric(std::vector<MetricType>& vec, MetricType m) {
+constexpr std::size_t canonical_metric_index(MetricType m) {
+    for (std::size_t i = 0; i < std::size(kCanonicalMetricsOrder); ++i) {
+        if (kCanonicalMetricsOrder[i] == m) {
+            return i;
+        }
+    }
+    return std::size(kCanonicalMetricsOrder);
+}
+
+void add_unique_metric(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec, MetricType m) {
     if (std::find(vec.begin(), vec.end(), m) == vec.end()) {
-        vec.push_back(m);
+        if (vec.size() < vec.capacity()) {
+            vec.push_back(m);
+        }
     }
 }
 
-void sort_canonical_metrics(std::vector<MetricType>& vec) {
-    std::vector<MetricType> sorted;
-    sorted.reserve(vec.size());
-    for (MetricType m : kCanonicalMetricsOrder) {
-        if (std::find(vec.begin(), vec.end(), m) != vec.end()) {
-            sorted.push_back(m);
-        }
-    }
-    vec = std::move(sorted);
+void sort_canonical_metrics(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec) {
+    std::sort(vec.begin(), vec.end(), [](MetricType a, MetricType b) {
+        return canonical_metric_index(a) < canonical_metric_index(b);
+    });
 }
 
 const char* metric_id_key(MetricType m) {
@@ -373,7 +379,7 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
 
     if (!parsed_any) return false;
 
-    if (cfg.metrics.empty()) {
+    if (cfg.metrics.empty() && cfg.metrics.size() < cfg.metrics.capacity()) {
         cfg.metrics.push_back(MetricType::FPS);
     }
     cfg.enabled = keep_enabled;
@@ -390,7 +396,7 @@ void HudConfig::set_metric(MetricType m, bool active) {
         add_unique_metric(metrics, m);
         sort_canonical_metrics(metrics);
     } else {
-        metrics.erase(std::remove(metrics.begin(), metrics.end(), m), metrics.end());
+        std::erase(metrics, m);
     }
 }
 
@@ -427,7 +433,12 @@ void apply_preset_standard(HudConfig& cfg) {
 
 void apply_preset_advance(HudConfig& cfg) {
     cfg.active_preset = "advance";
-    cfg.metrics.assign(std::begin(kCanonicalMetricsOrder), std::end(kCanonicalMetricsOrder));
+    cfg.metrics.clear();
+    for (MetricType m : kCanonicalMetricsOrder) {
+        if (cfg.metrics.size() < cfg.metrics.capacity()) {
+            cfg.metrics.push_back(m);
+        }
+    }
     cfg.layout = LayoutPosition::CenterTop;
     cfg.arrangement = ArrangementMode::Linear;
     cfg.background = BackgroundStyle::Translucent;

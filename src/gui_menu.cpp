@@ -568,6 +568,7 @@ void render_gui_menu(HudConfig& cfg,
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("FPS")) {
+            // Zero-heap assignment to std::inplace_vector
             cfg.metrics = {MetricType::FPS, MetricType::FrameTimes};
             cfg.active_preset = "custom";
         }

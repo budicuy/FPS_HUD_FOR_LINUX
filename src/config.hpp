@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <inplace_vector>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -66,6 +67,7 @@ constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
 constexpr std::size_t kTotalMetricCount = 23;
+constexpr std::size_t kMaxMetricsCapacity = 32;
 
 struct ColorRGBA {
     uint8_t r = 255;
@@ -80,7 +82,7 @@ struct HudConfig {
     bool hud_visible = true;
 
     std::string active_preset = "standard";
-    std::vector<MetricType> metrics;
+    std::inplace_vector<MetricType, kMaxMetricsCapacity> metrics;
     LayoutPosition layout = LayoutPosition::TopLeft;
     ArrangementMode arrangement = ArrangementMode::Stack;
     BackgroundStyle background = BackgroundStyle::Translucent;
