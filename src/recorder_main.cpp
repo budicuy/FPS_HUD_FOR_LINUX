@@ -572,7 +572,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
-            if (in_hdr.magic == fpshud::kRecorderIpcMagic) {
+            if (in_hdr.is_valid()) {
                 auto cmd = static_cast<fpshud::RecorderCommand>(in_hdr.command);
                 if (cmd == fpshud::RecorderCommand::StopRecord) {
                     g_running.store(false, std::memory_order_relaxed);

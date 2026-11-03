@@ -914,19 +914,29 @@ SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data) {
     V sum_v = 0.0f;
     V min_v = data[0];
     V max_v = data[0];
+    double total = 0.0;
+    size_t chunks_accumulated = 0;
 
     for (; i + VSize <= n; i += VSize) {
         V chunk(&data[i], stdx::element_aligned);
         sum_v += chunk;
         min_v = stdx::min(min_v, chunk);
         max_v = stdx::max(max_v, chunk);
+
+        // Periodically fold into double total to eliminate floating-point drift in ultra-long runs
+        if (++chunks_accumulated == 512) {
+            for (size_t lane = 0; lane < VSize; ++lane) {
+                total += static_cast<double>(sum_v[lane]);
+            }
+            sum_v = 0.0f;
+            chunks_accumulated = 0;
+        }
     }
 
     float min_scalar = min_v[0];
     float max_scalar = max_v[0];
-    double total = 0.0;
     for (size_t lane = 0; lane < VSize; ++lane) {
-        total += sum_v[lane];
+        total += static_cast<double>(sum_v[lane]);
         if (min_v[lane] < min_scalar) min_scalar = min_v[lane];
         if (max_v[lane] > max_scalar) max_scalar = max_v[lane];
     }

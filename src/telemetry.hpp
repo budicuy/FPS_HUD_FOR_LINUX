@@ -42,7 +42,7 @@ struct SimdStatsResult {
 };
 
 // Accelerated frametime analytics (sum, min, max) using C++26 SIMD reduction
-SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data);
+[[nodiscard]] SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data);
 
 // Trivially copyable snapshot struct (zero heap allocations per frame!)
 struct TelemetryData {

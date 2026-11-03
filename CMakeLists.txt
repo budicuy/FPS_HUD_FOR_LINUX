@@ -88,6 +88,7 @@ else()
         -fdata-sections
         -fno-math-errno
         -fno-trapping-math
+        -Wno-deprecated-declarations
     )
     add_link_options(
         -Wl,--gc-sections
