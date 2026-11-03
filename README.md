@@ -205,7 +205,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 
 | Layer | Technology | Highlights |
 | :--- | :--- | :--- |
-| **Language & Build** | **C++20**, **CMake**, **LTO (`-O3`)** | Statically links `libstdc++` & `libgcc` for universal distro portability. |
+| **Language & Build** | **C++20**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Extreme optimization with ThinLTO, `-fno-plt`, stack canaries, ASan/UBSan diagnostics & static libstdc++. |
 | **Graphics Hooks** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Hooks `vkQueuePresentKHR`, `glXSwapBuffers`, and `eglSwapBuffers`. |
 | **UI Framework** | **Dear ImGui (`v1.91.6`)** | Custom vertex-shaded outline/drop-shadow text & split-panel dashboard. |
 | **Input Capture** | **Linux `evdev` + `X11` Fallback** | Non-blocking `/dev/input/event*` polling with `EVIOCGRAB` cursor lock. |
@@ -243,10 +243,18 @@ If you are a developer or want to compile **FPSHUD** from source instead of usin
 ```bash
 git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
-./scripts/install.sh
 
-# Run the automated 31-check verification suite across 5 simulated device profiles:
+# 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
+./scripts/build_clang.sh
+
+# 2. Run the automated 37-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
+
+# 3. (Optional) Run AddressSanitizer + LeakSanitizer + UBSan diagnostic bug detection:
+./scripts/run_sanitizers.sh
+
+# 4. (Optional) Run automated Clang-Tidy static code analysis:
+ninja -C build clang-tidy
 ```
 
 ### Project Structure

@@ -203,7 +203,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 
 | Bagian | Teknologi | Keunggulan Utama |
 | :--- | :--- | :--- |
-| **Bahasa & Build** | **C++20**, **CMake**, **LTO (`-O3`)** | Menggabungkan `libstdc++` & `libgcc` secara statis agar portabel di semua distro. |
+| **Bahasa & Build** | **C++20**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Optimasi extreme dengan ThinLTO, `-fno-plt`, stack canaries, deteksi bug ASan/UBSan & static libstdc++. |
 | **Intersepsi Grafis** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Menangkap fungsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
 | **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 2 kolom tanpa tab. |
 | **Penangkap Input** | **Linux `evdev` + Fallback `X11`** | Pembacaan `/dev/input/event*` non-blocking dengan pengunci kursor `EVIOCGRAB`. |
@@ -241,10 +241,18 @@ Bagi pengembang (*developer*) yang ingin memodifikasi kode sumber atau melakukan
 ```bash
 git clone https://github.com/budicuy/FPS_HUD_FOR_LINUX.git
 cd FPS_HUD_FOR_LINUX
-./scripts/install.sh
 
-# Jalankan 31 pengujian otomatis pada 5 profil perangkat (NVIDIA, AMD, Intel, Laptop Hybrid, APU):
+# 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
+./scripts/build_clang.sh
+
+# 2. Jalankan 37 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
+
+# 3. (Opsional) Jalankan pendeteksi bug AddressSanitizer + LeakSanitizer + UBSan:
+./scripts/run_sanitizers.sh
+
+# 4. (Opsional) Jalankan analisis kode statis otomatis Clang-Tidy:
+ninja -C build clang-tidy
 ```
 
 ---
