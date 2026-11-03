@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -158,6 +159,7 @@ static inline float safe_strtof(const std::string& str, float fallback = 0.0f) {
 } // namespace
 
 bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
+    if (path.empty()) return false;
     ensure_parent_dir(path);
 
     std::string tmp_path = path + ".tmp";

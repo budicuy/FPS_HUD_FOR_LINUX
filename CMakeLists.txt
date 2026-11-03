@@ -44,7 +44,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -Wl,--gc-sections
             -Wl,-O2
             -Wl,--as-needed
-            -static-libstdc++
+            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
             -static-libgcc
         )
     else()
@@ -178,6 +178,7 @@ add_executable(fpshud_test
     src/test_cli.cpp
     src/config.cpp
     src/telemetry.cpp
+    src/recorder_ipc.cpp
 )
 
 target_include_directories(fpshud_test PRIVATE

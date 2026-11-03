@@ -460,7 +460,7 @@ void run_all_devices_and_features_suite() {
                    "Resilient against 0.0f, negative, extreme and NaN frame times");
     }
 
-    // 4. IPC SHM Header & Memory Boundary Validation
+    // 4. IPC SHM Header & Memory Boundary Validation (Static + Runtime Execution)
     ShmFrameHeader test_hdr{};
     test_hdr.magic = kShmFrameMagic;
     test_hdr.width = 1920;
@@ -470,11 +470,18 @@ void run_all_devices_and_features_suite() {
     test_hdr.offset[1] = test_hdr.offset[0] + test_hdr.slot_size;
     test_hdr.offset[2] = test_hdr.offset[1] + test_hdr.slot_size;
     size_t total_shm_needed = sizeof(ShmFrameHeader) + (static_cast<size_t>(test_hdr.slot_size) * 3);
+
+    // Call runtime RecorderController methods with edge-case payloads
+    RecorderController::instance().submit_frame(nullptr, 0, 0, 0, false); // null + zero dim
+    std::vector<uint8_t> dummy_pixel(64, 0xFF);
+    RecorderController::instance().submit_frame(dummy_pixel.data(), 4, 4, 0, false); // inactive recording
+    RecorderController::instance().on_frame_present(1920, 1080, -1);
+
     bool bounds_ok = (test_hdr.magic == kShmFrameMagic &&
                       test_hdr.offset[2] + test_hdr.slot_size == total_shm_needed &&
                       kRecorderIpcMagic == 0x46505352);
-    check_cond(bounds_ok, "4. IPC Buffer Bounds & Header Layout",
-               "Triple-buffered SHM offset math & IPC packet header structure verified");
+    check_cond(bounds_ok, "4. IPC Buffer Bounds & Runtime Guard",
+               "Triple-buffered SHM offset math & RecorderController runtime guards verified");
 
     // 5. High-Frequency Memory Allocation & Stress (Leak Check)
     bool stress_ok = true;

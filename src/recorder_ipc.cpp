@@ -428,7 +428,7 @@ void RecorderController::send_command(RecorderCommand cmd, const void* payload, 
 }
 
 bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
-    if (width == 0 || height == 0) return false;
+    if (width == 0 || height == 0 || width > 16384 || height > 16384) return false;
     if (shm_base_ && shm_width_ == width && shm_height_ == height) {
         return true;
     }
@@ -436,8 +436,8 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
     cleanup_shm();
 
     shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
-    uint32_t slot_sz = width * height * 4;
-    size_t total_sz = 4096 + static_cast<size_t>(slot_sz) * 3;
+    size_t slot_sz = static_cast<size_t>(width) * height * 4;
+    size_t total_sz = 4096 + slot_sz * 3;
 
     shm_fd_ = open(shm_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (shm_fd_ < 0) {
@@ -522,8 +522,8 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
 
     size_t frame_bytes = static_cast<size_t>(width) * height * 4;
     size_t slot_offset = hdr->offset[next_slot];
-    if (slot_offset + frame_bytes > shm_size_) {
-        return; // Guard against SHM buffer overflow
+    if (slot_offset > shm_size_ || frame_bytes > (shm_size_ - slot_offset)) {
+        return; // Guard against SHM buffer overflow and integer wrap-around
     }
 
     uint8_t* dst = reinterpret_cast<uint8_t*>(shm_base_) + slot_offset;
