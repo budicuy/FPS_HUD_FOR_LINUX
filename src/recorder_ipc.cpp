@@ -1,4 +1,5 @@
 #include "recorder_ipc.hpp"
+#include "config.hpp"
 
 #include <dlfcn.h>
 #include <fcntl.h>

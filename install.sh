@@ -21,6 +21,56 @@ TMP_DIR="$(mktemp -d /tmp/fpshud-install.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 INSTALLED_BIN=0
+INSTALLED_FROM_SOURCE=0
+
+select_cpp_toolchain() {
+    CXX_BIN=""
+    CC_BIN=""
+    if command -v g++-16 >/dev/null 2>&1; then
+        CXX_BIN="g++-16"; CC_BIN="gcc-16"
+    elif command -v g++-15 >/dev/null 2>&1; then
+        CXX_BIN="g++-15"; CC_BIN="gcc-15"
+    elif command -v clang++ >/dev/null 2>&1; then
+        CXX_BIN="clang++"; CC_BIN="clang"
+    elif command -v g++ >/dev/null 2>&1; then
+        CXX_BIN="g++"; CC_BIN="gcc"
+    fi
+}
+
+build_and_install_from_source() {
+    select_cpp_toolchain
+    if ! command -v cmake >/dev/null 2>&1 || [ -z "$CXX_BIN" ]; then
+        echo "[!] Cannot build from source: cmake or C++26 compiler (g++-15+ / clang++) not installed."
+        return 1
+    fi
+    local src_dir="$TMP_DIR/src"
+    if [ -f "./CMakeLists.txt" ] && [ -d "./src" ]; then
+        src_dir="."
+    elif [ ! -d "$src_dir" ]; then
+        git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$src_dir"
+    fi
+    local cmake_args=(-B "$TMP_DIR/build" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$CXX_BIN")
+    if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1; then
+        cmake_args+=("-DCMAKE_C_COMPILER=$CC_BIN")
+    fi
+    if command -v ninja >/dev/null 2>&1; then
+        cmake_args+=(-G Ninja)
+    fi
+    cmake "${cmake_args[@]}" "$src_dir"
+    cmake --build "$TMP_DIR/build" --parallel
+    cp -f "$TMP_DIR/build/libfpshud.so" "$LIB_DIR/libfpshud.so"
+    [ -f "$TMP_DIR/build/fpshud_test" ] && cp -f "$TMP_DIR/build/fpshud_test" "$BIN_DIR/fpshud_test"
+    if [ -f "$TMP_DIR/build/fpshud_recorder" ]; then
+        cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+        cp -f "$TMP_DIR/build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+    fi
+    if [ -f "$TMP_DIR/build/fpshud_recorder_bin" ]; then
+        cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+        cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    fi
+    INSTALLED_BIN=1
+    INSTALLED_FROM_SOURCE=1
+}
 
 # 1. If executed from a local checkout with build/libfpshud.so or dist/ tarball
 if [ -f "./build/libfpshud.so" ]; then
@@ -76,24 +126,7 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
         INSTALLED_BIN=1
     else
         echo "[!] Failed to download prebuilt binary. Falling back to source build..."
-        git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$TMP_DIR/src"
-        if command -v ninja >/dev/null 2>&1; then
-            cmake -B "$TMP_DIR/build" -G Ninja -DCMAKE_BUILD_TYPE=Release "$TMP_DIR/src"
-        else
-            cmake -B "$TMP_DIR/build" -DCMAKE_BUILD_TYPE=Release "$TMP_DIR/src"
-        fi
-        cmake --build "$TMP_DIR/build" --parallel
-        cp -f "$TMP_DIR/build/libfpshud.so" "$LIB_DIR/libfpshud.so"
-        cp -f "$TMP_DIR/build/fpshud_test" "$BIN_DIR/fpshud_test"
-        if [ -f "$TMP_DIR/build/fpshud_recorder" ]; then
-            cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
-            cp -f "$TMP_DIR/build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
-        fi
-        if [ -f "$TMP_DIR/build/fpshud_recorder_bin" ]; then
-            cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-            cp -f "$TMP_DIR/build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-        fi
-        INSTALLED_BIN=1
+        build_and_install_from_source
     fi
 fi
 
@@ -104,32 +137,72 @@ chmod +x "$LIB_DIR/libfpshud.so"
 [ -f "$BIN_DIR/fpshud_recorder_bin" ] && chmod +x "$BIN_DIR/fpshud_recorder_bin"
 [ -f "$LIB_DIR/fpshud_recorder_bin" ] && chmod +x "$LIB_DIR/fpshud_recorder_bin"
 
+# Verify prebuilt libfpshud.so & fpshud_test compatibility (GLIBC & pre-AVX2 CPU safety)
+if [ "$INSTALLED_FROM_SOURCE" -eq 0 ]; then
+    NEED_REBUILD=0
+    if ldd "$LIB_DIR/libfpshud.so" 2>&1 | grep -q "not found"; then
+        echo "[*] Notice: Prebuilt libfpshud.so requires newer system libraries than installed on this distro."
+        NEED_REBUILD=1
+    elif ! grep -qw "avx2" /proc/cpuinfo 2>/dev/null && [ -x "$BIN_DIR/fpshud_test" ]; then
+        TEST_RC=0
+        "$BIN_DIR/fpshud_test" >/dev/null 2>&1 || TEST_RC=$?
+        if [ "$TEST_RC" -eq 132 ] || [ "$TEST_RC" -eq 127 ]; then
+            echo "[*] Notice: Prebuilt binary uses CPU instructions unsupported by this processor (exit $TEST_RC)."
+            NEED_REBUILD=1
+        fi
+    fi
+    if [ "$NEED_REBUILD" -eq 1 ]; then
+        echo "    Rebuilding native FPSHUD binaries from source for this host..."
+        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & g++-15/clang++ to build locally)."
+        chmod +x "$LIB_DIR/libfpshud.so"
+        [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
+    fi
+fi
+
 # Verify if prebuilt fpshud_recorder works on this distro
 REC_CHECK_TARGET="$BIN_DIR/fpshud_recorder_bin"
 [ ! -f "$REC_CHECK_TARGET" ] && REC_CHECK_TARGET="$BIN_DIR/fpshud_recorder"
 if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not found"; then
     echo "[*] Notice: Host FFmpeg library version differs from prebuilt binary."
     echo "    Compiling native fpshud_recorder for this system..."
-    if command -v git >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1; then
-        if pkg-config --exists libavformat libavcodec libpulse-simple 2>/dev/null; then
-            REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
-            git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REC_TMP/src" 2>/dev/null || true
-            if [ -f "$REC_TMP/src/src/recorder_main.cpp" ]; then
-                g++ -O3 -std=c++20 "$REC_TMP/src/src/recorder_main.cpp" "$REC_TMP/src/src/config.cpp" \
-                    -I"$REC_TMP/src/src" \
-                    $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
-                    -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
-                    -Wl,--disable-new-dtags \
-                    -o "$LIB_DIR/fpshud_recorder_bin" 2>/dev/null && chmod +x "$LIB_DIR/fpshud_recorder_bin" || true
-                cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin" 2>/dev/null || true
-                gcc -O3 "$REC_TMP/src/src/recorder_launcher.c" -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && chmod +x "$BIN_DIR/fpshud_recorder" || true
-                cp -f "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder" 2>/dev/null || true
-                if ! ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not found"; then
-                    echo "[✓] Native fpshud_recorder compiled successfully!"
-                fi
-            fi
-            rm -rf "$REC_TMP"
+    select_cpp_toolchain
+    if [ -n "$CXX_BIN" ] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavformat libavcodec libavutil libswscale libswresample libpulse-simple 2>/dev/null; then
+        REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
+        REC_SRC_DIR="$REC_TMP/src"
+        if [ -f "./src/recorder_main.cpp" ]; then
+            REC_SRC_DIR="."
+        elif command -v git >/dev/null 2>&1; then
+            git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REC_SRC_DIR" 2>/dev/null || true
         fi
+        if [ -f "$REC_SRC_DIR/src/recorder_main.cpp" ]; then
+            REC_STD_FLAG="-std=c++20"
+            if "$CXX_BIN" -std=c++26 -x c++ -E /dev/null >/dev/null 2>&1; then
+                REC_STD_FLAG="-std=c++26"
+            fi
+            if "$CXX_BIN" -O3 "$REC_STD_FLAG" "$REC_SRC_DIR/src/recorder_main.cpp" \
+                -I"$REC_SRC_DIR/src" \
+                $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
+                -pthread -ldl \
+                -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
+                -Wl,--disable-new-dtags \
+                -o "$LIB_DIR/fpshud_recorder_bin" 2>"$REC_TMP/err.log"; then
+                chmod +x "$LIB_DIR/fpshud_recorder_bin"
+                cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+                if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1 && [ -f "$REC_SRC_DIR/src/recorder_launcher.c" ]; then
+                    "$CC_BIN" -O3 "$REC_SRC_DIR/src/recorder_launcher.c" -ldl -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && \
+                        chmod +x "$BIN_DIR/fpshud_recorder" && \
+                        cp -f "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder" || true
+                fi
+                if ! ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not found"; then
+                    echo "[✓] Native fpshud_recorder compiled successfully ($CXX_BIN $REC_STD_FLAG)!"
+                fi
+            else
+                echo "[!] Warning: Failed to compile native fpshud_recorder_bin ($(head -n 1 "$REC_TMP/err.log" 2>/dev/null))."
+            fi
+        fi
+        rm -rf "$REC_TMP"
+    else
+        echo "[!] Warning: Cannot recompile native fpshud_recorder_bin (missing C++ compiler or FFmpeg/PulseAudio dev headers)."
     fi
 fi
 

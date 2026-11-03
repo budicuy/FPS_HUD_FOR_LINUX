@@ -260,7 +260,6 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
     TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE_SIMPLE)
     add_executable(fpshud_recorder_bin
         src/recorder_main.cpp
-        src/config.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
     )
 

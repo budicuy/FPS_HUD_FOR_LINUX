@@ -1,6 +1,5 @@
 #pragma once
 
-#include "config.hpp"
 #include "pack_indexing.hpp"
 
 #include <atomic>
@@ -11,6 +10,8 @@
 #include <vector>
 
 namespace fpshud {
+
+struct HudConfig;
 
 // Magic packet header for IPC Unix Domain Socket
 constexpr uint32_t kRecorderIpcMagic = 0x46505352; // "FPSR"
