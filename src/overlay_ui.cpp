@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <inplace_vector>
 #include <string>
 #include <vector>
 
@@ -41,13 +42,11 @@ struct MetricGroup {
     GroupCategory category = GroupCategory::FPS;
     const char* label = "FPS";
     ImU32 label_color = 0;
-    std::array<StyledValue, 8> values{};
-    size_t value_count = 0;
+    std::inplace_vector<StyledValue, 8> values;
 };
 
 struct MetricGroupList {
-    std::array<MetricGroup, 5> items{};
-    size_t count = 0;
+    std::inplace_vector<MetricGroup, 5> items;
 };
 
 GroupCategory get_metric_category(MetricType m) noexcept {
@@ -266,23 +265,23 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
     for (MetricType m : cfg.metrics) {
         GroupCategory cat = get_metric_category(m);
         MetricGroup* target = nullptr;
-        for (size_t i = 0; i < list.count; ++i) {
-            if (list.items[i].category == cat) {
-                target = &list.items[i];
+        for (auto& item : list.items) {
+            if (item.category == cat) {
+                target = &item;
                 break;
             }
         }
-        if (!target && list.count < list.items.size()) {
-            target = &list.items[list.count++];
-            target->category = cat;
-            target->label = get_category_label(cat);
-            target->label_color = get_category_color(cat, cfg, alpha);
-            target->value_count = 0;
+        if (!target && list.items.size() < list.items.capacity()) {
+            const char* label = get_category_label(cat);
+            ImU32 col = get_category_color(cat, cfg, alpha);
+            list.items.push_back(MetricGroup{cat, label, col, {}});
+            target = &list.items.back();
         }
-        if (target && target->value_count < target->values.size()) {
-            StyledValue& sv = target->values[target->value_count++];
+        if (target && target->values.size() < target->values.capacity()) {
+            StyledValue sv{};
             format_styled_value(m, data, sv);
             sv.color = get_metric_value_color(m, data, cfg, alpha);
+            target->values.push_back(sv);
         }
     }
     return list;
@@ -356,7 +355,7 @@ void draw_styled_metric_item(const StyledValue& sv, const HudConfig& cfg, ImU32 
 
 void draw_styled_group_values(const MetricGroup& g, const HudConfig& cfg, ImU32 muted_col, ImU32 dot_col, float ui_ratio) {
     float dot_gap = 6.0f * ui_ratio;
-    for (size_t i = 0; i < g.value_count; ++i) {
+    for (size_t i = 0; i < g.values.size(); ++i) {
         if (i > 0) {
             ImGui::SameLine(0.0f, dot_gap);
             draw_crisp_text("\xC2\xB7", dot_col, cfg); // UTF-8 middle dot ·
@@ -599,7 +598,7 @@ void render_overlay_ui(HudConfig& cfg,
         float ui_ratio = cfg.font_size_px / 20.0f;
 
         if (cfg.arrangement == ArrangementMode::Linear) {
-            for (size_t i = 0; i < groups.count; ++i) {
+            for (size_t i = 0; i < groups.items.size(); ++i) {
                 const MetricGroup& g = groups.items[i];
                 if (i > 0) {
                     ImGui::SameLine(0.0f, 10.0f * ui_ratio);
@@ -625,7 +624,7 @@ void render_overlay_ui(HudConfig& cfg,
                 ImGui::TableSetupColumn("G2", ImGuiTableColumnFlags_WidthFixed);
                 ImGui::TableSetupColumn("V2", ImGuiTableColumnFlags_WidthFixed);
 
-                for (size_t i = 0; i < groups.count; i += 2) {
+                for (size_t i = 0; i < groups.items.size(); i += 2) {
                     const MetricGroup& g1 = groups.items[i];
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
@@ -633,7 +632,7 @@ void render_overlay_ui(HudConfig& cfg,
                     ImGui::TableSetColumnIndex(1);
                     draw_styled_group_values(g1, cfg, muted_col, dot_col, ui_ratio);
 
-                    if (i + 1 < groups.count) {
+                    if (i + 1 < groups.items.size()) {
                         const MetricGroup& g2 = groups.items[i + 1];
                         ImGui::TableSetColumnIndex(2);
                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12.0f * ui_ratio);
@@ -652,8 +651,8 @@ void render_overlay_ui(HudConfig& cfg,
             ImGui::PopStyleVar();
         } else {
             size_t max_vals = 1;
-            for (size_t i = 0; i < groups.count; ++i) {
-                if (groups.items[i].value_count > max_vals) max_vals = groups.items[i].value_count;
+            for (const auto& g : groups.items) {
+                if (g.values.size() > max_vals) max_vals = g.values.size();
             }
 
             int total_cols = static_cast<int>(1 + max_vals);
@@ -664,13 +663,12 @@ void render_overlay_ui(HudConfig& cfg,
                     ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthFixed);
                 }
 
-                for (size_t i = 0; i < groups.count; ++i) {
-                    const MetricGroup& g = groups.items[i];
+                for (const auto& g : groups.items) {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     draw_crisp_text(g.label, g.label_color, cfg);
 
-                    for (size_t v = 0; v < g.value_count; ++v) {
+                    for (size_t v = 0; v < g.values.size(); ++v) {
                         ImGui::TableSetColumnIndex(static_cast<int>(v + 1));
                         draw_styled_metric_item(g.values[v], cfg, muted_col);
                     }
