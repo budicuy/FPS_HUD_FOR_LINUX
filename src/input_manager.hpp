@@ -52,7 +52,6 @@ private:
     bool prev_x11_f12_ = false;
     bool prev_x11_insert_ = false;
     bool prev_x11_f7_ = false;
-    bool prev_x11_f8_ = false;
 };
 
 InputManager& get_input_manager();
