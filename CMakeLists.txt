@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(FPSHUD VERSION 1.0.0 LANGUAGES C CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
@@ -254,3 +256,29 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/fpshud"
     @ONLY
 )
+
+# Automated Static Analysis with clang-tidy
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+if(CLANG_TIDY_EXE)
+    set(SRC_FILES_FOR_TIDY
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder_ipc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input_manager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui_menu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/overlay_ui.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vulkan_layer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/opengl_hook.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/test_cli.cpp
+    )
+    add_custom_target(clang-tidy
+        COMMAND ${CLANG_TIDY_EXE}
+            -p ${CMAKE_CURRENT_BINARY_DIR}
+            ${SRC_FILES_FOR_TIDY}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running clang-tidy static analysis on src/..."
+        VERBATIM
+    )
+    message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
+endif()

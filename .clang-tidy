@@ -1,0 +1,15 @@
+---
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  clang-analyzer-core.*,
+  clang-analyzer-cplusplus.*,
+  clang-analyzer-security.*,
+  clang-analyzer-valist.*,
+  cppcoreguidelines-use-default-member-init,
+  cppcoreguidelines-slicing
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*\.hpp'
+FormatStyle: none
+...
