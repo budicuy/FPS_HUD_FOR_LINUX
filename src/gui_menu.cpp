@@ -5,6 +5,7 @@
 
 #include "imgui.h"
 
+#include <sys/wait.h>
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
@@ -28,9 +29,16 @@ void set_status_message(const std::string& msg) {
 }
 
 void open_system_folder(const std::string& path) {
-    if (fork() == 0) {
-        execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child: fork again so the grandchild reparents to init/systemd (prevents zombie <defunct> processes)
+        if (fork() == 0) {
+            execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
+            _exit(0);
+        }
         _exit(0);
+    } else if (pid > 0) {
+        waitpid(pid, nullptr, 0);
     }
 }
 

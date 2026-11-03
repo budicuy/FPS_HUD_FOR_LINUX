@@ -74,6 +74,7 @@ RecorderController& RecorderController::instance() {
 }
 
 RecorderController::RecorderController() {
+    signal(SIGPIPE, SIG_IGN);
     socket_path_ = "/tmp/fpshud_rec_" + std::to_string(getpid()) + ".sock";
     shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
 }
@@ -419,9 +420,9 @@ void RecorderController::send_command(RecorderCommand cmd, const void* payload, 
     hdr.command = static_cast<uint32_t>(cmd);
     hdr.payload_size = static_cast<uint32_t>(payload_sz);
 
-    send(socket_fd_, &hdr, sizeof(hdr), 0);
+    send(socket_fd_, &hdr, sizeof(hdr), MSG_NOSIGNAL);
     if (payload && payload_sz > 0) {
-        send(socket_fd_, payload, payload_sz, 0);
+        send(socket_fd_, payload, payload_sz, MSG_NOSIGNAL);
     }
 }
 
@@ -501,12 +502,14 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
         return;
     }
 
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!is_recording_.load(std::memory_order_relaxed) || socket_fd_ < 0) {
+        return;
+    }
+
     if (!shm_base_ || shm_width_ != width || shm_height_ != height) {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
-        if (!shm_base_ || shm_width_ != width || shm_height_ != height) {
-            if (!setup_shm(width, height)) {
-                return;
-            }
+        if (!setup_shm(width, height)) {
+            return;
         }
     }
 
@@ -536,7 +539,7 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
         notify.flip_y = flip_y ? 1 : 0;
         notify.seq = s;
 
-        send(socket_fd_, &notify, sizeof(notify), MSG_DONTWAIT);
+        send(socket_fd_, &notify, sizeof(notify), MSG_DONTWAIT | MSG_NOSIGNAL);
     }
 }
 

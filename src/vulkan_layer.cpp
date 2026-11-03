@@ -1025,13 +1025,19 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
     };
-    uint32_t wait_count = (pPresentInfo->waitSemaphoreCount <= 8) ? pPresentInfo->waitSemaphoreCount : 8;
+    std::vector<VkPipelineStageFlags> dyn_wait_stages;
+    const VkPipelineStageFlags* wait_stages_ptr = stack_wait_stages;
+    uint32_t wait_count = pPresentInfo->waitSemaphoreCount;
+    if (wait_count > 8) {
+        dyn_wait_stages.assign(wait_count, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        wait_stages_ptr = dyn_wait_stages.data();
+    }
 
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit_info.waitSemaphoreCount = wait_count;
     submit_info.pWaitSemaphores = pPresentInfo->pWaitSemaphores;
-    submit_info.pWaitDstStageMask = stack_wait_stages;
+    submit_info.pWaitDstStageMask = wait_stages_ptr;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &frame.command_buffer;
     submit_info.signalSemaphoreCount = 1;

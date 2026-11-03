@@ -133,7 +133,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
         ImGui::Render();
     }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    if (fpshud::RecorderController::instance().is_recording() && width > 0 && height > 0) {
+    if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
         static auto s_last_gl_capture = std::chrono::steady_clock::time_point{};
         auto now = std::chrono::steady_clock::now();
         int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
@@ -141,12 +141,36 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
         if (now - s_last_gl_capture >= min_interval) {
             s_last_gl_capture = now;
             static std::vector<uint8_t> s_gl_pixels;
-            size_t needed = static_cast<size_t>(width) * height * 4;
+            auto gl_w = static_cast<GLsizei>(width);
+            auto gl_h = static_cast<GLsizei>(height);
+            size_t needed = static_cast<size_t>(gl_w) * gl_h * 4;
             if (s_gl_pixels.size() < needed) {
                 s_gl_pixels.resize(needed);
             }
-            glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, s_gl_pixels.data());
-            fpshud::RecorderController::instance().submit_frame(s_gl_pixels.data(), static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0 /* BGRA */, true /* flip_y */);
+
+            // Unbind any active Pixel Buffer Object (PBO) so glReadPixels writes to client RAM
+            GLint prev_pbo = 0;
+            constexpr GLenum kPixelPackBufferBinding = 0x88ED;
+            constexpr GLenum kPixelPackBuffer = 0x88EB;
+            glGetIntegerv(kPixelPackBufferBinding, &prev_pbo);
+
+            using PFN_glBindBuffer = void (*)(GLenum, GLuint);
+            static auto pfn_glBindBuffer = reinterpret_cast<PFN_glBindBuffer>(dlsym(RTLD_DEFAULT, "glBindBuffer"));
+            if (!pfn_glBindBuffer && real_glXGetProcAddress) {
+                pfn_glBindBuffer = reinterpret_cast<PFN_glBindBuffer>(real_glXGetProcAddress(reinterpret_cast<const GLubyte*>("glBindBuffer")));
+            }
+
+            if (prev_pbo != 0 && pfn_glBindBuffer) {
+                pfn_glBindBuffer(kPixelPackBuffer, 0);
+            }
+
+            glReadPixels(0, 0, gl_w, gl_h, GL_BGRA, GL_UNSIGNED_BYTE, s_gl_pixels.data());
+
+            if (prev_pbo != 0 && pfn_glBindBuffer) {
+                pfn_glBindBuffer(kPixelPackBuffer, static_cast<GLuint>(prev_pbo));
+            }
+
+            fpshud::RecorderController::instance().submit_frame(s_gl_pixels.data(), static_cast<uint32_t>(gl_w), static_cast<uint32_t>(gl_h), 0 /* BGRA */, true /* flip_y */);
         }
     }
 }

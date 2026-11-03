@@ -407,15 +407,31 @@ int main(int argc, char* argv[]) {
         av_dict_set(&opt_dict, "tag:v", "hvc1", 0);
     }
 
+    auto cleanup_early_failure = [&]() {
+        av_dict_free(&opt_dict);
+        if (pa_record) pa_simple_free(pa_record);
+        if (vctx) avcodec_free_context(&vctx);
+        if (actx) avcodec_free_context(&actx);
+        if (oc) {
+            if (oc->pb && !(oc->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc->pb);
+            avformat_free_context(oc);
+        }
+        if (client_fd >= 0) close(client_fd);
+        if (server_fd >= 0) close(server_fd);
+        if (!socket_path.empty()) unlink(socket_path.c_str());
+    };
+
     if (!(oc->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
             std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n", out_filename.c_str());
+            cleanup_early_failure();
             return 1;
         }
     }
 
     if (avformat_write_header(oc, &opt_dict) < 0) {
         std::fprintf(stderr, "[FPSHUD Recorder] Failed to write format header.\n");
+        cleanup_early_failure();
         return 1;
     }
     av_dict_free(&opt_dict);
@@ -623,6 +639,10 @@ int main(int argc, char* argv[]) {
         // Emit frames locked to exact wall-clock intervals
         if (has_received_game_frame) {
             auto cur_time = std::chrono::steady_clock::now();
+            // Cap lag catch-up if game was paused or loading (> 4 frame intervals) to avoid massive burst
+            if (cur_time - next_frame_time > frame_interval * 4) {
+                next_frame_time = cur_time;
+            }
             while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
                 vframe->pts = next_pts++;
                 video_frame_idx.store(next_pts, std::memory_order_relaxed);

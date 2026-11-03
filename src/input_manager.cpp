@@ -310,14 +310,16 @@ void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_
         prev_x11_f8_ = f8_down;
     }
 
-    if (cfg.gui_open && fnDefaultRoot && fnQueryPointer && evdev_devices_.empty()) {
+    if (cfg.gui_open && fnDefaultRoot && fnQueryPointer && evdev_devices_.empty() && display_width > 0.0f && display_height > 0.0f) {
         Window root = fnDefaultRoot(dpy);
         Window ret_root, ret_child;
         int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
         unsigned int mask = 0;
         if (fnQueryPointer(dpy, root, &ret_root, &ret_child, &root_x, &root_y, &win_x, &win_y, &mask)) {
-            cursor_x_ = std::clamp(static_cast<float>(root_x % static_cast<int>(display_width)), 0.0f, display_width);
-            cursor_y_ = std::clamp(static_cast<float>(root_y % static_cast<int>(display_height)), 0.0f, display_height);
+            int dw = static_cast<int>(display_width);
+            int dh = static_cast<int>(display_height);
+            cursor_x_ = std::clamp(static_cast<float>(dw > 0 ? (root_x % dw) : 0), 0.0f, display_width);
+            cursor_y_ = std::clamp(static_cast<float>(dh > 0 ? (root_y % dh) : 0), 0.0f, display_height);
             io.AddMousePosEvent(cursor_x_, cursor_y_);
             io.AddMouseButtonEvent(0, (mask & Button1Mask) != 0);
             io.AddMouseButtonEvent(1, (mask & Button3Mask) != 0);
