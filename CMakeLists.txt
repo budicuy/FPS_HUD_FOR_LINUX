@@ -8,23 +8,50 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 
-add_compile_options(
-    -O3
-    -DNDEBUG
-    -ffunction-sections
-    -fdata-sections
-    -fno-math-errno
-    -fno-trapping-math
-)
-
-add_link_options(
-    -Wl,--gc-sections
-    -Wl,-O2
-    -static-libstdc++
-    -static-libgcc
-)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO")
+    add_compile_options(
+        -O3
+        -DNDEBUG
+        -flto=thin
+        -fno-plt
+        -fno-semantic-interposition
+        -ffunction-sections
+        -fdata-sections
+        -fstack-protector-strong
+        -fno-math-errno
+        -fno-trapping-math
+        -Wall
+        -Wextra
+    )
+    add_link_options(
+        -fuse-ld=lld
+        -flto=thin
+        -Wl,--gc-sections
+        -Wl,-O2
+        -Wl,--as-needed
+        -static-libstdc++
+        -static-libgcc
+    )
+else()
+    message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    add_compile_options(
+        -O3
+        -DNDEBUG
+        -ffunction-sections
+        -fdata-sections
+        -fno-math-errno
+        -fno-trapping-math
+    )
+    add_link_options(
+        -Wl,--gc-sections
+        -Wl,-O2
+        -static-libstdc++
+        -static-libgcc
+    )
+endif()
 
 include(FetchContent)
 
