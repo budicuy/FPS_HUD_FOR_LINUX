@@ -138,6 +138,7 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
                    d.fps_01pct_low <= d.fps_1pct_low,
                "2. FPS, AVG, 1% Low, 0.1% Low & Stall Reset", detail_fps);
     check_cond(d.gpu_load_pct >= 0.0f && d.gpu_clock_mhz > 0 && d.gpu_vram_total_gb > 0.0f &&
+                   d.gpu_vram_used_gb > 0.0f &&
                    d.gpu_max_bandwidth_gbs > 0.0f && d.gpu_temp_c > 0 && d.gpu_power_w > 0.0f,
                "3. All 7 GPU Sensors (Load/Clk/VRAM/BW/Tmp/Fan/W)", detail_gpu);
     check_cond(d.cpu_load_pct > 0.0f && d.cpu_clock_mhz > 0 && d.cpu_temp_c > 0 &&
@@ -306,7 +307,7 @@ void run_all_devices_and_features_suite() {
     write_mock_file(intel_dev / "vendor", "0x8086");
     write_mock_file(intel_dev / "device", "0x56a0"); // Intel Arc A770 in pci.ids
     write_mock_file(intel_dev / "gpu_busy_percent", "88");
-    write_mock_file(intel_dev / "mem_info_vram_used", "6442450944");
+    write_mock_file(intel_card / "lmem_used_bytes", "6442450944");
     write_mock_file(intel_card / "lmem_total_bytes", "17179869184");
     write_mock_file(intel_card / "gt/gt0/rps_cur_freq_mhz", "2400");
     write_mock_file(intel_dev / "hwmon/hwmon2/temp1_input", "66000");
@@ -320,6 +321,10 @@ void run_all_devices_and_features_suite() {
         write_mock_file(base / "sys/class/powercap/intel-rapl:0/energy_uj", "12700000");
         RamExpect ram3{6.00f, -1.0f, -1.0f, 3200, "DDR4"}; // swap=OFF, psi=N/A
         verify_all_features_on_device(intel_tc, "PROFILE 3 [SIMULATED INTEL PC]: Core i7-13700K + Intel Arc A770", &ram3);
+
+        auto intel_snap = intel_tc.get_snapshot();
+        bool lmem_used_ok = (intel_snap.gpu_vram_used_gb > 5.9f && intel_snap.gpu_vram_used_gb < 6.1f);
+        check_cond(lmem_used_ok, "3.1 Intel Arc LMEM Used Parsing", "Parsed lmem_used_bytes into vram_used_gb (6.00 GB)");
     }
 
     // ------------------------------------------------------------------------
@@ -402,6 +407,44 @@ void run_all_devices_and_features_suite() {
         write_mock_file(base / "sys/class/powercap/amd-rapl:0/energy_uj", "5270000"); // ~9W CPU
         RamExpect ram5{5.00f, 0.50f, 0.00f, 6400, "LPDDR5"};
         verify_all_features_on_device(apu_tc, "PROFILE 5 [APU / STEAM DECK / iGPU]: Shared GTT Memory + Thermal Zone Fallback", &ram5);
+    }
+
+    // ------------------------------------------------------------------------
+    // PROFILE 6: NVIDIA Nouveau DRM Sysfs Fallback (vendor 0x10de without NVML)
+    // ------------------------------------------------------------------------
+    fs::remove_all(base, ec);
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: AMD Ryzen 5 5600X 6-Core Processor\n");
+    write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       16777216 kB\nMemAvailable:   12582912 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      2097152 kB\n");
+    write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4200000");
+    write_mock_file(base / "sys/class/hwmon/hwmon0/name", "k10temp");
+    write_mock_file(base / "sys/class/hwmon/hwmon0/temp1_input", "55000");
+
+    fs::path nv_card = base / "sys/class/drm/card0";
+    fs::path nv_dev = nv_card / "device";
+    write_mock_file(nv_dev / "vendor", "0x10de");
+    write_mock_file(nv_dev / "device", "0x2184"); // GTX 1660 SUPER
+    write_mock_file(nv_dev / "gpu_busy_percent", "75");
+    write_mock_file(nv_card / "lmem_total_bytes", "6442450944"); // 6.00 GB
+    write_mock_file(nv_card / "lmem_used_bytes", "2147483648");  // 2.00 GB
+    write_mock_file(nv_dev / "hwmon/hwmon1/temp1_input", "58000");
+    write_mock_file(nv_dev / "hwmon/hwmon1/pwm1", "128");
+    {
+        TelemetryCollector nv_tc(base.string(), true); // disable_nvml = true
+        nv_tc.poll_once_sync();
+        auto nv_snap = nv_tc.get_snapshot();
+        bool nouveau_vendor_ok = (std::strcmp(nv_snap.gpu_vendor, "NVIDIA") == 0);
+        bool nouveau_driver_ok = (std::strcmp(nv_snap.gpu_driver_version, "nouveau") == 0);
+        bool nouveau_vram_ok = (nv_snap.gpu_vram_used_gb > 1.9f && nv_snap.gpu_vram_used_gb < 2.1f &&
+                                nv_snap.gpu_vram_total_gb > 5.9f && nv_snap.gpu_vram_total_gb < 6.1f);
+        bool nouveau_load_ok = (nv_snap.gpu_load_pct > 70.0f);
+        check_cond(nv_snap.gpu_available && nouveau_vendor_ok && nouveau_driver_ok && nouveau_vram_ok && nouveau_load_ok,
+                   "PROFILE 6: NVIDIA Nouveau DRM Fallback",
+                   "Detected vendor=NVIDIA driver=nouveau via DRM sysfs without NVML");
     }
 
     fs::remove_all(base, ec);

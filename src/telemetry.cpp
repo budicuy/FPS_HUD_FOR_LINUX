@@ -547,14 +547,17 @@ void TelemetryCollector::init_gpu_sensors() {
         if (read_sysfs_buf((dev_dir / "vendor").c_str(), buf, sizeof(buf))) {
             vendor_id = buf;
         }
-        bool is_amd   = (vendor_id == "0x1002");
-        bool is_intel = (vendor_id == "0x8086");
-        if (!is_amd && !is_intel) continue;
+        bool is_amd    = (vendor_id == "0x1002");
+        bool is_intel  = (vendor_id == "0x8086");
+        bool is_nvidia = (vendor_id == "0x10de");
+        if (!is_amd && !is_intel && !is_nvidia) continue;
 
         uint64_t card_vram = 0;
         if (read_sysfs_buf((dev_dir / "mem_info_vram_total").c_str(), buf, sizeof(buf))) {
             card_vram = std::strtoull(buf, nullptr, 10);
         } else if (read_sysfs_buf((fs::path(drm_base + "/card" + std::to_string(card_idx)) / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
+            card_vram = std::strtoull(buf, nullptr, 10);
+        } else if (read_sysfs_buf((dev_dir / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
             card_vram = std::strtoull(buf, nullptr, 10);
         }
 
@@ -574,15 +577,22 @@ void TelemetryCollector::init_gpu_sensors() {
 
     fs::path card_root = drm_base + "/card" + std::to_string(best_card_idx);
     fs::path dev_dir = card_root / "device";
-    bool is_amd = (best_vendor_id == "0x1002");
+    bool is_amd    = (best_vendor_id == "0x1002");
+    bool is_intel  = (best_vendor_id == "0x8086");
+    bool is_nvidia = (best_vendor_id == "0x10de");
 
-    gpu_backend_ = is_amd ? GpuBackendType::AmdSysfs : GpuBackendType::IntelSysfs;
+    if (best_vendor_id == "0x1002") gpu_backend_ = GpuBackendType::AmdSysfs;
+    else if (best_vendor_id == "0x8086") gpu_backend_ = GpuBackendType::IntelSysfs;
+    else gpu_backend_ = GpuBackendType::AmdSysfs; // generic DRM sysfs for Nouveau
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         hw_data_.gpu_available = true;
-        std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "%s", is_amd ? "AMD" : "Intel");
-        std::snprintf(hw_data_.gpu_name, sizeof(hw_data_.gpu_name), "%s", is_amd ? "Radeon GPU" : "Intel Graphics");
-        std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s", is_amd ? "amdgpu" : "i915/xe");
+        std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "%s",
+                      is_amd ? "AMD" : (is_intel ? "Intel" : (is_nvidia ? "NVIDIA" : "Unknown")));
+        std::snprintf(hw_data_.gpu_name, sizeof(hw_data_.gpu_name), "%s",
+                      is_amd ? "Radeon GPU" : (is_intel ? "Intel Graphics" : (is_nvidia ? "NVIDIA GPU" : "Generic GPU")));
+        std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s",
+                      is_amd ? "amdgpu" : (is_intel ? "i915/xe" : (is_nvidia ? "nouveau" : "drm")));
 
         // 1. Check sysfs product_name first
         if (read_sysfs_buf((dev_dir / "product_name").c_str(), buf, sizeof(buf)) && buf[0] != '\0') {
@@ -603,11 +613,20 @@ void TelemetryCollector::init_gpu_sensors() {
     }
     if (fs::exists(dev_dir / "mem_info_vram_used", ec)) {
         drm_vram_used_path_ = (dev_dir / "mem_info_vram_used").string();
+    } else if (fs::exists(card_root / "lmem_used_bytes", ec)) {
+        drm_vram_used_path_ = (card_root / "lmem_used_bytes").string();
+    } else if (fs::exists(dev_dir / "lmem_used_bytes", ec)) {
+        drm_vram_used_path_ = (dev_dir / "lmem_used_bytes").string();
+    } else if (fs::exists(card_root / "lmem0/lmem_used_bytes", ec)) {
+        drm_vram_used_path_ = (card_root / "lmem0/lmem_used_bytes").string();
     }
+
     if (fs::exists(dev_dir / "mem_info_vram_total", ec)) {
         drm_vram_total_path_ = (dev_dir / "mem_info_vram_total").string();
     } else if (fs::exists(card_root / "lmem_total_bytes", ec)) {
         drm_vram_total_path_ = (card_root / "lmem_total_bytes").string();
+    } else if (fs::exists(dev_dir / "lmem_total_bytes", ec)) {
+        drm_vram_total_path_ = (dev_dir / "lmem_total_bytes").string();
     }
     if (fs::exists(dev_dir / "mem_info_gtt_used", ec)) {
         drm_gtt_used_path_ = (dev_dir / "mem_info_gtt_used").string();
@@ -672,7 +691,7 @@ void TelemetryCollector::init_gpu_sensors() {
     }
 
     // Fallback for Intel integrated GPUs: check RAPL uncore/iGPU energy counter (intel-rapl:0:1)
-    if (drm_power_uw_path_.empty() && drm_energy_uj_path_.empty() && !is_amd) {
+    if (drm_power_uw_path_.empty() && drm_energy_uj_path_.empty() && is_intel) {
         std::string uncore_rapl = root_prefix_ + "/sys/class/powercap/intel-rapl:0:1/energy_uj";
         if (fs::exists(uncore_rapl, ec)) {
             drm_energy_uj_path_ = std::move(uncore_rapl);
