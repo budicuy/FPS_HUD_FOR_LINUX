@@ -6,7 +6,7 @@
 
 namespace fpshud {
 
-#if defined(__cpp_pack_indexing)
+#if defined(__cpp_pack_indexing) && (__cplusplus > 202302L)
 
 namespace detail {
 
