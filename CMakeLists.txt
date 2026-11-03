@@ -7,7 +7,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -37,6 +37,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -fno-trapping-math
             -Wall
             -Wextra
+            -Wno-deprecated-declarations
         )
         add_link_options(
             -fuse-ld=lld
@@ -56,6 +57,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -fno-optimize-sibling-calls
             -Wall
             -Wextra
+            -Wno-deprecated-declarations
         )
     endif()
 
