@@ -197,7 +197,6 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     std::fprintf(fp, "key_toggle_hud=%d\n", cfg.key_toggle_hud);
     std::fprintf(fp, "key_benchmark=%d\n", cfg.key_benchmark);
     std::fprintf(fp, "key_record=%d\n", cfg.key_record);
-    std::fprintf(fp, "key_replay=%d\n", cfg.key_replay);
     std::fprintf(fp, "record_resolution=%d\n", cfg.record_resolution);
     std::fprintf(fp, "record_fps=%d\n", cfg.record_fps);
     std::fprintf(fp, "record_bitrate_kbps=%d\n", cfg.record_bitrate_kbps);
@@ -207,8 +206,6 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     std::fprintf(fp, "record_quality_mode=%d\n", cfg.record_quality_mode);
     std::fprintf(fp, "record_cq_level=%d\n", cfg.record_cq_level);
     std::fprintf(fp, "record_directory=%s\n", cfg.record_directory.c_str());
-    std::fprintf(fp, "record_replay_enabled=%d\n", cfg.record_replay_enabled ? 1 : 0);
-    std::fprintf(fp, "record_replay_duration_sec=%d\n", cfg.record_replay_duration_sec);
 
     std::fprintf(fp, "metrics=");
     for (size_t i = 0; i < cfg.metrics.size(); ++i) {
@@ -327,9 +324,6 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
         } else if (key == "key_record") {
             cfg.key_record = std::clamp(safe_strtoi(val, 0), 0, 2);
             parsed_any = true;
-        } else if (key == "key_replay") {
-            cfg.key_replay = std::clamp(safe_strtoi(val, 0), 0, 2);
-            parsed_any = true;
         } else if (key == "record_resolution") {
             cfg.record_resolution = std::clamp(safe_strtoi(val, 0), 0, 3);
             parsed_any = true;
@@ -356,12 +350,6 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
             parsed_any = true;
         } else if (key == "record_directory") {
             cfg.record_directory = val;
-            parsed_any = true;
-        } else if (key == "record_replay_enabled") {
-            cfg.record_replay_enabled = (safe_strtoi(val, 0) != 0);
-            parsed_any = true;
-        } else if (key == "record_replay_duration_sec") {
-            cfg.record_replay_duration_sec = std::clamp(safe_strtoi(val, 30), 10, 300);
             parsed_any = true;
         } else if (key == "metrics") {
             cfg.metrics.clear();
@@ -621,15 +609,6 @@ const char* record_keybind_name(int idx) {
         case 2: return "ScrollLock";
     }
     return "F7";
-}
-
-const char* replay_keybind_name(int idx) {
-    switch (idx) {
-        case 0: return "F8";
-        case 1: return "Alt+F10";
-        case 2: return "Pause";
-    }
-    return "F8";
 }
 
 std::string get_default_record_dir() {
