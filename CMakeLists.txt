@@ -121,33 +121,41 @@ target_link_libraries(fpshud_test PRIVATE
 )
 
 # Screen Recorder & Instant Replay Helper Daemon (On-Demand)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
-pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
-pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
-pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
-pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
-pkg_check_modules(PULSE_SIMPLE REQUIRED IMPORTED_TARGET libpulse-simple)
+find_package(PkgConfig QUIET)
+if (PKG_CONFIG_FOUND)
+    pkg_check_modules(AVFORMAT IMPORTED_TARGET libavformat)
+    pkg_check_modules(AVCODEC IMPORTED_TARGET libavcodec)
+    pkg_check_modules(AVUTIL IMPORTED_TARGET libavutil)
+    pkg_check_modules(SWSCALE IMPORTED_TARGET libswscale)
+    pkg_check_modules(SWRESAMPLE IMPORTED_TARGET libswresample)
+    pkg_check_modules(PULSE_SIMPLE IMPORTED_TARGET libpulse-simple)
+endif()
 
-add_executable(fpshud_recorder
-    src/recorder_main.cpp
-    src/config.cpp
-)
+if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
+    TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE_SIMPLE)
+    add_executable(fpshud_recorder
+        src/recorder_main.cpp
+        src/config.cpp
+    )
 
-target_include_directories(fpshud_recorder PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
+    target_include_directories(fpshud_recorder PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
 
-target_link_libraries(fpshud_recorder PRIVATE
-    PkgConfig::AVFORMAT
-    PkgConfig::AVCODEC
-    PkgConfig::AVUTIL
-    PkgConfig::SWSCALE
-    PkgConfig::SWRESAMPLE
-    PkgConfig::PULSE_SIMPLE
-    Threads::Threads
-    ${CMAKE_DL_LIBS}
-)
+    target_link_libraries(fpshud_recorder PRIVATE
+        PkgConfig::AVFORMAT
+        PkgConfig::AVCODEC
+        PkgConfig::AVUTIL
+        PkgConfig::SWSCALE
+        PkgConfig::SWRESAMPLE
+        PkgConfig::PULSE_SIMPLE
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+    message(STATUS "Screen Recorder: ENABLED (fpshud_recorder will be built)")
+else()
+    message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse-simple not found)")
+endif()
 
 # Generate Vulkan Implicit Layer JSON manifest with absolute path to libfpshud.so
 set(FPSHUD_LIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/libfpshud.so")
