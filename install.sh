@@ -447,6 +447,20 @@ chmod +x "$BIN_DIR/fpshud"
 HAVE_SUDO=0
 SUDO_CMD="sudo"
 
+echo ""
+echo "=================================================================="
+echo "  Hardware Telemetry & Sensor Permissions Setup"
+echo "=================================================================="
+echo "FPSHUD works out-of-the-box for FPS, Frametimes, and GPU sensors."
+echo "However, Linux kernel security policies restrict:"
+echo "  • CPU Package Power (Watts via RAPL energy counters)"
+echo "  • RAM Speed (MT/s) & Memory Generation (DDR4 / DDR5 via SMBIOS)"
+echo "  • In-game GUI menu & hotkeys on Wayland compositors"
+echo ""
+echo "Sudo access is STRONGLY RECOMMENDED to enable these sensors"
+echo "via lightweight, standard system udev rules."
+echo "=================================================================="
+
 if [ "$EUID" -eq 0 ]; then
     HAVE_SUDO=1
     SUDO_CMD=""
@@ -456,11 +470,7 @@ elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]
         SUDO_CMD="sudo"
     elif [ -e /dev/tty ]; then
         echo ""
-        echo "[*] Requesting sudo permission to configure hardware sensors permanently:"
-        echo "    • RAM Speed (MT/s) & Memory Generation (DDR4 / DDR5 / LPDDR5)"
-        echo "    • CPU Package Power (Watts via intel-rapl / amd-rapl)"
-        echo "    • In-game GUI hotkeys (Insert/F12) & mouse capture on Wayland"
-        echo ""
+        echo "[*] Requesting sudo permission to configure hardware sensors permanently..."
         if sudo </dev/tty -v; then
             HAVE_SUDO=1
             SUDO_CMD="sudo"
@@ -468,6 +478,17 @@ elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]
             echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
         fi
     fi
+fi
+
+if [ "$HAVE_SUDO" -eq 0 ]; then
+    echo ""
+    echo "[!] Sudo permission skipped."
+    echo "    Core overlay, FPS, and GPU sensors will function normally."
+    echo "    To enable CPU Wattage, RAM Speed, and Wayland hotkeys later,"
+    echo "    simply run at any time:"
+    echo ""
+    echo "        fpshud --setup"
+    echo ""
 fi
 
 RAM_INFO_FILE="$HOME/.local/share/fpshud/ram_info"
@@ -560,19 +581,27 @@ if [ "$HAVE_SUDO" -eq 1 ]; then
     echo "[*] Configuring system udev rules for full sensor access..."
     # 1. RAPL CPU Wattage Rule
     $SUDO_CMD mkdir -p /etc/udev/rules.d 2>/dev/null || true
-    echo 'SUBSYSTEM=="powercap", KERNEL=="*rapl:*", RUN+="/bin/chmod a+r /sys/class/powercap/%k/energy_uj"' | \
-        $SUDO_CMD tee /etc/udev/rules.d/99-fpshud-rapl.rules >/dev/null 2>&1 || true
-    $SUDO_CMD chmod a+r /sys/class/powercap/*rapl*/energy_uj 2>/dev/null || true
+    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "UDEV_EOF"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", ATTR{energy_uj}!="", MODE="0444"
+UDEV_EOF'
+    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
+    $SUDO_CMD chmod a+r /sys/class/powercap/*rapl*/energy_uj /sys/class/powercap/*rapl*/*/energy_uj 2>/dev/null || true
 
     # 2. Wayland Hotkeys & Mouse Input Rule
-    echo 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0664", GROUP="input"' | \
-        $SUDO_CMD tee /etc/udev/rules.d/99-fpshud-input.rules >/dev/null 2>&1 || true
-    $SUDO_CMD usermod -aG input "$USER" 2>/dev/null || true
-    $SUDO_CMD chmod a+r /dev/input/event* 2>/dev/null || true
+    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "UDEV_EOF"
+KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input"
+UDEV_EOF'
+    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
+    TARGET_USER="${SUDO_USER:-$USER}"
+    if [ -n "$TARGET_USER" ] && id -u "$TARGET_USER" >/dev/null 2>&1; then
+        $SUDO_CMD usermod -a -G input "$TARGET_USER" 2>/dev/null || true
+    fi
 
     # Reload udev rules
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
-    $SUDO_CMD udevadm trigger 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
     echo "[✓] Full hardware permissions configured successfully!"
 fi
 
@@ -593,4 +622,9 @@ echo "  - Terminal (Vulkan)     : FPS_HUD=1 ./your_game"
 echo "  - Terminal (OpenGL)     : ~/.local/bin/fpshud ./your_game"
 echo "  - Open In-Game GUI      : Press [Insert], [F12], or [F10] in-game"
 echo "  - Screen Recording      : Press [F7] (Start/Stop Recording)"
+echo ""
+echo "  Hardware Sensors & Permissions:"
+echo "  - Check permission state: ~/.local/bin/fpshud --status"
+echo "  - Tip: If CPU Wattage or RAM Speed shows 0, run:"
+echo "        ~/.local/bin/fpshud --setup"
 echo "=================================================================="
