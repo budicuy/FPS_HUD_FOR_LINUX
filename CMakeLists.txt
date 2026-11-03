@@ -9,31 +9,71 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+option(ENABLE_ASAN "Enable AddressSanitizer and LeakSanitizer" OFF)
+option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+
+if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
+    set(USE_SANITIZERS ON)
+else()
+    set(USE_SANITIZERS OFF)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO")
-    add_compile_options(
-        -O3
-        -DNDEBUG
-        -flto=thin
-        -fno-plt
-        -fno-semantic-interposition
-        -ffunction-sections
-        -fdata-sections
-        -fstack-protector-strong
-        -fno-math-errno
-        -fno-trapping-math
-        -Wall
-        -Wextra
-    )
-    add_link_options(
-        -fuse-ld=lld
-        -flto=thin
-        -Wl,--gc-sections
-        -Wl,-O2
-        -Wl,--as-needed
-        -static-libstdc++
-        -static-libgcc
-    )
+    if(NOT USE_SANITIZERS)
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO (Extreme Release)")
+        add_compile_options(
+            -O3
+            -DNDEBUG
+            -flto=thin
+            -fno-plt
+            -fno-semantic-interposition
+            -ffunction-sections
+            -fdata-sections
+            -fstack-protector-strong
+            -fno-math-errno
+            -fno-trapping-math
+            -Wall
+            -Wextra
+        )
+        add_link_options(
+            -fuse-ld=lld
+            -flto=thin
+            -Wl,--gc-sections
+            -Wl,-O2
+            -Wl,--as-needed
+            -static-libstdc++
+            -static-libgcc
+        )
+    else()
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
+        add_compile_options(
+            -O1
+            -g
+            -fno-omit-frame-pointer
+            -fno-optimize-sibling-calls
+            -Wall
+            -Wextra
+        )
+    endif()
+
+    if(ENABLE_ASAN)
+        message(STATUS "  -> AddressSanitizer + LeakSanitizer: ENABLED")
+        add_compile_options(-fsanitize=address,leak)
+        add_link_options(-fsanitize=address,leak)
+    endif()
+
+    if(ENABLE_UBSAN)
+        message(STATUS "  -> UndefinedBehaviorSanitizer: ENABLED")
+        add_compile_options(-fsanitize=undefined -fno-sanitize-recover=all)
+        add_link_options(-fsanitize=undefined)
+    endif()
+
+    if(ENABLE_TSAN)
+        message(STATUS "  -> ThreadSanitizer: ENABLED")
+        add_compile_options(-fsanitize=thread)
+        add_link_options(-fsanitize=thread)
+    endif()
 else()
     message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
