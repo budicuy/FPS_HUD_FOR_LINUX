@@ -120,6 +120,7 @@ struct SwapchainData {
     std::vector<FrameResources> frames;
     ImGuiContext* imgui_context = nullptr;
     bool imgui_initialized = false;
+    bool supports_transfer_src = false;
 };
 
 std::mutex g_map_mutex;
@@ -394,6 +395,9 @@ bool init_swapchain_overlay(SwapchainData* sd) {
 }
 
 static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResources& frame) {
+    if (sd->extent.width == 0 || sd->extent.height == 0) {
+        return false;
+    }
     VkDeviceSize required_size = static_cast<VkDeviceSize>(sd->extent.width) * sd->extent.height * 4;
     if (frame.staging_buffer != VK_NULL_HANDLE && frame.buffer_size >= required_size) {
         return true;
@@ -784,11 +788,13 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
 
     VkSwapchainCreateInfoKHR modified_info = *pCreateInfo;
     modified_info.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    bool supports_transfer = true;
 
     VkResult res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
     if (res != VK_SUCCESS) {
         modified_info.imageUsage = pCreateInfo->imageUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
+        supports_transfer = false;
         if (res != VK_SUCCESS) {
             res = dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
             if (res != VK_SUCCESS) return res;
@@ -804,6 +810,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
     sd->device_data = dd;
     sd->extent = pCreateInfo->imageExtent;
     sd->format = pCreateInfo->imageFormat;
+    sd->supports_transfer_src = supports_transfer;
 
     if (init_swapchain_overlay(sd)) {
         std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -890,8 +897,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
             dd->InvalidateMappedMemoryRanges(dd->device, 1, &range);
         }
         uint32_t fmt = 0; // 0 = BGRA
-        if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB) {
+        if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB ||
+            sd->format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
             fmt = 1; // 1 = RGBA
+        } else if (sd->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+            fmt = 0; // 0 = BGRA
         }
         fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width, sd->extent.height, fmt, false);
     }
@@ -932,7 +942,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
 
     // Record GPU copy of swapchain image to staging buffer if recording is active (with 60fps pacing)
     bool should_capture_frame = false;
-    if (fpshud::RecorderController::instance().is_recording()) {
+    if (fpshud::RecorderController::instance().is_recording() && sd->supports_transfer_src) {
         static auto s_last_vk_capture = std::chrono::steady_clock::time_point{};
         auto now = std::chrono::steady_clock::now();
         int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
