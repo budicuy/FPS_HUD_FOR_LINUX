@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 > 3. **Shortcut Keyboard & Mouse Wayland (`Insert` / `F12`)**: Pada sistem desktop Wayland (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), isolasi keamanan mencegah aplikasi membaca tombol keyboard dan klik mouse lintas jendela. Sudo akan memasang `/etc/udev/rules.d/99-fpshud-input.rules` dan menambahkan pengguna Anda ke grup standar `input`.
 
 > [!NOTE]
-> **Lupa atau melewatkan sudo saat instalasi? Tidak perlu install ulang!**  
+> **Lupa atau melewatkan sudo saat instalasi? Tidak perlu install ulang!**
 > Anda dapat mengonfigurasi seluruh izin sensor hardware kapan saja cukup dengan 1 perintah:
 > ```bash
 > fpshud --setup
@@ -120,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 > ```
 
 > [!TIP]
-> **Jaminan Keamanan & Privasi:**  
+> **Jaminan Keamanan & Privasi:**
 > Game dan aplikasi **TIDAK PERNAH** dijalankan sebagai root atau dengan sudo. Seluruh game dijalankan murni dengan hak akses pengguna biasa Anda. Hak sudo hanya digunakan satu kali saat konfigurasi untuk mendaftarkan aturan udev dan membaca tabel SMBIOS.
 
 ### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)

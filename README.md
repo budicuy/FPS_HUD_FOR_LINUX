@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 > 3. **Wayland Hotkeys & Mouse Capture (`Insert` / `F12`)**: On Wayland compositors (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), security isolation prevents applications from capturing global hotkeys and mouse clicks across windows. Sudo installs `/etc/udev/rules.d/99-fpshud-input.rules` and adds your user to the standard `input` group.
 
 > [!NOTE]
-> **Forgot or skipped sudo during installation? No need to reinstall!**  
+> **Forgot or skipped sudo during installation? No need to reinstall!**
 > You can configure all sensor permissions at any time with a single command:
 > ```bash
 > fpshud --setup
@@ -122,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 > ```
 
 > [!TIP]
-> **Security & Privacy Guarantee:**  
+> **Security & Privacy Guarantee:**
 > Games and applications are **NEVER** run as root or with sudo. All games run strictly with your standard user permissions. Sudo is only used during setup to register system udev rules and read SMBIOS tables.
 
 ### 1-Command Uninstallation (Clean Removal)
