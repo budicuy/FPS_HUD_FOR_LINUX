@@ -345,17 +345,6 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n", out_filename.c_str());
             return 1;
         }
-
-        // Expand AVIO buffer to 1MB for coalescing SSD writes and reducing syscalls
-        constexpr int kAvioBufferSize = 1024 * 1024;
-        auto* avio_buf = static_cast<unsigned char*>(av_malloc(kAvioBufferSize));
-        if (avio_buf && oc->pb) {
-            av_free(oc->pb->buffer);
-            oc->pb->buffer = avio_buf;
-            oc->pb->buffer_size = kAvioBufferSize;
-            oc->pb->buf_ptr = avio_buf;
-            oc->pb->buf_end = avio_buf;
-        }
     }
 
     if (avformat_write_header(oc, &opt_dict) < 0) {

@@ -192,6 +192,12 @@ void RecorderController::stop_recording() {
     }
 
     if (socket_fd_ >= 0) {
+        // Enforce 1.5s socket timeout so the game render thread NEVER freezes
+        struct timeval tv{};
+        tv.tv_sec = 1;
+        tv.tv_usec = 500000;
+        setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         send_command(RecorderCommand::StopRecord, nullptr, 0);
 
         // Read response with final saved file name
