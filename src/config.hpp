@@ -5,7 +5,6 @@
 #include <inplace_vector>
 #include <mutex>
 #include <string>
-#include <vector>
 
 namespace fpshud {
 

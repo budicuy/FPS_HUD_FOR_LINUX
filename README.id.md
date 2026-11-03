@@ -4,7 +4,7 @@
 
 [![CI Build & Release](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml/badge.svg)](https://github.com/budicuy/FPS_HUD_FOR_LINUX/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Language: C++20](https://img.shields.io/badge/C%2B%2B-20-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
+[![Language: C++26](https://img.shields.io/badge/C%2B%2B-26-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
 [![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry.cpp)
 
@@ -35,7 +35,7 @@ Saat bermain game di Linux (baik lewat Steam Proton, Lutris, Heroic, maupun game
 Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, mengganti ukuran huruf, atau memilih sensor mana saja yang tampil, kamu harus keluar dulu dari game lalu mengedit file konfigurasi teks secara manual. **FPSHUD hadir untuk membuat semuanya jauh lebih praktis:** cukup aktifkan dengan `FPS_HUD=1`, lalu tekan tombol **`Insert`** atau **`F12`** langsung di tengah permainan untuk membuka menu pengaturan interaktif di layar game kamu!
 
 ### Dibangun menggunakan apa?
-FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, memanfaatkan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
+FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline storage* (`std::inplace_vector`), Pack Indexing, dan analitik frametime SIMD yang sangat kencang, hemat memori, dan bebas alokasi dinamis saat bermain game. Menggunakan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
 
 ### Fitur apa saja yang ada di dalamnya?
 - **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 23 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
@@ -87,7 +87,7 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
   - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
   - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
-- **Optimasi Ekstrem Clang 23 & Perlindungan Memori C++20**:
+- **Optimasi Ekstrem Clang 23 & Arsitektur Zero-Heap C++26**:
   - Dikompilasi menggunakan Clang 23.1.4, linker LLD, ThinLTO (`-flto=thin`), dan `-O3` menghasilkan biner shared library ramping **1.3 MB** yang zero-overhead dan bebas memory leak/UB (diverifikasi dengan ASan & UBSan).
 
 ---
@@ -252,7 +252,7 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 
 | Bagian | Teknologi | Keunggulan Utama |
 | :--- | :--- | :--- |
-| **Bahasa & Build** | **C++20**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Optimasi extreme dengan ThinLTO, `-fno-plt`, stack canaries, deteksi bug ASan/UBSan & static libstdc++. |
+| **Bahasa & Build** | **C++26**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Arsitektur ISO C++26 zero-heap inline storage (`std::inplace_vector`), Pack Indexing, analitik frametime SIMD, ThinLTO, `-fno-plt`, stack canaries, deteksi bug ASan/UBSan & static libstdc++. |
 | **Intersepsi Grafis** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Menangkap fungsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
 | **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 3-Column Split View tanpa tab. |
 | **Penangkap Input** | **Linux `evdev` + Fallback `X11`** | Pembacaan `/dev/input/event*` non-blocking dengan pengunci kursor `EVIOCGRAB`. |
@@ -296,7 +296,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 37 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
+# 2. Jalankan 42 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
 
 # 3. (Opsional) Jalankan pendeteksi bug AddressSanitizer + LeakSanitizer + UBSan:
@@ -311,7 +311,7 @@ ninja -C build clang-tidy
 FPS_HUD_FOR_LINUX/
 ├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat & rilis GitHub
 ├── .clang-tidy                          # Aturan analisis statis memori & keamanan kode C++
-├── CMakeLists.txt                       # Konfigurasi build C++20 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
+├── CMakeLists.txt                       # Konfigurasi build C++26 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
 ├── dist/fpshud-linux-x86_64.tar.gz      # Paket biner portabel siap pakai untuk instalasi 1-perintah curl
 ├── install.sh / uninstall.sh            # Skrip instalasi & uninstalasi instan curl
 ├── README.md / README.id.md             # Dokumentasi lengkap Bahasa Inggris & Bahasa Indonesia
@@ -351,7 +351,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 37 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 42 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.
