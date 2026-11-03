@@ -495,7 +495,7 @@ if [ "$HAVE_SUDO" -eq 0 ]; then
     echo ""
 fi
 
-RAM_INFO_FILE="$HOME/.local/share/fpshud/ram_info"
+RAM_INFO_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/fpshud/ram_info"
 RAM_PY='
 import glob, struct, os, re, subprocess
 

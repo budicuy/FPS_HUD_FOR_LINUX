@@ -582,6 +582,12 @@ int main(int argc, char* argv[]) {
                     size_t rem = sizeof(notify) - sizeof(fpshud::IpcPacketHeader);
                     ssize_t nr = recv(client_fd, reinterpret_cast<char*>(&notify) + sizeof(fpshud::IpcPacketHeader), rem, MSG_WAITALL);
                     if (nr == static_cast<ssize_t>(rem)) {
+                        if (shm_base && shm_hdr && (shm_hdr->width != notify.width || shm_hdr->height != notify.height)) {
+                            munmap(shm_base, shm_size);
+                            shm_base = nullptr;
+                            shm_hdr = nullptr;
+                            shm_size = 0;
+                        }
                         try_map_shm(shm_path);
 
                         if (shm_base && shm_hdr && notify.slot < 3) {

@@ -398,6 +398,13 @@ static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, Frame
     if (sd->extent.width == 0 || sd->extent.height == 0) {
         return false;
     }
+    // Only capture 32-bit swapchain formats (RGBA8, BGRA8, A2B10G10, A2R10G10).
+    // 64-bit float formats (e.g. VK_FORMAT_R16G16B16A16_SFLOAT) are unsupported for 32-bit SHM buffer.
+    if (sd->format != VK_FORMAT_B8G8R8A8_UNORM && sd->format != VK_FORMAT_B8G8R8A8_SRGB &&
+        sd->format != VK_FORMAT_R8G8B8A8_UNORM && sd->format != VK_FORMAT_R8G8B8A8_SRGB &&
+        sd->format != VK_FORMAT_A2B10G10R10_UNORM_PACK32 && sd->format != VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        return false;
+    }
     VkDeviceSize required_size = static_cast<VkDeviceSize>(sd->extent.width) * sd->extent.height * 4;
     if (frame.staging_buffer != VK_NULL_HANDLE && frame.buffer_size >= required_size) {
         return true;

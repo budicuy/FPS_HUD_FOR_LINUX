@@ -33,6 +33,7 @@ void open_system_folder(const std::string& path) {
     if (pid == 0) {
         // Child: fork again so the grandchild reparents to init/systemd (prevents zombie <defunct> processes)
         if (fork() == 0) {
+            unsetenv("LD_PRELOAD");
             execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
             _exit(0);
         }
