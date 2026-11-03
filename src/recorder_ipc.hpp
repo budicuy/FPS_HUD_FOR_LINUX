@@ -17,10 +17,9 @@ constexpr uint32_t kRecorderIpcMagic = 0x46505352; // "FPSR"
 enum class RecorderCommand : uint32_t {
     StartRecord = 1,
     StopRecord = 2,
-    SaveReplay = 3,
-    QueryStatus = 4,
-    SendFrame = 5,
-    Ping = 6
+    QueryStatus = 3,
+    SendFrame = 4,
+    Ping = 5
 };
 
 enum class RecorderStatus : uint32_t {
@@ -45,8 +44,6 @@ struct IpcStartPayload {
     uint32_t bitrate_kbps = 18000;
     uint32_t audio_source = 0;
     uint32_t container = 0;
-    uint32_t replay_enabled = 0;
-    uint32_t replay_sec = 60;
     uint32_t codec = 1;        // 0 = H.264, 1 = HEVC (H.265)
     uint32_t quality_mode = 0; // 0 = CQP Adaptif, 1 = Fixed VBR
     uint32_t cq_level = 22;    // CQP 16-30
@@ -98,12 +95,8 @@ public:
     void start_recording(const HudConfig& cfg, float display_w, float display_h);
     void stop_recording();
 
-    // Save instant replay (F8 or GUI button)
-    void save_instant_replay(const HudConfig& cfg);
-
     // Live status queries for HUD overlay & GUI menu
     bool is_recording() const noexcept;
-    bool is_replay_active() const noexcept;
     float get_recording_duration() const;
     uint32_t get_recorded_frames() const;
     std::string get_last_saved_path() const;
@@ -133,7 +126,6 @@ private:
 
     mutable std::recursive_mutex mutex_;
     std::atomic<bool> is_recording_{false};
-    std::atomic<bool> is_replay_active_{false};
     std::atomic<float> elapsed_sec_{0.0f};
     std::atomic<uint32_t> recorded_frames_{0};
     std::string last_saved_file_;

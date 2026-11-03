@@ -534,7 +534,7 @@ int main(int argc, char* argv[]) {
         pa_simple_free(pa_record);
     });
 
-    // 6. Main Socket Event Loop: Handle Frame Signals & Stop / Replay Commands
+    // 6. Main Socket Event Loop: Handle Frame Signals & Stop Commands
     AVPacket* v_pkt = av_packet_alloc();
     auto session_start = std::chrono::steady_clock::now();
     bool has_received_game_frame = false;

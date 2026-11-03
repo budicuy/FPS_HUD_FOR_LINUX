@@ -88,10 +88,6 @@ bool RecorderController::is_recording() const noexcept {
     return is_recording_.load(std::memory_order_relaxed);
 }
 
-bool RecorderController::is_replay_active() const noexcept {
-    return is_replay_active_.load(std::memory_order_relaxed);
-}
-
 float RecorderController::get_recording_duration() const {
     if (!is_recording_.load(std::memory_order_relaxed)) {
         return elapsed_sec_.load(std::memory_order_relaxed);
@@ -166,8 +162,6 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
     payload.bitrate_kbps = cfg.record_bitrate_kbps;
     payload.audio_source = cfg.record_audio_source;
     payload.container = cfg.record_container;
-    payload.replay_enabled = cfg.record_replay_enabled ? 1 : 0;
-    payload.replay_sec = cfg.record_replay_duration_sec;
     payload.codec = static_cast<uint32_t>(cfg.record_codec);
     payload.quality_mode = static_cast<uint32_t>(cfg.record_quality_mode);
     payload.cq_level = static_cast<uint32_t>(cfg.record_cq_level);
@@ -239,27 +233,6 @@ void RecorderController::stop_recording() {
     } else {
         toast_msg_ = "[✓] Perekaman dihentikan.";
     }
-    toast_time_ = std::chrono::steady_clock::now();
-}
-
-void RecorderController::save_instant_replay(const HudConfig& cfg) {
-    (void)cfg;
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (socket_fd_ >= 0) {
-        send_command(RecorderCommand::SaveReplay, nullptr, 0);
-
-        IpcStatusResponse resp{};
-        ssize_t n = recv(socket_fd_, &resp, sizeof(resp), 0);
-        if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic) {
-            if (resp.last_saved_file[0] != '\0') {
-                last_saved_file_ = resp.last_saved_file;
-                toast_msg_ = "[✓] Replay tersimpan: " + last_saved_file_;
-                toast_time_ = std::chrono::steady_clock::now();
-                return;
-            }
-        }
-    }
-    toast_msg_ = "[i] Instant Replay: Aktifkan replay di menu terlebih dahulu.";
     toast_time_ = std::chrono::steady_clock::now();
 }
 
