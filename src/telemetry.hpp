@@ -34,6 +34,15 @@ struct BenchmarkSummary {
     std::chrono::steady_clock::time_point finished_time{};
 };
 
+struct SimdStatsResult {
+    double total_ms = 0.0;
+    float min_val = 0.0f;
+    float max_val = 0.0f;
+};
+
+// Accelerated frametime analytics (sum, min, max) using C++26 SIMD reduction
+SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data);
+
 // Trivially copyable snapshot struct (zero heap allocations per frame!)
 struct TelemetryData {
     float fps = 0.0f;

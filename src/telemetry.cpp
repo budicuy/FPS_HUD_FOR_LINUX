@@ -12,6 +12,12 @@
 #include <filesystem>
 #include <fstream>
 
+#if __has_include(<experimental/simd>)
+#include <experimental/simd>
+namespace stdx = std::experimental;
+#define FPSHUD_HAS_SIMD 1
+#endif
+
 namespace fs = std::filesystem;
 
 namespace fpshud {
@@ -885,6 +891,55 @@ void TelemetryCollector::start_benchmark() {
     bench_active_.store(true, std::memory_order_relaxed);
 }
 
+SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data) {
+    SimdStatsResult res{};
+    if (data.empty()) return res;
+
+    size_t n = data.size();
+    size_t i = 0;
+
+#if defined(FPSHUD_HAS_SIMD)
+    using V = stdx::native_simd<float>;
+    constexpr size_t VSize = V::size();
+
+    V sum_v = 0.0f;
+    V min_v = data[0];
+    V max_v = data[0];
+
+    for (; i + VSize <= n; i += VSize) {
+        V chunk(&data[i], stdx::element_aligned);
+        sum_v += chunk;
+        min_v = stdx::min(min_v, chunk);
+        max_v = stdx::max(max_v, chunk);
+    }
+
+    float min_scalar = min_v[0];
+    float max_scalar = max_v[0];
+    double total = 0.0;
+    for (size_t lane = 0; lane < VSize; ++lane) {
+        total += sum_v[lane];
+        if (min_v[lane] < min_scalar) min_scalar = min_v[lane];
+        if (max_v[lane] > max_scalar) max_scalar = max_v[lane];
+    }
+    res.total_ms = total;
+    res.min_val = min_scalar;
+    res.max_val = max_scalar;
+#else
+    res.min_val = data[0];
+    res.max_val = data[0];
+#endif
+
+    // Tangani sisa elemen ekor (tail elements) secara aman
+    for (; i < n; ++i) {
+        float v = data[i];
+        res.total_ms += static_cast<double>(v);
+        if (v < res.min_val) res.min_val = v;
+        if (v > res.max_val) res.max_val = v;
+    }
+
+    return res;
+}
+
 void TelemetryCollector::stop_benchmark() {
     if (!bench_active_.exchange(false, std::memory_order_relaxed)) {
         return;
@@ -907,15 +962,10 @@ void TelemetryCollector::stop_benchmark() {
     sum.max_cpu_power_w = bench_max_cpu_power_w_;
 
     size_t n = bench_frametimes_ms_.size();
-    double total_ms = 0.0;
-    float min_ft_ms = bench_frametimes_ms_[0];
-    float max_ft_ms = bench_frametimes_ms_[0];
-
-    for (float ft : bench_frametimes_ms_) {
-        total_ms += static_cast<double>(ft);
-        if (ft < min_ft_ms) min_ft_ms = ft;
-        if (ft > max_ft_ms) max_ft_ms = ft;
-    }
+    SimdStatsResult stats = compute_frametime_stats_simd(bench_frametimes_ms_);
+    double total_ms = stats.total_ms;
+    float min_ft_ms = stats.min_val;
+    float max_ft_ms = stats.max_val;
 
     float mean_ft_ms = static_cast<float>(total_ms / static_cast<double>(n));
     sum.avg_fps = (mean_ft_ms > 0.001f) ? (1000.0f / mean_ft_ms) : 0.0f;
