@@ -178,6 +178,11 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
                  std::strcmp(d.ram_type, ram_expect->type) == 0;
     }
     check_cond(ram_ok, "6. RAM Sensors (Game/Swap/PSI/Speed + %)", detail_ram);
+
+    if (!ram_expect && (d.cpu_power_w <= 0.001f || d.ram_speed_mts == 0)) {
+        std::printf("  ℹ️  [INFO] Sebagian sensor dibatasi izin kernel Linux (RAPL CPU Watt / SMBIOS RAM).\n");
+        std::printf("           Jalankan 'fpshud --setup' kapan saja untuk mengaktifkan izin sensor penuh.\n");
+    }
 }
 
 void run_all_devices_and_features_suite() {
