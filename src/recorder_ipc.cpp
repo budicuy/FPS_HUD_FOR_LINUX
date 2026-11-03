@@ -485,10 +485,12 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!shm_base_ || shm_width_ != width || shm_height_ != height) {
-        if (!setup_shm(width, height)) {
-            return;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (!shm_base_ || shm_width_ != width || shm_height_ != height) {
+            if (!setup_shm(width, height)) {
+                return;
+            }
         }
     }
 

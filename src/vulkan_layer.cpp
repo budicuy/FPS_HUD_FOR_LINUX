@@ -430,15 +430,45 @@ static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, Frame
     if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
         VkPhysicalDeviceMemoryProperties mem_props{};
         dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
+
+        // Priority 1: Host Visible + Host Coherent + Host Cached (Fastest CPU readback, ~0.4ms)
         for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
             if ((mem_req.memoryTypeBits & (1 << i)) &&
-                (mem_props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+                (mem_props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) ==
+                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
                 mem_type = i;
                 found = true;
                 break;
             }
         }
+
+        // Priority 2: Host Visible + Host Cached (Requires explicit cache invalidation)
+        if (!found) {
+            for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+                if ((mem_req.memoryTypeBits & (1 << i)) &&
+                    (mem_props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) ==
+                    (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
+                    mem_type = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // Priority 3: Host Visible + Host Coherent (Fallback: uncached write-combined)
+        if (!found) {
+            for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+                if ((mem_req.memoryTypeBits & (1 << i)) &&
+                    (mem_props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+                    (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+                    mem_type = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // Priority 4: Host Visible (General fallback)
         if (!found) {
             for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
                 if ((mem_req.memoryTypeBits & (1 << i)) &&
