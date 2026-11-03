@@ -190,7 +190,7 @@ target_link_libraries(fpshud_test PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
-# Screen Recorder & Instant Replay Helper Daemon (On-Demand)
+# Screen Recorder Helper Daemon (On-Demand)
 find_package(PkgConfig QUIET)
 if (PKG_CONFIG_FOUND)
     pkg_check_modules(AVFORMAT IMPORTED_TARGET libavformat)
