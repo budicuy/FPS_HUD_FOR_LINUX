@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <inplace_vector>
 #include <string>
 #include <thread>
 
@@ -191,6 +192,82 @@ void run_all_devices_and_features_suite() {
     std::printf("\n====================================================================\n");
     std::printf("  FULL-FEATURE & MULTI-DEVICE VERIFICATION SUITE (5 DEVICE PROFILES)\n");
     std::printf("====================================================================\n");
+
+    // ------------------------------------------------------------------------
+    // Verify ISO C++26 Standard, Inplace Vector, Pack Indexing & SIMD
+    // ------------------------------------------------------------------------
+    {
+        bool cpp26_standard_ok = (__cplusplus >= 202400L);
+#if defined(__cpp_lib_inplace_vector)
+        bool inplace_vec_macro_ok = (__cpp_lib_inplace_vector >= 202406L);
+#else
+        bool inplace_vec_macro_ok = false;
+#endif
+#if defined(__cpp_pack_indexing)
+        bool pack_indexing_ok = (__cpp_pack_indexing >= 202311L);
+#else
+        bool pack_indexing_ok = false;
+#endif
+
+        std::inplace_vector<int, 4> test_iv;
+        test_iv.push_back(100);
+        test_iv.push_back(200);
+        bool iv_ok = (test_iv.size() == 2 && test_iv.capacity() == 4 && test_iv[0] == 100 && test_iv[1] == 200);
+
+        // Verify IpcPacketHeader pack indexing methods (deferred from Task 2)
+        IpcPacketHeader hdr;
+        bool ipc_hdr_ok = (hdr.get_field<0>() == kRecorderIpcMagic && hdr.is_valid());
+
+        // Verify compute_frametime_stats_simd edge cases & math parity (deferred from Task 5)
+        // 1. Empty vector returns total_ms == 0.0
+        std::vector<float> empty_vec;
+        SimdStatsResult r_empty = compute_frametime_stats_simd(empty_vec);
+        bool simd_empty_ok = (r_empty.total_ms == 0.0 && r_empty.min_val == 0.0f && r_empty.max_val == 0.0f);
+
+        // 2. Single element returns min_val == 16.6f && max_val == 16.6f
+        std::vector<float> single_vec = { 16.6f };
+        SimdStatsResult r_single = compute_frametime_stats_simd(single_vec);
+        bool simd_single_ok = (std::fabs(r_single.total_ms - 16.6) < 1e-4 &&
+                               r_single.min_val == 16.6f &&
+                               r_single.max_val == 16.6f);
+
+        // 3. Multi-element vector with non-VSize count (e.g. 11 elements) returns accurate total_ms, min, max
+        std::vector<float> multi_vec = { 16.6f, 8.33f, 33.3f, 12.5f, 20.0f, 6.94f, 14.2f, 18.1f, 22.0f, 10.0f, 15.0f };
+        SimdStatsResult r_multi = compute_frametime_stats_simd(multi_vec);
+        double expected_total = 0.0;
+        float expected_min = multi_vec[0];
+        float expected_max = multi_vec[0];
+        for (float v : multi_vec) {
+            expected_total += static_cast<double>(v);
+            if (v < expected_min) expected_min = v;
+            if (v > expected_max) expected_max = v;
+        }
+        bool simd_multi_ok = (std::fabs(r_multi.total_ms - expected_total) < 1e-4 &&
+                              r_multi.min_val == expected_min &&
+                              r_multi.max_val == expected_max);
+
+        bool all_simd_ok = simd_empty_ok && simd_single_ok && simd_multi_ok;
+
+        char detail_cpp26[180];
+        std::snprintf(detail_cpp26, sizeof(detail_cpp26),
+                      "Standard=__cplusplus %ld | inplace_vector=%ld | pack_indexing=%ld | SIMD=Available",
+                      static_cast<long>(__cplusplus),
+#if defined(__cpp_lib_inplace_vector)
+                      static_cast<long>(__cpp_lib_inplace_vector),
+#else
+                      0L,
+#endif
+#if defined(__cpp_pack_indexing)
+                      static_cast<long>(__cpp_pack_indexing)
+#else
+                      0L
+#endif
+        );
+
+        check_cond(cpp26_standard_ok && inplace_vec_macro_ok && pack_indexing_ok && iv_ok && ipc_hdr_ok && all_simd_ok,
+                   "0.0 ISO C++26 Modernization Suite (Inplace Vector, Pack Indexing & SIMD)",
+                   detail_cpp26);
+    }
 
     // ------------------------------------------------------------------------
     // Verify Presets (Minimal, Standard, Advance, Custom) & Keybindings first
