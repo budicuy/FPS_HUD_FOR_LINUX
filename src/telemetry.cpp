@@ -11,6 +11,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 #if __has_include(<experimental/simd>)
 #include <experimental/simd>
@@ -901,63 +902,122 @@ void TelemetryCollector::start_benchmark() {
     bench_active_.store(true, std::memory_order_relaxed);
 }
 
-SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data) {
-    SimdStatsResult res{};
-    if (data.empty()) return res;
-
-    size_t n = data.size();
-    size_t i = 0;
+namespace {
 
 #if defined(FPSHUD_HAS_SIMD)
-    using V = stdx::native_simd<float>;
+template <size_t Width>
+SimdStatsResult reduce_frametime_simd_impl(const float* data, size_t n) noexcept {
+    using Abi = stdx::simd_abi::deduce_t<float, Width>;
+    using V = stdx::simd<float, Abi>;
     constexpr size_t VSize = V::size();
 
-    V sum_v = 0.0f;
-    V min_v = data[0];
-    V max_v = data[0];
+    const V kMaxFinite(std::numeric_limits<float>::max());
+    V sum_v(0.0f);
+    V min_v(std::numeric_limits<float>::max());
+    V max_v(std::numeric_limits<float>::lowest());
+
     double total = 0.0;
+    float scalar_min = std::numeric_limits<float>::max();
+    float scalar_max = std::numeric_limits<float>::lowest();
+    bool any_valid = false;
     size_t chunks_accumulated = 0;
+    size_t i = 0;
 
     for (; i + VSize <= n; i += VSize) {
         V chunk(&data[i], stdx::element_aligned);
-        sum_v += chunk;
-        min_v = stdx::min(min_v, chunk);
-        max_v = stdx::max(max_v, chunk);
+        auto finite_mask = stdx::abs(chunk) <= kMaxFinite;
+        if (stdx::all_of(finite_mask)) {
+            any_valid = true;
+            sum_v += chunk;
+            min_v = stdx::min(min_v, chunk);
+            max_v = stdx::max(max_v, chunk);
 
-        // Periodically fold into double total to eliminate floating-point drift in ultra-long runs
-        if (++chunks_accumulated == 512) {
-            for (size_t lane = 0; lane < VSize; ++lane) {
-                total += static_cast<double>(sum_v[lane]);
+            // Periodically fold into double total to eliminate floating-point drift in ultra-long runs
+            if (++chunks_accumulated == 512) {
+                for (size_t lane = 0; lane < VSize; ++lane) {
+                    total += static_cast<double>(sum_v[lane]);
+                }
+                sum_v = V(0.0f);
+                chunks_accumulated = 0;
             }
-            sum_v = 0.0f;
-            chunks_accumulated = 0;
+        } else {
+            for (size_t lane = 0; lane < VSize; ++lane) {
+                float v = chunk[lane];
+                if (std::isfinite(v)) {
+                    any_valid = true;
+                    total += static_cast<double>(v);
+                    if (v < scalar_min) scalar_min = v;
+                    if (v > scalar_max) scalar_max = v;
+                }
+            }
         }
     }
 
-    float min_scalar = min_v[0];
-    float max_scalar = max_v[0];
     for (size_t lane = 0; lane < VSize; ++lane) {
         total += static_cast<double>(sum_v[lane]);
-        if (min_v[lane] < min_scalar) min_scalar = min_v[lane];
-        if (max_v[lane] > max_scalar) max_scalar = max_v[lane];
+        if (min_v[lane] < scalar_min) scalar_min = min_v[lane];
+        if (max_v[lane] > scalar_max) scalar_max = max_v[lane];
     }
-    res.total_ms = total;
-    res.min_val = min_scalar;
-    res.max_val = max_scalar;
-#else
-    res.min_val = data[0];
-    res.max_val = data[0];
-#endif
 
-    // Tangani sisa elemen ekor (tail elements) secara aman
     for (; i < n; ++i) {
         float v = data[i];
-        res.total_ms += static_cast<double>(v);
-        if (v < res.min_val) res.min_val = v;
-        if (v > res.max_val) res.max_val = v;
+        if (std::isfinite(v)) {
+            any_valid = true;
+            total += static_cast<double>(v);
+            if (v < scalar_min) scalar_min = v;
+            if (v > scalar_max) scalar_max = v;
+        }
     }
 
-    return res;
+    if (!any_valid) {
+        return SimdStatsResult{0.0, 0.0f, 0.0f};
+    }
+    return SimdStatsResult{total, scalar_min, scalar_max};
+}
+
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+[[gnu::target("avx2")]]
+SimdStatsResult reduce_frametime_avx2(const float* data, size_t n) noexcept {
+    return reduce_frametime_simd_impl<8>(data, n);
+}
+
+SimdStatsResult reduce_frametime_sse2(const float* data, size_t n) noexcept {
+    return reduce_frametime_simd_impl<4>(data, n);
+}
+#endif
+#endif
+
+} // namespace
+
+SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data) {
+    if (data.empty()) return SimdStatsResult{};
+
+#if defined(FPSHUD_HAS_SIMD)
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    static const bool s_has_avx2 = __builtin_cpu_supports("avx2");
+    if (s_has_avx2) {
+        return reduce_frametime_avx2(data.data(), data.size());
+    }
+    return reduce_frametime_sse2(data.data(), data.size());
+#else
+    return reduce_frametime_simd_impl<stdx::native_simd<float>::size()>(data.data(), data.size());
+#endif
+#else
+    double total = 0.0;
+    float min_val = std::numeric_limits<float>::max();
+    float max_val = std::numeric_limits<float>::lowest();
+    bool any_valid = false;
+    for (float v : data) {
+        if (std::isfinite(v)) {
+            any_valid = true;
+            total += static_cast<double>(v);
+            if (v < min_val) min_val = v;
+            if (v > max_val) max_val = v;
+        }
+    }
+    if (!any_valid) return SimdStatsResult{0.0, 0.0f, 0.0f};
+    return SimdStatsResult{total, min_val, max_val};
+#endif
 }
 
 void TelemetryCollector::stop_benchmark() {

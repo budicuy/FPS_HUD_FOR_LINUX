@@ -42,6 +42,14 @@ struct SimdStatsResult {
     float max_val = 0.0f;
 };
 
+constexpr bool has_simd_frametime_backend() noexcept {
+#if __has_include(<experimental/simd>)
+    return true;
+#else
+    return false;
+#endif
+}
+
 // Accelerated frametime analytics (sum, min, max) using C++26 SIMD reduction
 [[nodiscard]] SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data);
 

@@ -263,11 +263,29 @@ void run_all_devices_and_features_suite() {
                               r_multi.min_val == expected_min &&
                               r_multi.max_val == expected_max);
 
-        bool all_simd_ok = simd_empty_ok && simd_single_ok && simd_multi_ok;
+        // 4. All non-finite vector returns clean zeros (no NaN/Inf poisoning)
+        std::vector<float> nan_only_vec = { NAN, INFINITY, -INFINITY };
+        SimdStatsResult r_nan = compute_frametime_stats_simd(nan_only_vec);
+        bool simd_nan_only_ok = (r_nan.total_ms == 0.0 && r_nan.min_val == 0.0f && r_nan.max_val == 0.0f);
+
+        // 5. >512 SIMD chunks (5,003 elements) mixed with NaN/+Inf/-Inf exercises periodic double fold
+        std::vector<float> large_vec(5003, 10.0f);
+        large_vec[0] = NAN;
+        large_vec[100] = INFINITY;
+        large_vec[2049] = -INFINITY;
+        large_vec[2500] = 2.5f;
+        large_vec[5002] = 30.0f;
+        // Remaining finite elements: 4998 * 10.0 + 2.5 + 30.0 = 50012.5
+        SimdStatsResult r_large = compute_frametime_stats_simd(large_vec);
+        bool simd_large_ok = (std::fabs(r_large.total_ms - 50012.5) < 0.01 &&
+                              r_large.min_val == 2.5f &&
+                              r_large.max_val == 30.0f);
+
+        bool all_simd_ok = simd_empty_ok && simd_single_ok && simd_multi_ok && simd_nan_only_ok && simd_large_ok;
 
         char detail_cpp26[180];
         std::snprintf(detail_cpp26, sizeof(detail_cpp26),
-                      "Standard=__cplusplus %ld | inplace_vector=%ld | pack_indexing=%ld | SIMD=Available",
+                      "Standard=__cplusplus %ld | inplace_vector=%ld | pack_indexing=%ld | SIMD=%s",
                       static_cast<long>(__cplusplus),
 #if defined(__cpp_lib_inplace_vector)
                       static_cast<long>(__cpp_lib_inplace_vector),
@@ -275,10 +293,11 @@ void run_all_devices_and_features_suite() {
                       0L,
 #endif
 #if defined(__cpp_pack_indexing)
-                      static_cast<long>(__cpp_pack_indexing)
+                      static_cast<long>(__cpp_pack_indexing),
 #else
-                      0L
+                      0L,
 #endif
+                      fpshud::has_simd_frametime_backend() ? "Active" : "ScalarFallback"
         );
 
         check_cond(cpp26_standard_ok && inplace_vec_macro_ok && pack_indexing_ok && iv_ok && ipc_hdr_ok && pack_lifetime_ok && all_simd_ok,
