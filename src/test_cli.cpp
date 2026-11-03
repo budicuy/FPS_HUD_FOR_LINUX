@@ -447,6 +447,36 @@ void run_all_devices_and_features_suite() {
                    "Detected vendor=NVIDIA driver=nouveau via DRM sysfs without NVML");
     }
 
+    // ------------------------------------------------------------------------
+    // PROFILE 7: High-Core Count Workstation (256 Threads Discovery & Polling)
+    // ------------------------------------------------------------------------
+    fs::remove_all(base, ec);
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: AMD Ryzen Threadripper PRO 7995WX 96-Cores\n");
+    write_mock_file(base / "proc/stat", "cpu  50000 0 5000 90000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       134217728 kB\nMemAvailable:   100663296 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      4194304 kB\n");
+    write_mock_file(base / "sys/class/hwmon/hwmon0/name", "k10temp");
+    write_mock_file(base / "sys/class/hwmon/hwmon0/temp1_input", "52000");
+
+    for (int i = 0; i < 256; ++i) {
+        // Cores 0..254 clocked at 2400 MHz (2400000 kHz); Core 255 boosted to 5100 MHz (5100000 kHz)
+        std::string freq = (i == 255) ? "5100000" : "2400000";
+        write_mock_file(base / ("sys/devices/system/cpu/cpu" + std::to_string(i) + "/cpufreq/scaling_cur_freq"), freq);
+    }
+
+    {
+        TelemetryCollector high_core_tc(base.string(), true);
+        high_core_tc.poll_once_sync();
+        auto high_core_snap = high_core_tc.get_snapshot();
+        bool clock_ok = (high_core_snap.cpu_clock_mhz == 5100);
+        check_cond(clock_ok,
+                   "PROFILE 7: High-Core Count CPU (256 Threads)",
+                   "Discovered and polled all 256 CPU cores (peak clock = 5100 MHz on core 255)");
+    }
+
     fs::remove_all(base, ec);
 
     // --------------------------------------------------------------------
