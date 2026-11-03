@@ -257,6 +257,9 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/fpshud"
     @ONLY
 )
+file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/fpshud"
+    FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
 
 # Automated Static Analysis with clang-tidy
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
