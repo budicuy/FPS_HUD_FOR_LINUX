@@ -396,20 +396,21 @@ void TelemetryCollector::init_cpu_sensors() {
         max_cpus = std::max(max_cpus, 512L);
     }
     max_cpus = std::clamp(max_cpus, 1L, 512L);
-    cpu_freq_paths_.clear();
-    for (long cpu_idx = 0; cpu_idx < max_cpus && cpu_freq_paths_.size() < cpu_freq_paths_.capacity(); ++cpu_idx) {
-        std::string p = root_prefix_ + "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/cpufreq/scaling_cur_freq";
-        if (fs::exists(p, ec)) {
-            if (cpu_freq_paths_.size() < cpu_freq_paths_.capacity()) {
-                cpu_freq_paths_.push_back(std::move(p));
-            }
+    cpu_freq_sensors_.clear();
+    char path_buf[512];
+    for (long cpu_idx = 0; cpu_idx < max_cpus; ++cpu_idx) {
+        int n_len = std::snprintf(path_buf, sizeof(path_buf),
+                                  "%s/sys/devices/system/cpu/cpu%ld/cpufreq/scaling_cur_freq",
+                                  root_prefix_.c_str(), cpu_idx);
+        if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) && ::access(path_buf, R_OK) == 0) {
+            if (!cpu_freq_sensors_.try_push_back(CpuFreqSensor{static_cast<uint16_t>(cpu_idx), false})) break;
             continue;
         }
-        std::string p_info = root_prefix_ + "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/cpufreq/cpuinfo_cur_freq";
-        if (fs::exists(p_info, ec)) {
-            if (cpu_freq_paths_.size() < cpu_freq_paths_.capacity()) {
-                cpu_freq_paths_.push_back(std::move(p_info));
-            }
+        n_len = std::snprintf(path_buf, sizeof(path_buf),
+                              "%s/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_cur_freq",
+                              root_prefix_.c_str(), cpu_idx);
+        if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) && ::access(path_buf, R_OK) == 0) {
+            if (!cpu_freq_sensors_.try_push_back(CpuFreqSensor{static_cast<uint16_t>(cpu_idx), true})) break;
         }
     }
 
@@ -1139,8 +1140,15 @@ void TelemetryCollector::poll_cpu_load() {
 void TelemetryCollector::poll_cpu_clock() {
     int max_mhz = 0;
     char buf[32];
-    for (const auto& path : cpu_freq_paths_) {
-        if (read_sysfs_buf(path.c_str(), buf, sizeof(buf))) {
+    char path_buf[512];
+    for (const auto& sensor : cpu_freq_sensors_) {
+        int n_len = std::snprintf(
+            path_buf, sizeof(path_buf),
+            sensor.use_cpuinfo ? "%s/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_cur_freq"
+                               : "%s/sys/devices/system/cpu/cpu%u/cpufreq/scaling_cur_freq",
+            root_prefix_.c_str(), static_cast<unsigned>(sensor.cpu_id));
+        if (n_len <= 0 || static_cast<size_t>(n_len) >= sizeof(path_buf)) continue;
+        if (read_sysfs_buf(path_buf, buf, sizeof(buf))) {
             long khz = std::strtol(buf, nullptr, 10);
             int mhz = static_cast<int>((khz + 500) / 1000);
             if (mhz > max_mhz) max_mhz = mhz;

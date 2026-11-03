@@ -4,6 +4,9 @@
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -553,6 +556,8 @@ void run_all_devices_and_features_suite() {
     // ------------------------------------------------------------------------
     // PROFILE 7: High-Core Count Workstation (256 Threads Discovery & Polling)
     // ------------------------------------------------------------------------
+    static_assert(sizeof(fpshud::TelemetryCollector) <= 16384,
+                  "TelemetryCollector must fit within 16 KB stack safety budget");
     fs::remove_all(base, ec);
     write_mock_file(base / "proc/cpuinfo",
                     "processor\t: 0\nmodel name\t: AMD Ryzen Threadripper PRO 7995WX 96-Cores\n");
@@ -569,16 +574,26 @@ void run_all_devices_and_features_suite() {
         std::string freq = (i == 255) ? "5100000" : "2400000";
         write_mock_file(base / ("sys/devices/system/cpu/cpu" + std::to_string(i) + "/cpufreq/scaling_cur_freq"), freq);
     }
+    // Core 256: unreadable cpuinfo_cur_freq (simulates Linux 0400 root:root sysfs node on non-root user)
+    fs::path locked_cpuinfo = base / "sys/devices/system/cpu/cpu256/cpufreq/cpuinfo_cur_freq";
+    write_mock_file(locked_cpuinfo, "9900000");
+    if (::geteuid() != 0) {
+        ::chmod(locked_cpuinfo.c_str(), 0000);
+    }
+    // Core 257: readable cpuinfo_cur_freq fallback (4800 MHz)
+    write_mock_file(base / "sys/devices/system/cpu/cpu257/cpufreq/cpuinfo_cur_freq", "4800000");
 
     {
         TelemetryCollector high_core_tc(base.string(), true);
         high_core_tc.poll_once_sync();
         auto high_core_snap = high_core_tc.get_snapshot();
-        bool clock_ok = (high_core_snap.cpu_clock_mhz == 5100);
+        bool clock_ok = (::geteuid() == 0) ? (high_core_snap.cpu_clock_mhz == 9900)
+                                           : (high_core_snap.cpu_clock_mhz == 5100);
         check_cond(clock_ok,
                    "PROFILE 7: High-Core Count CPU (256 Threads)",
-                   "Discovered and polled all 256 CPU cores (peak clock = 5100 MHz on core 255)");
+                   "Discovered readable cores, skipped non-R_OK cpuinfo_cur_freq (peak = 5100 MHz)");
     }
+    ::chmod(locked_cpuinfo.c_str(), 0644);
 
     fs::remove_all(base, ec);
 

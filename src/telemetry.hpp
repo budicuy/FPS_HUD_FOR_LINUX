@@ -201,8 +201,12 @@ private:
     std::string drm_power_uw_path_;       // hwmon/power1_average or power1_input (microwatts)
     std::string drm_energy_uj_path_;      // hwmon/energy1_input (microjoules)
 
-    // CPU Sensor sysfs paths discovered at init (Intel & AMD)
-    std::inplace_vector<std::string, 512> cpu_freq_paths_;
+    // CPU Sensor descriptors discovered at init (Intel & AMD, zero-heap trivial inline storage)
+    struct CpuFreqSensor {
+        uint16_t cpu_id = 0;
+        bool use_cpuinfo = false;
+    };
+    std::inplace_vector<CpuFreqSensor, 512> cpu_freq_sensors_;
     std::string cpu_temp_path_;
     std::string rapl_energy_path_;
     uint64_t    rapl_max_range_uj_ = 0;
