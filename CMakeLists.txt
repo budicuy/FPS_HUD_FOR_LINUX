@@ -152,6 +152,14 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
         Threads::Threads
         ${CMAKE_DL_LIBS}
     )
+
+    set_target_properties(fpshud_recorder PROPERTIES
+        BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
+        INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
+    )
+    target_link_options(fpshud_recorder PRIVATE
+        "-Wl,--disable-new-dtags"
+    )
     message(STATUS "Screen Recorder: ENABLED (fpshud_recorder will be built)")
 else()
     message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse-simple not found)")

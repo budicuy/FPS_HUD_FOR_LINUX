@@ -278,15 +278,65 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
         nullptr
     };
 
+    // Prepare clean environment variables with container / pressure-vessel library path support
+    std::vector<std::string> env_strings;
+    std::string new_ld_path;
+
+    // If inside pressure-vessel / bubblewrap container, add host library paths
+    std::error_code ec;
+    if (fs::exists("/run/host/usr/lib", ec)) {
+        new_ld_path = "/run/host/usr/lib/pulseaudio:/run/host/usr/lib";
+        if (fs::exists("/run/host/usr/lib64", ec)) {
+            new_ld_path += ":/run/host/usr/lib64";
+        }
+    } else if (fs::exists("/var/run/host/usr/lib", ec)) {
+        new_ld_path = "/var/run/host/usr/lib/pulseaudio:/var/run/host/usr/lib";
+    }
+
+    const char* cur_ld = std::getenv("LD_LIBRARY_PATH");
+    if (cur_ld && *cur_ld) {
+        if (!new_ld_path.empty()) {
+            new_ld_path += ":";
+        }
+        new_ld_path += cur_ld;
+    }
+
+    for (char** ep = environ; ep && *ep; ++ep) {
+        std::string e = *ep;
+        if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) {
+            continue; // We will add our updated LD_LIBRARY_PATH
+        }
+        if (e.rfind("LD_PRELOAD=", 0) == 0) {
+            continue; // Do not leak game's LD_PRELOAD into daemon
+        }
+        env_strings.push_back(std::move(e));
+    }
+
+    if (!new_ld_path.empty()) {
+        env_strings.push_back("LD_LIBRARY_PATH=" + new_ld_path);
+    }
+
+    std::vector<char*> envp;
+    envp.reserve(env_strings.size() + 1);
+    for (auto& s : env_strings) {
+        envp.push_back(s.data());
+    }
+    envp.push_back(nullptr);
+
     pid_t pid = 0;
-    int res = posix_spawnp(&pid, bin_path.c_str(), nullptr, nullptr, argv, environ);
+    int res = posix_spawnp(&pid, bin_path.c_str(), nullptr, nullptr, argv, envp.data());
     if (res != 0 || pid <= 0) {
-        // Fallback to ~/.local/bin/fpshud_recorder
+        // Fallback to ~/.local/bin/fpshud_recorder or ~/.local/lib/fpshud/fpshud_recorder
         std::string fallback = std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/.local/bin/fpshud_recorder";
         argv[0] = const_cast<char*>(fallback.c_str());
-        res = posix_spawnp(&pid, fallback.c_str(), nullptr, nullptr, argv, environ);
+        res = posix_spawnp(&pid, fallback.c_str(), nullptr, nullptr, argv, envp.data());
         if (res != 0 || pid <= 0) {
-            return false;
+            std::string fallback2 = std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/.local/lib/fpshud/fpshud_recorder";
+            argv[0] = const_cast<char*>(fallback2.c_str());
+            res = posix_spawnp(&pid, fallback2.c_str(), nullptr, nullptr, argv, envp.data());
+            if (res != 0 || pid <= 0) {
+                return false;
+            }
         }
     }
 

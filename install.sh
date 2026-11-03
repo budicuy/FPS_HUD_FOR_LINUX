@@ -27,14 +27,20 @@ if [ -f "./build/libfpshud.so" ]; then
     echo "[*] Installing from local build directory..."
     cp -f "./build/libfpshud.so" "$LIB_DIR/libfpshud.so"
     [ -f "./build/fpshud_test" ] && cp -f "./build/fpshud_test" "$BIN_DIR/fpshud_test"
-    [ -f "./build/fpshud_recorder" ] && cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+    if [ -f "./build/fpshud_recorder" ]; then
+        cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+        cp -f "./build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+    fi
     INSTALLED_BIN=1
 elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
     echo "[*] Extracting from local prebuilt package..."
     tar -xzf "./dist/fpshud-linux-x86_64.tar.gz" -C "$TMP_DIR"
     cp -f "$TMP_DIR/libfpshud.so" "$LIB_DIR/libfpshud.so"
     [ -f "$TMP_DIR/fpshud_test" ] && cp -f "$TMP_DIR/fpshud_test" "$BIN_DIR/fpshud_test"
-    [ -f "$TMP_DIR/fpshud_recorder" ] && cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+    if [ -f "$TMP_DIR/fpshud_recorder" ]; then
+        cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+        cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+    fi
     INSTALLED_BIN=1
 fi
 
@@ -51,7 +57,8 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
         fi
         if [ -f "$TMP_DIR/fpshud_recorder" ]; then
             cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
-            chmod +x "$BIN_DIR/fpshud_recorder"
+            cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+            chmod +x "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
         fi
         INSTALLED_BIN=1
     else
@@ -65,7 +72,10 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
         cmake --build "$TMP_DIR/build" --parallel
         cp -f "$TMP_DIR/build/libfpshud.so" "$LIB_DIR/libfpshud.so"
         cp -f "$TMP_DIR/build/fpshud_test" "$BIN_DIR/fpshud_test"
-        [ -f "$TMP_DIR/build/fpshud_recorder" ] && cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+        if [ -f "$TMP_DIR/build/fpshud_recorder" ]; then
+            cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+            cp -f "$TMP_DIR/build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+        fi
         INSTALLED_BIN=1
     fi
 fi
@@ -73,6 +83,7 @@ fi
 chmod +x "$LIB_DIR/libfpshud.so"
 [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
 [ -f "$BIN_DIR/fpshud_recorder" ] && chmod +x "$BIN_DIR/fpshud_recorder"
+[ -f "$LIB_DIR/fpshud_recorder" ] && chmod +x "$LIB_DIR/fpshud_recorder"
 
 # Verify if prebuilt fpshud_recorder works on this distro
 if [ -f "$BIN_DIR/fpshud_recorder" ] && ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
@@ -86,7 +97,10 @@ if [ -f "$BIN_DIR/fpshud_recorder" ] && ldd "$BIN_DIR/fpshud_recorder" 2>&1 | gr
                 g++ -O3 -std=c++20 "$REC_TMP/src/src/recorder_main.cpp" "$REC_TMP/src/src/config.cpp" \
                     -I"$REC_TMP/src/src" \
                     $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
+                    -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
+                    -Wl,--disable-new-dtags \
                     -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && chmod +x "$BIN_DIR/fpshud_recorder" || true
+                cp -f "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder" 2>/dev/null || true
                 if ! ldd "$BIN_DIR/fpshud_recorder" 2>&1 | grep -q "not found"; then
                     echo "[✓] Native fpshud_recorder compiled successfully!"
                 fi
