@@ -179,7 +179,7 @@ cat > "$BIN_DIR/fpshud" << EOF
 # ====================================================================
 
 LIB_SO="$LIB_DIR/libfpshud.so"
-RAM_CACHE_USER="\$HOME/.local/share/fpshud/ram_info"
+RAM_CACHE_USER="\${XDG_DATA_HOME:-\$HOME/.local/share}/fpshud/ram_info"
 RAM_CACHE_SYS="/etc/fpshud/ram_info"
 
 show_help() {
@@ -286,8 +286,8 @@ run_setup() {
     # 1. RAPL CPU Wattage udev rule
     echo "[*] Memasang udev rule untuk CPU Wattage (/etc/udev/rules.d/99-fpshud-rapl.rules)..."
     \$SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "UDEV_EOF"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl*", ATTR{energy_uj}!="", MODE="0444"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", MODE="0444"
 UDEV_EOF'
     \$SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
@@ -312,10 +312,11 @@ UDEV_EOF'
         USER_HOME="\$(getent passwd "\$SUDO_USER" 2>/dev/null | cut -d: -f6)"
         [ -n "\$USER_HOME" ] && TARGET_HOME="\$USER_HOME"
     fi
-    TARGET_RAM_FILE="\$TARGET_HOME/.local/share/fpshud/ram_info"
+    TARGET_RAM_FILE="\${XDG_DATA_HOME:-\$TARGET_HOME/.local/share}/fpshud/ram_info"
     mkdir -p "\$(dirname "\$TARGET_RAM_FILE")"
 
-    \$SUDO_CMD python3 -c '
+    if command -v python3 >/dev/null 2>&1; then
+        \$SUDO_CMD python3 -c '
 import glob, struct, os, re, subprocess
 
 types = {
@@ -383,10 +384,13 @@ if speed > 0:
     os.chmod(target_file, 0o644)
     print(f"    [+] Deteksi RAM Sukses: {ram_type} {speed} MT/s ({modules} modul)")
 ' 2>/dev/null || true
+    else
+        echo "    [!] python3 tidak ditemukan, pembacaan SMBIOS RAM dilewati."
+    fi
 
     # Fix ownership if created under sudo
-    if [ -n "\$SUDO_USER" ] && [ -f "\$TARGET_RAM_FILE" ]; then
-        \$SUDO_CMD chown "\$SUDO_USER:" "\$TARGET_RAM_FILE" 2>/dev/null || true
+    if [ -n "\$TARGET_USER" ] && [ -f "\$TARGET_RAM_FILE" ]; then
+        \$SUDO_CMD chown -R "\$TARGET_USER:" "\$(dirname "\$TARGET_RAM_FILE")" 2>/dev/null || true
     fi
 
     # System-wide copy
@@ -582,8 +586,8 @@ if [ "$HAVE_SUDO" -eq 1 ]; then
     # 1. RAPL CPU Wattage Rule
     $SUDO_CMD mkdir -p /etc/udev/rules.d 2>/dev/null || true
     $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "UDEV_EOF"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl*", ATTR{energy_uj}!="", MODE="0444"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", MODE="0444"
 UDEV_EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
     $SUDO_CMD chmod a+r /sys/class/powercap/*rapl*/energy_uj /sys/class/powercap/*rapl*/*/energy_uj 2>/dev/null || true
