@@ -11,8 +11,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
@@ -218,6 +220,18 @@ void run_all_devices_and_features_suite() {
         IpcPacketHeader hdr;
         bool ipc_hdr_ok = (hdr.get_field<0>() == kRecorderIpcMagic && hdr.is_valid());
 
+        // Verify pack_element rvalue lifetime safety (returns prvalue T, not dangling T&&),
+        // zero-copy lvalue references, and move-only support
+        static_assert(std::is_same_v<decltype(fpshud::pack_element<2>("first", 123, 45.67f, true)), float>);
+        int lv = 10;
+        const int clv = 20;
+        static_assert(std::is_same_v<decltype(fpshud::pack_element<0>(lv, clv)), int&>);
+        static_assert(std::is_same_v<decltype(fpshud::pack_element<1>(lv, clv)), const int&>);
+        fpshud::pack_element<0>(lv, clv) = 77;
+        const auto& safe_ref = fpshud::pack_element<1>(lv, std::string("safe_lifetime"));
+        auto move_ptr = fpshud::pack_element<0>(std::make_unique<int>(99), 42);
+        bool pack_lifetime_ok = (lv == 77 && safe_ref == "safe_lifetime" && move_ptr && *move_ptr == 99);
+
         // Verify compute_frametime_stats_simd edge cases & math parity (deferred from Task 5)
         // 1. Empty vector returns total_ms == 0.0
         std::vector<float> empty_vec;
@@ -264,7 +278,7 @@ void run_all_devices_and_features_suite() {
 #endif
         );
 
-        check_cond(cpp26_standard_ok && inplace_vec_macro_ok && pack_indexing_ok && iv_ok && ipc_hdr_ok && all_simd_ok,
+        check_cond(cpp26_standard_ok && inplace_vec_macro_ok && pack_indexing_ok && iv_ok && ipc_hdr_ok && pack_lifetime_ok && all_simd_ok,
                    "0.0 ISO C++26 Modernization Suite (Inplace Vector, Pack Indexing & SIMD)",
                    detail_cpp26);
     }

@@ -8,11 +8,23 @@ namespace fpshud {
 
 #if defined(__cpp_pack_indexing)
 
+namespace detail {
+
 template <std::size_t N, typename... Types>
-using PackType = Types...[N];
+struct PackTypeChecked {
+    static_assert(N < sizeof...(Types), "PackType index out of range");
+    using type = Types...[N];
+};
+
+} // namespace detail
+
+template <std::size_t N, typename... Types>
+using PackType = typename detail::PackTypeChecked<N, Types...>::type;
 
 template <std::size_t N, typename... Args>
-constexpr decltype(auto) pack_element(Args&&... args) noexcept {
+constexpr auto pack_element(Args&&... args)
+    noexcept(std::is_nothrow_constructible_v<PackType<N, Args...>, PackType<N, Args...>&&>)
+    -> PackType<N, Args...> {
     static_assert(N < sizeof...(Args), "pack_element index out of range");
     return static_cast<Args...[N]&&>(args...[N]);
 }
@@ -20,8 +32,13 @@ constexpr decltype(auto) pack_element(Args&&... args) noexcept {
 #else
 
 // Fallback for compilers without native C++26 pack indexing
+namespace detail {
+
+template <std::size_t N, typename... Types>
+struct PackTypeHelper;
+
 template <std::size_t N, typename T0, typename... Rest>
-struct PackTypeHelper {
+struct PackTypeHelper<N, T0, Rest...> {
     using type = typename PackTypeHelper<N - 1, Rest...>::type;
 };
 
@@ -31,15 +48,31 @@ struct PackTypeHelper<0, T0, Rest...> {
 };
 
 template <std::size_t N, typename... Types>
-using PackType = typename PackTypeHelper<N, Types...>::type;
+struct PackTypeChecked {
+    static_assert(N < sizeof...(Types), "PackType index out of range");
+    using type = typename PackTypeHelper<N, Types...>::type;
+};
 
 template <std::size_t N, typename T0, typename... Rest>
-constexpr decltype(auto) pack_element(T0&& arg0, Rest&&... rest) noexcept {
+constexpr decltype(auto) pack_element_impl(T0&& arg0, Rest&&... rest) noexcept {
     if constexpr (N == 0) {
         return std::forward<T0>(arg0);
     } else {
-        return pack_element<N - 1>(std::forward<Rest>(rest)...);
+        return pack_element_impl<N - 1>(std::forward<Rest>(rest)...);
     }
+}
+
+} // namespace detail
+
+template <std::size_t N, typename... Types>
+using PackType = typename detail::PackTypeChecked<N, Types...>::type;
+
+template <std::size_t N, typename... Args>
+constexpr auto pack_element(Args&&... args)
+    noexcept(std::is_nothrow_constructible_v<PackType<N, Args...>, PackType<N, Args...>&&>)
+    -> PackType<N, Args...> {
+    static_assert(N < sizeof...(Args), "pack_element index out of range");
+    return detail::pack_element_impl<N>(std::forward<Args>(args)...);
 }
 
 #endif
