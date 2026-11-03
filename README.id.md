@@ -38,8 +38,9 @@ Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, me
 FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, memanfaatkan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
 
 ### Fitur apa saja yang ada di dalamnya?
-- **Menu Pengaturan Langsung di Dalam Game (`Insert` / `F12` / `F10`)**: Dashboard 2 kolom yang rapi tanpa tab berbelit-belit. Kamu bisa langsung mencentang sensor yang ingin ditampilkan, mengatur posisi layar, ukuran font, transparansi background, hingga warna teks tanpa keluar dari game.
-- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 19 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
+- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 23 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware, Instant Replay & Benchmark).
+- **Perekam Layar Hardware & Instant Replay Bebas Lag (`F7` / `F8`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang tidak membebani game engine, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), buffer putar ulang instan 30–120 detik, dan perekaman audio (Game, Mic, atau Campuran).
+- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 23 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
 - **1% Low FPS Akurat & Perekam Benchmark ke CSV (`F9`)**: Menghitung rata-rata frame terendah secara akurat (otomatis mengabaikan jeda saat layar *loading*) dan bisa merekam laporan performa ke file `.csv` kapan saja dengan menekan `F9`.
@@ -57,23 +58,29 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
 2. [Instalasi & Izin Akses Sensor](#2-instalasi--izin-akses-sensor)
 3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)
 4. [Panduan Menu In-Game GUI & Tombol Shortcut](#4-panduan-menu-in-game-gui--tombol-shortcut)
-5. [Dukungan Perangkat Keras & Daftar 19 Sensor](#5-dukungan-perangkat-keras--daftar-19-sensor)
-6. [Tech Stack & Arsitektur Sistem](#6-tech-stack--arsitektur-sistem)
-7. [Panduan Pengembang (Build dari Source & Pengujian)](#7-panduan-pengembang-build-dari-source--pengujian)
-8. [Troubleshooting & Tanya Jawab (FAQ)](#8-troubleshooting--tanya-jawab-faq)
-9. [Kontribusi, Kredit & Lisensi](#9-kontribusi-kredit--lisensi)
+5. [Perekam Layar Hardware & Instant Replay](#5-perekam-layar-hardware--instant-replay)
+6. [Dukungan Perangkat Keras & Daftar 23 Sensor](#6-dukungan-perangkat-keras--daftar-23-sensor)
+7. [Tech Stack & Arsitektur Sistem](#7-tech-stack--arsitektur-sistem)
+8. [Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)](#8-panduan-pengembang-build-dari-source-sanitizers--pengujian)
+9. [Troubleshooting & Tanya Jawab (FAQ)](#9-troubleshooting--tanya-jawab-faq)
+10. [Kontribusi, Kredit & Lisensi](#10-kontribusi-kredit--lisensi)
 
 ---
 
 ## 1. Fitur Utama
 
 - **Aktivasi Simpel (`FPS_HUD=1` / `FPS_HUD=0`)**:
-  - `FPS_HUD=1`: Menyalakan HUD Overlay dan menu In-Game GUI Configurator.
+  - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, dan menu In-Game GUI Configurator.
   - `FPS_HUD=0` (atau dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
-- **Dashboard In-Game GUI Tanpa Tab (`FPSHUD Configuration Tool`)**:
-  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka panel berdampingan (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Kanan: 19 Sensor Hardware & Tombol Preset).
+- **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
+  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 23 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar, Replay Instan & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
+- **Perekam Layar Hardware & Replay Instan Zero-Stutter**:
+  - Companion daemon khusus (`fpshud_recorder`) yang berjalan terpisah dengan zero copy lewat triple-buffered POSIX Shared Memory IPC.
+  - Mendukung standar video modern **HEVC (H.265 / `hvc1`)** dan **H.264** dengan kualitas **Adaptive CQP (CQ 16–30)** untuk hasil rekaman tajam tanpa artifak piksel.
+  - Fitur **Instant Replay 30s, 60s, atau 120s** yang menyimpan klip momen game sebelumnya secara instan via tombol **`F8`** ke `~/Videos/FPSHUD`.
+  - Perekaman audio multi-sumber (Game Audio, Mikrofon, Campuran, atau Mute) via PulseAudio/PipeWire.
 - **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
   - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
   - **AMD Radeon & APU (`amdgpu`)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, serta menggabungkan memori *Shared GTT* pada APU/Steam Deck.
@@ -81,6 +88,8 @@ FPSHUD dibangun menggunakan **C++20** yang sangat ringan dan hemat memori, meman
   - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
   - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
+- **Optimasi Ekstrem Clang 23 & Perlindungan Memori C++20**:
+  - Dikompilasi menggunakan Clang 23.1.4, linker LLD, ThinLTO (`-flto=thin`), dan `-O3` menghasilkan biner shared library ramping **1.3 MB** yang zero-overhead dan bebas memory leak/UB (diverifikasi dengan ASan & UBSan).
 
 ---
 
@@ -156,7 +165,37 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 
 ---
 
-## 5. Dukungan Perangkat Keras & Daftar 23 Sensor
+## 5. Perekam Layar Hardware & Instant Replay
+
+FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat ringan (`fpshud_recorder`) dan berjalan terpisah dari proses game utama. Frame dikirimkan melalui triple-buffered POSIX Shared Memory (`/dev/shm`), memastikan bahwa proses encoding video hardware tidak pernah menyebabkan stutter (*frame drop*) atau *micro-freeze* pada permainan Anda.
+
+### Fitur Utama & Opsi Codec
+
+| Fitur | Penjelasan | Default / Rekomendasi |
+| :--- | :--- | :--- |
+| **Codec Video** | **HEVC (H.265 / `hvc1`)** atau **H.264 (AVC)** | **HEVC (`hvc1`)** untuk ukuran file 50% lebih hemat dengan kompatibilitas universal di Discord, Chrome, QuickTime, dan Premiere. |
+| **Kontrol Bitrate** | **Adaptive CQP (Constant Quantization Parameter)** atau **Fixed VBR** | **Adaptive CQP (Level 22)**: mengalokasikan bitrate secara dinamis berdasarkan kompleksitas adegan sehingga aksi cepat tetap tajam tanpa pecah piksel. |
+| **Tingkat Kualitas CQP** | Sesuaikan kualitas visual dari **CQ 16** (*Near-lossless*, bitrate tinggi) hingga **CQ 30** (Kompresi maksimal). | **CQ 20 - 22** |
+| **Framerate & Resolusi** | Native (Sesuai resolusi game), 1080p, 720p, atau 1440p pada **30, 60, 120, atau 144 FPS**. | **Native @ 60 FPS** |
+| **Buffer Instant Replay** | Buffer RAM memutar (*circular buffer*) yang menyimpan **30, 60, atau 120 detik** terakhir gameplay. Tekan **`F8`** kapan saja untuk menyimpan klip. | **60 Detik** |
+| **Perekaman Audio** | Rekam audio latensi rendah via PulseAudio / PipeWire: **Hanya Game**, **Hanya Mikrofon**, **Game + Mikrofon (Stereo Downmixed)**, atau **Mute**. | **Hanya Audio Game** |
+| **Lokasi Penyimpanan** | Klip video otomatis disimpan ke folder `~/Videos/FPSHUD/` dengan nama file berstempel waktu (`FPSHUD_REC_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
+
+### Cara Menggunakan Perekam Layar & Instant Replay
+
+1. **Mulai / Hentikan Perekaman Penuh (`F7`)**:
+   - Tekan **`F7`** di dalam game (atau klik tombol **`[REC] Start Record`** pada Kolom 3 di GUI).
+   - Indikator notifikasi in-game akan mengonfirmasi bahwa perekaman telah dimulai. Tekan **`F7`** kembali untuk menyelesaikan dan menyimpan file video MP4/MKV.
+2. **Simpan Klip Instant Replay (`F8`)**:
+   - Aktifkan **Replay Buffer** di menu GUI (Kolom 3).
+   - Kapan pun momen hebat terjadi di dalam game, tekan **`F8`** (atau klik **`[REPLAY]`**).
+   - FPSHUD akan memindahkan buffer memori ke file video MP4 dalam hitungan milidetik tanpa mengganggu pertandingan Anda.
+3. **Buka Folder Rekaman**:
+   - Klik tombol **`Open System Folder`** di menu GUI in-game untuk membuka direktori rekaman langsung di file manager desktop Anda (Dolphin, Nautilus, Nemo, Thunar, dll.).
+
+---
+
+## 6. Dukungan Perangkat Keras & Daftar 23 Sensor
 
 ### Matriks Kompatibilitas Perangkat Keras
 
@@ -199,21 +238,22 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 
 ---
 
-## 6. Tech Stack & Arsitektur Sistem
+## 7. Tech Stack & Arsitektur Sistem
 
 | Bagian | Teknologi | Keunggulan Utama |
 | :--- | :--- | :--- |
 | **Bahasa & Build** | **C++20**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Optimasi extreme dengan ThinLTO, `-fno-plt`, stack canaries, deteksi bug ASan/UBSan & static libstdc++. |
 | **Intersepsi Grafis** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Menangkap fungsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
-| **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 2 kolom tanpa tab. |
+| **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 3-Column Split View tanpa tab. |
 | **Penangkap Input** | **Linux `evdev` + Fallback `X11`** | Pembacaan `/dev/input/event*` non-blocking dengan pengunci kursor `EVIOCGRAB`. |
 | **Mesin Sensor** | **Thread Pekerja Asinkron (500ms)** | Nol alokasi memori per frame; pembacaan data ke layar bebas hambatan (*lock-free*). |
+| **Perekam Layar** | **POSIX SHM IPC + FFmpeg (libavcodec)** | Perekaman HEVC/H.264 terakselerasi hardware triple-buffered & audio PulseAudio/PipeWire. |
 
 ```mermaid
 flowchart TD
     Env["Launch Option: FPS_HUD=1"] --> Init["Manajer Konfigurasi (~/.config/fpshud/config.ini)"]
     subgraph GameProcess["Proses Game (Vulkan / Proton / DXVK / OpenGL)"]
-        VK["Vulkan Loader (VkLayer_FPSHUD_overlay)"] --> HUD["Renderer HUD Two-Tone & In-Game GUI"]
+        VK["Vulkan Loader (VkLayer_FPSHUD_overlay)"] --> HUD["Dashboard 3-Column Split View & In-Game GUI"]
         GL["OpenGL Wrapper (glXSwapBuffers / eglSwapBuffers)"] --> HUD
         Input["Linux evdev + X11 Input Manager"] --> HUD
         HUD <--> Init
@@ -223,19 +263,20 @@ flowchart TD
             CPU["CPU & RAM: /proc/stat + cpufreq + RAPL + hwmon"]
         end
         Worker -->|Snapshot Bebas Hambatan| HUD
+        HUD -->|Triple-Buffered POSIX SHM| RecDaemon["Daemon Perekam Layar (fpshud_recorder)"]
     end
 ```
 
 ---
 
-## 7. Panduan Pengembang (Build dari Source & Pengujian)
+## 8. Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)
 
 Bagi pengembang (*developer*) yang ingin memodifikasi kode sumber atau melakukan kompilasi manual:
 
 ### 1. Instal Paket Dependensi Build
-- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata`
-- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids`
-- **Fedora**: `sudo dnf install -y gcc-c++ cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata`
+- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf clang lld llvm vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata ffmpeg libpulse`
+- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config clang lld llvm libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev`
+- **Fedora**: `sudo dnf install -y gcc-c++ clang lld llvm cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata ffmpeg-free-devel pulseaudio-libs-devel`
 
 ### 2. Clone, Compile & Jalankan Pengujian Simulasi 5 Perangkat
 ```bash
@@ -255,9 +296,38 @@ cd FPS_HUD_FOR_LINUX
 ninja -C build clang-tidy
 ```
 
+### Struktur Proyek
+```text
+FPS_HUD_FOR_LINUX/
+├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat & rilis GitHub
+├── .clang-tidy                          # Aturan analisis statis memori & keamanan kode C++
+├── CMakeLists.txt                       # Konfigurasi build C++20 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
+├── dist/fpshud-linux-x86_64.tar.gz      # Paket biner portabel siap pakai untuk instalasi 1-perintah curl
+├── install.sh / uninstall.sh            # Skrip instalasi & uninstalasi instan curl
+├── README.md / README.id.md             # Dokumentasi lengkap Bahasa Inggris & Bahasa Indonesia
+├── scripts/
+│   ├── build_clang.sh                   # Skrip kompilasi Clang 23 + LLD + ThinLTO
+│   ├── run_sanitizers.sh                # Skrip pengujian AddressSanitizer, LeakSanitizer & UBSan
+│   ├── install.sh / uninstall.sh        # Skrip instalasi & uninstalasi build lokal
+│   └── gen_embedded_fonts.py            # Konversi file font TTF menjadi C++ byte array
+└── src/
+    ├── config.hpp / config.cpp          # Pengelola preset & penyimpanan konfigurasi INI
+    ├── embedded_fonts.hpp               # Font OpenSans-Bold & VeraMono-Bold dalam format byte array
+    ├── telemetry.hpp / telemetry.cpp    # Telemetri GPU/CPU multi-vendor & perekam benchmark CSV
+    ├── input_manager.hpp / .cpp         # Pembaca input Linux evdev + X11 & pengunci mouse EVIOCGRAB
+    ├── gui_menu.hpp / gui_menu.cpp      # Dashboard in-game configurator Dear ImGui 3-Column Split View
+    ├── overlay_ui.hpp / overlay_ui.cpp  # Renderer HUD two-tone, efek outline/shadow & grafik FT
+    ├── vulkan_layer.cpp                 # Vulkan Implicit Layer dispatch & hook vkQueuePresentKHR
+    ├── opengl_hook.cpp                  # Hook buffer swap OpenGL GLX/EGL
+    ├── recorder_ipc.hpp / .cpp          # Pengontrol IPC zero-overhead untuk perekam layar
+    ├── recorder_main.cpp                # Daemon perekam layar (capture HEVC/H.264 & PulseAudio)
+    ├── recorder_launcher.c              # Peluncur ringan daemon perekam yang ramah container
+    └── test_cli.cpp                     # Suite pengujian simulasi sysfs 5-perangkat & keamanan memori
+```
+
 ---
 
-## 8. Troubleshooting & Tanya Jawab (FAQ)
+## 9. Troubleshooting & Tanya Jawab (FAQ)
 
 1. **Menekan `Insert` / `F12` tidak membuka menu GUI atau klik mouse tembus ke dalam game:**
    - Jalankan `sudo chmod a+r /dev/input/event*` (atau tambahkan user ke grup `input` secara permanen dengan `sudo usermod -aG input $USER` lalu login ulang).
@@ -268,10 +338,10 @@ ninja -C build clang-tidy
 
 ---
 
-## 9. Kontribusi, Kredit & Lisensi
+## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 31 pengujian multi-perangkat lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 37 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.
