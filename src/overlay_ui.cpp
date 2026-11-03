@@ -38,16 +38,22 @@ struct StyledValue {
     ImU32 color = 0;
 };
 
+constexpr size_t kMaxMetricsPerGroup = 16;
+constexpr size_t kMaxMetricGroups = 8;
+
 struct MetricGroup {
     GroupCategory category = GroupCategory::FPS;
     const char* label = "FPS";
     ImU32 label_color = 0;
-    std::inplace_vector<StyledValue, 8> values;
+    std::inplace_vector<StyledValue, kMaxMetricsPerGroup> values;
 };
 
 struct MetricGroupList {
-    std::inplace_vector<MetricGroup, 5> items;
+    std::inplace_vector<MetricGroup, kMaxMetricGroups> items;
 };
+
+static_assert(sizeof(MetricGroupList) <= 16384,
+              "MetricGroupList must fit within 16 KB stack safety budget");
 
 GroupCategory get_metric_category(MetricType m) noexcept {
     switch (m) {
@@ -271,17 +277,18 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
                 break;
             }
         }
-        if (!target && list.items.size() < list.items.capacity()) {
+        if (!target) {
             const char* label = get_category_label(cat);
             ImU32 col = get_category_color(cat, cfg, alpha);
-            list.items.push_back(MetricGroup{cat, label, col, {}});
-            target = &list.items.back();
+            if (auto added = list.items.try_emplace_back(MetricGroup{cat, label, col, {}})) {
+                target = &*added;
+            }
         }
-        if (target && target->values.size() < target->values.capacity()) {
+        if (target) {
             StyledValue sv{};
             format_styled_value(m, data, sv);
             sv.color = get_metric_value_color(m, data, cfg, alpha);
-            target->values.push_back(sv);
+            target->values.try_push_back(sv);
         }
     }
     return list;

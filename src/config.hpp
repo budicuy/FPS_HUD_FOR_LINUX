@@ -67,6 +67,8 @@ constexpr float kAtlasBaseFontSizePx = 20.0f;
 // Total number of selectable HUD sensors (MetricType entries)
 constexpr std::size_t kTotalMetricCount = 23;
 constexpr std::size_t kMaxMetricsCapacity = 32;
+static_assert(kTotalMetricCount <= kMaxMetricsCapacity,
+              "kMaxMetricsCapacity must accommodate all MetricType sensors");
 
 struct ColorRGBA {
     uint8_t r = 255;
@@ -147,8 +149,8 @@ struct HudConfig {
     float margin_x = 16.0f;
     float margin_y = 14.0f;
 
-    bool has_metric(MetricType m) const;
-    void set_metric(MetricType m, bool active);
+    bool has_metric(MetricType m) const noexcept;
+    void set_metric(MetricType m, bool active) noexcept;
 };
 
 // Preset applicators (Minimal, Standard, Advance, Custom)

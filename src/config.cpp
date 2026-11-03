@@ -63,16 +63,14 @@ constexpr std::size_t canonical_metric_index(MetricType m) {
     return std::size(kCanonicalMetricsOrder);
 }
 
-void add_unique_metric(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec, MetricType m) {
+void add_unique_metric(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec, MetricType m) noexcept {
     if (std::find(vec.begin(), vec.end(), m) == vec.end()) {
-        if (vec.size() < vec.capacity()) {
-            vec.push_back(m);
-        }
+        vec.try_push_back(m);
     }
 }
 
-void sort_canonical_metrics(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec) {
-    std::sort(vec.begin(), vec.end(), [](MetricType a, MetricType b) {
+void sort_canonical_metrics(std::inplace_vector<MetricType, kMaxMetricsCapacity>& vec) noexcept {
+    std::sort(vec.begin(), vec.end(), [](MetricType a, MetricType b) noexcept {
         return canonical_metric_index(a) < canonical_metric_index(b);
     });
 }
@@ -380,19 +378,19 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
 
     if (!parsed_any) return false;
 
-    if (cfg.metrics.empty() && cfg.metrics.size() < cfg.metrics.capacity()) {
-        cfg.metrics.push_back(MetricType::FPS);
+    if (cfg.metrics.empty()) {
+        cfg.metrics.try_push_back(MetricType::FPS);
     }
     cfg.enabled = keep_enabled;
     cfg.gui_open = keep_open;
     return true;
 }
 
-bool HudConfig::has_metric(MetricType m) const {
+bool HudConfig::has_metric(MetricType m) const noexcept {
     return std::find(metrics.begin(), metrics.end(), m) != metrics.end();
 }
 
-void HudConfig::set_metric(MetricType m, bool active) {
+void HudConfig::set_metric(MetricType m, bool active) noexcept {
     if (active) {
         add_unique_metric(metrics, m);
         sort_canonical_metrics(metrics);
@@ -436,9 +434,7 @@ void apply_preset_advance(HudConfig& cfg) {
     cfg.active_preset = "advance";
     cfg.metrics.clear();
     for (MetricType m : kCanonicalMetricsOrder) {
-        if (cfg.metrics.size() < cfg.metrics.capacity()) {
-            cfg.metrics.push_back(m);
-        }
+        cfg.metrics.try_push_back(m);
     }
     cfg.layout = LayoutPosition::CenterTop;
     cfg.arrangement = ArrangementMode::Linear;

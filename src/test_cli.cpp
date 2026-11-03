@@ -215,9 +215,16 @@ void run_all_devices_and_features_suite() {
 #endif
 
         std::inplace_vector<int, 4> test_iv;
-        test_iv.push_back(100);
-        test_iv.push_back(200);
-        bool iv_ok = (test_iv.size() == 2 && test_iv.capacity() == 4 && test_iv[0] == 100 && test_iv[1] == 200);
+        test_iv.try_push_back(100);
+        test_iv.try_push_back(200);
+        std::inplace_vector<int, 2> bounded_iv;
+        bool iv_try_ok = (static_cast<bool>(bounded_iv.try_push_back(1)) &&
+                          static_cast<bool>(bounded_iv.try_push_back(2)) &&
+                          !static_cast<bool>(bounded_iv.try_push_back(3)) &&
+                          bounded_iv.size() == 2);
+        static_assert(noexcept(std::declval<const HudConfig&>().has_metric(MetricType::FPS)));
+        static_assert(noexcept(std::declval<HudConfig&>().set_metric(MetricType::FPS, true)));
+        bool iv_ok = (test_iv.size() == 2 && test_iv.capacity() == 4 && test_iv[0] == 100 && test_iv[1] == 200 && iv_try_ok);
 
         // Verify IpcPacketHeader pack indexing methods (deferred from Task 2)
         IpcPacketHeader hdr;
