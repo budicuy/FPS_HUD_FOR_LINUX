@@ -396,11 +396,20 @@ void TelemetryCollector::init_cpu_sensors() {
         max_cpus = std::max(max_cpus, 512L);
     }
     max_cpus = std::clamp(max_cpus, 1L, 512L);
-    cpu_freq_paths_.reserve(static_cast<size_t>(max_cpus));
-    for (long cpu_idx = 0; cpu_idx < max_cpus; ++cpu_idx) {
+    cpu_freq_paths_.clear();
+    for (long cpu_idx = 0; cpu_idx < max_cpus && cpu_freq_paths_.size() < cpu_freq_paths_.capacity(); ++cpu_idx) {
         std::string p = root_prefix_ + "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/cpufreq/scaling_cur_freq";
         if (fs::exists(p, ec)) {
-            cpu_freq_paths_.push_back(std::move(p));
+            if (cpu_freq_paths_.size() < cpu_freq_paths_.capacity()) {
+                cpu_freq_paths_.push_back(std::move(p));
+            }
+            continue;
+        }
+        std::string p_info = root_prefix_ + "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/cpufreq/cpuinfo_cur_freq";
+        if (fs::exists(p_info, ec)) {
+            if (cpu_freq_paths_.size() < cpu_freq_paths_.capacity()) {
+                cpu_freq_paths_.push_back(std::move(p_info));
+            }
         }
     }
 

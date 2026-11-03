@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <inplace_vector>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -200,7 +201,7 @@ private:
     std::string drm_energy_uj_path_;      // hwmon/energy1_input (microjoules)
 
     // CPU Sensor sysfs paths discovered at init (Intel & AMD)
-    std::vector<std::string> cpu_freq_paths_;
+    std::inplace_vector<std::string, 512> cpu_freq_paths_;
     std::string cpu_temp_path_;
     std::string rapl_energy_path_;
     uint64_t    rapl_max_range_uj_ = 0;
