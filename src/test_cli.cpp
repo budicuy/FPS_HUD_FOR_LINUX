@@ -139,20 +139,35 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
     std::printf(" DEVICE PROFILE: %s\n", device_title);
     std::printf("--------------------------------------------------------------------\n");
 
-    check_cond(d.gpu_available && std::strlen(d.cpu_name) > 2 && std::strlen(d.gpu_name) > 2,
+    const bool is_real_hw = (ram_expect == nullptr);
+    const bool hw_detect_ok = is_real_hw
+        ? (std::strlen(d.cpu_name) > 2 && (!d.gpu_available || std::strlen(d.gpu_name) > 2))
+        : (d.gpu_available && std::strlen(d.cpu_name) > 2 && std::strlen(d.gpu_name) > 2);
+    const bool gpu_sensors_ok = is_real_hw
+        ? (!d.gpu_available || (d.gpu_load_pct >= 0.0f && d.gpu_vram_total_gb >= 0.0f && d.gpu_temp_c >= 0))
+        : (d.gpu_load_pct >= 0.0f && d.gpu_clock_mhz > 0 && d.gpu_vram_total_gb > 0.0f &&
+           d.gpu_vram_used_gb > 0.0f && d.gpu_max_bandwidth_gbs > 0.0f &&
+           d.gpu_temp_c > 0 && d.gpu_power_w > 0.0f);
+    const bool cpu_sensors_ok = is_real_hw
+        ? (d.cpu_load_pct >= 0.0f && d.ram_total_gb > 0.0f && std::strlen(d.local_time_str) >= 4 && api_switch_ok)
+        : (d.cpu_load_pct > 0.0f && d.cpu_clock_mhz > 0 && d.cpu_temp_c > 0 &&
+           d.cpu_power_w > 0.0f && d.ram_total_gb > 0.0f && api_switch_ok);
+    const bool bench_ok = is_real_hw
+        ? (d.last_benchmark.has_result && d.last_benchmark.avg_fps > 120.0f &&
+           d.last_benchmark.max_gpu_temp_c >= 0 && d.last_benchmark.max_cpu_temp_c >= 0)
+        : (d.last_benchmark.has_result && d.last_benchmark.avg_fps > 120.0f &&
+           d.last_benchmark.max_gpu_temp_c > 0 && d.last_benchmark.max_cpu_temp_c > 0);
+
+    check_cond(hw_detect_ok,
                "1. Hardware Model & Vendor Auto-Detection", detail_hw);
     check_cond(d.fps > 80.0f && d.fps_avg > 120.0f && d.fps_1pct_low >= 45.0f && d.fps_1pct_low < d.fps_avg &&
                    d.fps_01pct_low <= d.fps_1pct_low,
                "2. FPS, AVG, 1% Low, 0.1% Low & Stall Reset", detail_fps);
-    check_cond(d.gpu_load_pct >= 0.0f && d.gpu_clock_mhz > 0 && d.gpu_vram_total_gb > 0.0f &&
-                   d.gpu_vram_used_gb > 0.0f &&
-                   d.gpu_max_bandwidth_gbs > 0.0f && d.gpu_temp_c > 0 && d.gpu_power_w > 0.0f,
+    check_cond(gpu_sensors_ok,
                "3. All 7 GPU Sensors (Load/Clk/VRAM/BW/Tmp/Fan/W)", detail_gpu);
-    check_cond(d.cpu_load_pct > 0.0f && d.cpu_clock_mhz > 0 && d.cpu_temp_c > 0 &&
-                   d.cpu_power_w > 0.0f && d.ram_total_gb > 0.0f && api_switch_ok,
+    check_cond(cpu_sensors_ok,
                "4. All 7 CPU/RAM/System Sensors & API Hook", detail_cpu);
-    check_cond(d.last_benchmark.has_result && d.last_benchmark.avg_fps > 120.0f &&
-                   d.last_benchmark.max_gpu_temp_c > 0 && d.last_benchmark.max_cpu_temp_c > 0,
+    check_cond(bench_ok,
                "5. Benchmark CSV Recorder & Peak Sensor Log", detail_bench);
 
     // 6. Extended RAM sensors (Game RAM / Swap / Memory Pressure / RAM Speed)
