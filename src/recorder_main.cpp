@@ -257,7 +257,7 @@ int main(int argc, char* argv[]) {
     vctx->time_base = AVRational{1, target_fps};
     vstream->time_base = vctx->time_base;
     vctx->framerate = AVRational{target_fps, 1};
-    vctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    vctx->pix_fmt = (is_nvenc || is_vaapi) ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
     vctx->bit_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
     vctx->gop_size = target_fps * 2; // 2-second keyframe interval
     vctx->max_b_frames = 0;          // Low latency for gameplay capture
@@ -335,14 +335,26 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Set MP4 FastStart flag for instant web / discord playback
+    // Set MP4 FastStart flag for instant web / discord playback & disable per-packet flush
     AVDictionary* opt_dict = nullptr;
     av_dict_set(&opt_dict, "movflags", "+faststart", 0);
+    av_dict_set(&opt_dict, "flush_packets", "0", 0);
 
     if (!(oc->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
             std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n", out_filename.c_str());
             return 1;
+        }
+
+        // Expand AVIO buffer to 1MB for coalescing SSD writes and reducing syscalls
+        constexpr int kAvioBufferSize = 1024 * 1024;
+        auto* avio_buf = static_cast<unsigned char*>(av_malloc(kAvioBufferSize));
+        if (avio_buf && oc->pb) {
+            av_free(oc->pb->buffer);
+            oc->pb->buffer = avio_buf;
+            oc->pb->buffer_size = kAvioBufferSize;
+            oc->pb->buf_ptr = avio_buf;
+            oc->pb->buf_end = avio_buf;
         }
     }
 
@@ -356,7 +368,7 @@ int main(int argc, char* argv[]) {
     std::mutex mux_mutex;
     std::atomic<int64_t> video_frame_idx{0};
 
-    // Allocate staging video frame (YUV420p)
+    // Allocate staging video frame (NV12 or YUV420P)
     AVFrame* vframe = av_frame_alloc();
     vframe->format = vctx->pix_fmt;
     vframe->width = target_width;
@@ -376,7 +388,7 @@ int main(int argc, char* argv[]) {
 
     // SwsContext for RGB/NV12 conversion if needed
     SwsContext* sws_ctx = sws_getContext(target_width, target_height, AV_PIX_FMT_RGBA,
-                                         target_width, target_height, AV_PIX_FMT_YUV420P,
+                                         target_width, target_height, vctx->pix_fmt,
                                          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 
     // Spawn Audio Capture Thread
@@ -504,7 +516,7 @@ int main(int argc, char* argv[]) {
                     if (nr == static_cast<ssize_t>(rem)) {
                         try_map_shm(shm_path);
 
-                        if (shm_base && shm_hdr && notify.slot < 2) {
+                        if (shm_base && shm_hdr && notify.slot < 3) {
                             const uint8_t* src = static_cast<const uint8_t*>(shm_base) + shm_hdr->offset[notify.slot];
                             int stride = notify.width * 4;
 

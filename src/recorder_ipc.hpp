@@ -70,9 +70,9 @@ struct ShmFrameHeader {
     uint32_t format;                     // 0 = BGRA, 1 = RGBA
     uint32_t flip_y;                     // 0 = normal (Vulkan), 1 = flipped (OpenGL)
     uint32_t slot_size;
-    std::atomic<uint32_t> write_slot{0}; // 0 or 1
+    std::atomic<uint32_t> write_slot{0}; // 0, 1, or 2 (Triple-buffering)
     std::atomic<uint64_t> sequence{0};
-    uint32_t offset[2];
+    uint32_t offset[3];                  // Slot 0, Slot 1, Slot 2
 };
 
 struct IpcFrameNotify {

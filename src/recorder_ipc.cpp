@@ -420,7 +420,7 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
 
     shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
     uint32_t slot_sz = width * height * 4;
-    size_t total_sz = 4096 + static_cast<size_t>(slot_sz) * 2;
+    size_t total_sz = 4096 + static_cast<size_t>(slot_sz) * 3;
 
     shm_fd_ = open(shm_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (shm_fd_ < 0) {
@@ -458,6 +458,7 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
     hdr->sequence.store(0, std::memory_order_relaxed);
     hdr->offset[0] = 4096;
     hdr->offset[1] = 4096 + slot_sz;
+    hdr->offset[2] = 4096 + slot_sz * 2;
 
     return true;
 }
@@ -496,7 +497,7 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
 
     auto* hdr = reinterpret_cast<ShmFrameHeader*>(shm_base_);
     uint32_t cur_slot = hdr->write_slot.load(std::memory_order_relaxed);
-    uint32_t next_slot = (cur_slot + 1) % 2;
+    uint32_t next_slot = (cur_slot + 1) % 3;
 
     uint8_t* dst = reinterpret_cast<uint8_t*>(shm_base_) + hdr->offset[next_slot];
     std::memcpy(dst, pixels, static_cast<size_t>(width) * height * 4);

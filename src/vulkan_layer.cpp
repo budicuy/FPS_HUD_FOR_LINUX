@@ -921,8 +921,20 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
 
     dd->CmdEndRenderPass(frame.command_buffer);
 
-    // Record GPU copy of swapchain image to staging buffer if recording is active
-    if (fpshud::RecorderController::instance().is_recording() && ensure_frame_capture_buffer(dd, sd, frame)) {
+    // Record GPU copy of swapchain image to staging buffer if recording is active (with 60fps pacing)
+    bool should_capture_frame = false;
+    if (fpshud::RecorderController::instance().is_recording()) {
+        static auto s_last_vk_capture = std::chrono::steady_clock::time_point{};
+        auto now = std::chrono::steady_clock::now();
+        int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
+        auto min_interval = std::chrono::microseconds(1000000 / (rec_fps + 2));
+        if (now - s_last_vk_capture >= min_interval) {
+            s_last_vk_capture = now;
+            should_capture_frame = true;
+        }
+    }
+
+    if (should_capture_frame && ensure_frame_capture_buffer(dd, sd, frame)) {
         VkImageMemoryBarrier b1{};
         b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         b1.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;

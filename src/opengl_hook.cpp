@@ -134,13 +134,20 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
     }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     if (fpshud::RecorderController::instance().is_recording() && width > 0 && height > 0) {
-        static std::vector<uint8_t> s_gl_pixels;
-        size_t needed = static_cast<size_t>(width) * height * 4;
-        if (s_gl_pixels.size() < needed) {
-            s_gl_pixels.resize(needed);
+        static auto s_last_gl_capture = std::chrono::steady_clock::time_point{};
+        auto now = std::chrono::steady_clock::now();
+        int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
+        auto min_interval = std::chrono::microseconds(1000000 / (rec_fps + 2));
+        if (now - s_last_gl_capture >= min_interval) {
+            s_last_gl_capture = now;
+            static std::vector<uint8_t> s_gl_pixels;
+            size_t needed = static_cast<size_t>(width) * height * 4;
+            if (s_gl_pixels.size() < needed) {
+                s_gl_pixels.resize(needed);
+            }
+            glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, s_gl_pixels.data());
+            fpshud::RecorderController::instance().submit_frame(s_gl_pixels.data(), static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0 /* BGRA */, true /* flip_y */);
         }
-        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, s_gl_pixels.data());
-        fpshud::RecorderController::instance().submit_frame(s_gl_pixels.data(), static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0 /* BGRA */, true /* flip_y */);
     }
 }
 
