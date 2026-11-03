@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include "telemetry.hpp"
 #include "recorder_ipc.hpp"
+#include "pack_indexing.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -215,6 +216,12 @@ void run_all_devices_and_features_suite() {
     }
 
     {
+        auto val = fpshud::pack_element<2>("first", 123, 45.67f, true);
+        static_assert(std::is_same_v<fpshud::PackType<2, const char*, int, float, bool>, float>);
+        check_cond(val == 45.67f, "0.1 ISO C++26 Pack Indexing Utility", "args...[2] retrieved successfully");
+    }
+
+    {
         HudConfig rec_cfg;
         rec_cfg.record_codec = 1;         // HEVC
         rec_cfg.record_quality_mode = 0;  // Adaptive CQP
@@ -233,7 +240,7 @@ void run_all_devices_and_features_suite() {
                        loaded_rec_cfg.record_container == 0);
 
         check_cond(rec_ok,
-                   "0.1 Industry-Standard HEVC + CQP Config",
+                   "0.2 Industry-Standard HEVC + CQP Config",
                    "HEVC (hvc1), Adaptive CQP & Rate Control INI persistence verified");
     }
 

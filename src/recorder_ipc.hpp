@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "pack_indexing.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -35,6 +36,17 @@ struct IpcPacketHeader {
     uint32_t command = 0;
     uint32_t payload_size = 0;
     uint32_t flags = 0;
+
+    // Inspect packet header fields using C++26 pack indexing
+    template <std::size_t Index>
+    [[nodiscard]] constexpr uint32_t get_field() const noexcept {
+        static_assert(Index < 4, "IpcPacketHeader field index out of range (0=magic, 1=command, 2=payload_size, 3=flags)");
+        return pack_element<Index>(magic, command, payload_size, flags);
+    }
+
+    [[nodiscard]] constexpr bool is_valid() const noexcept {
+        return get_field<0>() == kRecorderIpcMagic;
+    }
 };
 
 struct IpcStartPayload {
