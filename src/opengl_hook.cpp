@@ -20,11 +20,13 @@ using PFN_glXSwapBuffers = void (*)(Display*, GLXDrawable);
 using PFN_glXGetProcAddress = __GLXextFuncPtr (*)(const GLubyte*);
 using PFN_glXGetProcAddressARB = __GLXextFuncPtr (*)(const GLubyte*);
 using PFN_eglSwapBuffers = EGLBoolean (*)(EGLDisplay, EGLSurface);
+using PFN_eglGetProcAddress = __eglMustCastToProperFunctionPointerType (*)(const char*);
 
 PFN_glXSwapBuffers real_glXSwapBuffers = nullptr;
 PFN_glXGetProcAddress real_glXGetProcAddress = nullptr;
 PFN_glXGetProcAddressARB real_glXGetProcAddressARB = nullptr;
 PFN_eglSwapBuffers real_eglSwapBuffers = nullptr;
+PFN_eglGetProcAddress real_eglGetProcAddress = nullptr;
 
 std::mutex g_gl_mutex;
 ImGuiContext* g_gl_imgui_ctx = nullptr;
@@ -73,6 +75,12 @@ void ensure_egl_resolved() {
             real_eglSwapBuffers = reinterpret_cast<PFN_eglSwapBuffers>(dlsym(get_egl_lib(), "eglSwapBuffers"));
         }
     }
+    if (!real_eglGetProcAddress) {
+        real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(RTLD_NEXT, "eglGetProcAddress"));
+        if (!real_eglGetProcAddress && get_egl_lib()) {
+            real_eglGetProcAddress = reinterpret_cast<PFN_eglGetProcAddress>(dlsym(get_egl_lib(), "eglGetProcAddress"));
+        }
+    }
 }
 
 void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fallback_h) {
@@ -104,7 +112,13 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
         io.LogFilename = nullptr;
         ImGui::StyleColorsDark();
         fpshud::setup_overlay_font(io);
-        g_gl_backend_initialized = ImGui_ImplOpenGL3_Init("#version 130");
+
+        const char* gl_ver = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        const char* glsl_version = "#version 130";
+        if (gl_ver && std::strstr(gl_ver, "OpenGL ES")) {
+            glsl_version = (std::strstr(gl_ver, "OpenGL ES 2") != nullptr) ? "#version 100" : "#version 300 es";
+        }
+        g_gl_backend_initialized = ImGui_ImplOpenGL3_Init(glsl_version);
     }
 
     if (!g_gl_backend_initialized) return;
@@ -233,6 +247,15 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         render_gl_frame(reinterpret_cast<void*>(ctx), static_cast<unsigned int>(w), static_cast<unsigned int>(h));
     }
     return real_eglSwapBuffers ? real_eglSwapBuffers(dpy, surface) : EGL_FALSE;
+}
+
+__attribute__((visibility("default")))
+__eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* procName) {
+    ensure_egl_resolved();
+    if (procName && std::strcmp(procName, "eglSwapBuffers") == 0) {
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&eglSwapBuffers);
+    }
+    return real_eglGetProcAddress ? real_eglGetProcAddress(procName) : nullptr;
 }
 
 } // extern "C"
