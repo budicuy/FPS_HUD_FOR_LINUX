@@ -60,6 +60,31 @@ struct IpcStatusResponse {
     char error_msg[128] = {0};
 };
 
+// Header located at start of POSIX Shared Memory (/dev/shm/fpshud_rec_shm_<PID>)
+constexpr uint32_t kShmFrameMagic = 0x4650534D; // "FPSM"
+
+struct ShmFrameHeader {
+    uint32_t magic;                      // kShmFrameMagic
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;                     // 0 = BGRA, 1 = RGBA
+    uint32_t flip_y;                     // 0 = normal (Vulkan), 1 = flipped (OpenGL)
+    uint32_t slot_size;
+    std::atomic<uint32_t> write_slot{0}; // 0 or 1
+    std::atomic<uint64_t> sequence{0};
+    uint32_t offset[2];
+};
+
+struct IpcFrameNotify {
+    IpcPacketHeader hdr;                 // command = SendFrame
+    uint32_t slot = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t format = 0;
+    uint32_t flip_y = 0;
+    uint64_t seq = 0;
+};
+
 // Singleton controller in libfpshud.so to manage on-demand helper process & IPC
 class RecorderController {
 public:
@@ -87,9 +112,15 @@ public:
     // Called from render loop to provide frame dimensions & handle on-demand frame transfers
     void on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd = -1);
 
+    // Submits an uncompressed frame buffer (Vulkan staging buffer or OpenGL read pixels) to shared memory
+    void submit_frame(const void* pixels, uint32_t width, uint32_t height, uint32_t format = 0, bool flip_y = false);
+
 private:
     RecorderController();
     ~RecorderController();
+
+    bool setup_shm(uint32_t width, uint32_t height);
+    void cleanup_shm();
 
     bool spawn_helper_process(const HudConfig& cfg, float display_w, float display_h);
     void connect_socket();
@@ -107,6 +138,14 @@ private:
     pid_t helper_pid_ = -1;
     std::string socket_path_;
     std::chrono::steady_clock::time_point record_start_time_{};
+
+    // Shared Memory state
+    std::string shm_path_;
+    int shm_fd_ = -1;
+    void* shm_base_ = nullptr;
+    size_t shm_size_ = 0;
+    uint32_t shm_width_ = 0;
+    uint32_t shm_height_ = 0;
 
     // Toast state (lasts 3.5 seconds)
     std::string toast_msg_;

@@ -133,7 +133,15 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
         ImGui::Render();
     }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    fpshud::RecorderController::instance().on_frame_present(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    if (fpshud::RecorderController::instance().is_recording() && width > 0 && height > 0) {
+        static std::vector<uint8_t> s_gl_pixels;
+        size_t needed = static_cast<size_t>(width) * height * 4;
+        if (s_gl_pixels.size() < needed) {
+            s_gl_pixels.resize(needed);
+        }
+        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, s_gl_pixels.data());
+        fpshud::RecorderController::instance().submit_frame(s_gl_pixels.data(), static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0 /* BGRA */, true /* flip_y */);
+    }
 }
 
 } // namespace

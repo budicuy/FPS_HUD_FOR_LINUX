@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -74,10 +75,12 @@ RecorderController& RecorderController::instance() {
 
 RecorderController::RecorderController() {
     socket_path_ = "/tmp/fpshud_rec_" + std::to_string(getpid()) + ".sock";
+    shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
 }
 
 RecorderController::~RecorderController() {
     stop_recording();
+    cleanup_shm();
 }
 
 bool RecorderController::is_recording() const noexcept {
@@ -215,10 +218,11 @@ void RecorderController::stop_recording() {
         helper_pid_ = -1;
     }
 
-    // Clean up socket file
+    // Clean up socket and shared memory files
     if (!socket_path_.empty()) {
         unlink(socket_path_.c_str());
     }
+    cleanup_shm();
 
     if (!last_saved_file_.empty()) {
         toast_msg_ = "[✓] Video tersimpan: " + last_saved_file_;
@@ -261,6 +265,9 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
     std::string bin_path = get_helper_binary_path();
     unlink(socket_path_.c_str());
 
+    // Prepare shared memory for zero-copy frame transport
+    setup_shm(static_cast<uint32_t>(display_w), static_cast<uint32_t>(display_h));
+
     std::string w_str = std::to_string(static_cast<int>(display_w));
     std::string h_str = std::to_string(static_cast<int>(display_h));
     std::string fps_str = std::to_string((cfg.record_fps > 0) ? cfg.record_fps : 60);
@@ -270,6 +277,7 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
     char* argv[] = {
         const_cast<char*>(bin_path.c_str()),
         const_cast<char*>("--socket"), const_cast<char*>(socket_path_.c_str()),
+        const_cast<char*>("--shm"), const_cast<char*>(shm_path_.c_str()),
         const_cast<char*>("--width"), const_cast<char*>(w_str.c_str()),
         const_cast<char*>("--height"), const_cast<char*>(h_str.c_str()),
         const_cast<char*>("--fps"), const_cast<char*>(fps_str.c_str()),
@@ -402,41 +410,124 @@ void RecorderController::send_command(RecorderCommand cmd, const void* payload, 
     }
 }
 
-void RecorderController::on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd) {
-    if (!is_recording_.load(std::memory_order_relaxed)) {
+bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return false;
+    if (shm_base_ && shm_width_ == width && shm_height_ == height) {
+        return true;
+    }
+
+    cleanup_shm();
+
+    shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
+    uint32_t slot_sz = width * height * 4;
+    size_t total_sz = 4096 + static_cast<size_t>(slot_sz) * 2;
+
+    shm_fd_ = open(shm_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+    if (shm_fd_ < 0) {
+        return false;
+    }
+
+    if (ftruncate(shm_fd_, total_sz) != 0) {
+        close(shm_fd_);
+        shm_fd_ = -1;
+        unlink(shm_path_.c_str());
+        return false;
+    }
+
+    shm_base_ = mmap(nullptr, total_sz, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd_, 0);
+    if (shm_base_ == MAP_FAILED) {
+        shm_base_ = nullptr;
+        close(shm_fd_);
+        shm_fd_ = -1;
+        unlink(shm_path_.c_str());
+        return false;
+    }
+
+    shm_size_ = total_sz;
+    shm_width_ = width;
+    shm_height_ = height;
+
+    auto* hdr = reinterpret_cast<ShmFrameHeader*>(shm_base_);
+    hdr->magic = kShmFrameMagic;
+    hdr->width = width;
+    hdr->height = height;
+    hdr->format = 0;
+    hdr->flip_y = 0;
+    hdr->slot_size = slot_sz;
+    hdr->write_slot.store(0, std::memory_order_relaxed);
+    hdr->sequence.store(0, std::memory_order_relaxed);
+    hdr->offset[0] = 4096;
+    hdr->offset[1] = 4096 + slot_sz;
+
+    return true;
+}
+
+void RecorderController::cleanup_shm() {
+    if (shm_base_ && shm_size_ > 0) {
+        munmap(shm_base_, shm_size_);
+        shm_base_ = nullptr;
+        shm_size_ = 0;
+    }
+    if (shm_fd_ >= 0) {
+        close(shm_fd_);
+        shm_fd_ = -1;
+    }
+    if (!shm_path_.empty()) {
+        unlink(shm_path_.c_str());
+        shm_path_.clear();
+    }
+    shm_width_ = 0;
+    shm_height_ = 0;
+}
+
+void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32_t height, uint32_t format, bool flip_y) {
+    if (!is_recording_.load(std::memory_order_relaxed) || !pixels || width == 0 || height == 0) {
         return;
     }
 
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!shm_base_ || shm_width_ != width || shm_height_ != height) {
+        if (!setup_shm(width, height)) {
+            return;
+        }
+    }
+
+    auto* hdr = reinterpret_cast<ShmFrameHeader*>(shm_base_);
+    uint32_t cur_slot = hdr->write_slot.load(std::memory_order_relaxed);
+    uint32_t next_slot = (cur_slot + 1) % 2;
+
+    uint8_t* dst = reinterpret_cast<uint8_t*>(shm_base_) + hdr->offset[next_slot];
+    std::memcpy(dst, pixels, static_cast<size_t>(width) * height * 4);
+
+    hdr->format = format;
+    hdr->flip_y = flip_y ? 1 : 0;
+    hdr->write_slot.store(next_slot, std::memory_order_release);
+    uint64_t s = hdr->sequence.fetch_add(1, std::memory_order_release) + 1;
+
     recorded_frames_.fetch_add(1, std::memory_order_relaxed);
 
-    if (socket_fd_ >= 0 && dmabuf_fd >= 0) {
-        struct msghdr msg{};
-        struct iovec iov[1];
-        IpcPacketHeader hdr{};
-        hdr.magic = kRecorderIpcMagic;
-        hdr.command = static_cast<uint32_t>(RecorderCommand::SendFrame);
-        hdr.payload_size = 0;
+    if (socket_fd_ >= 0) {
+        IpcFrameNotify notify{};
+        notify.hdr.magic = kRecorderIpcMagic;
+        notify.hdr.command = static_cast<uint32_t>(RecorderCommand::SendFrame);
+        notify.hdr.payload_size = sizeof(notify) - sizeof(IpcPacketHeader);
+        notify.slot = next_slot;
+        notify.width = width;
+        notify.height = height;
+        notify.format = format;
+        notify.flip_y = flip_y ? 1 : 0;
+        notify.seq = s;
 
-        iov[0].iov_base = &hdr;
-        iov[0].iov_len = sizeof(hdr);
-        msg.msg_iov = iov;
-        msg.msg_iovlen = 1;
-
-        union {
-            struct cmsghdr cm;
-            char control[CMSG_SPACE(sizeof(int))];
-        } control_un;
-        msg.msg_control = control_un.control;
-        msg.msg_controllen = sizeof(control_un.control);
-
-        struct cmsghdr* cmptr = CMSG_FIRSTHDR(&msg);
-        cmptr->cmsg_len = CMSG_LEN(sizeof(int));
-        cmptr->cmsg_level = SOL_SOCKET;
-        cmptr->cmsg_type = SCM_RIGHTS;
-        *reinterpret_cast<int*>(CMSG_DATA(cmptr)) = dmabuf_fd;
-
-        sendmsg(socket_fd_, &msg, MSG_DONTWAIT);
+        send(socket_fd_, &notify, sizeof(notify), MSG_DONTWAIT);
     }
+}
+
+void RecorderController::on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd) {
+    (void)dmabuf_fd;
+    if (!is_recording_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    recorded_frames_.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace fpshud

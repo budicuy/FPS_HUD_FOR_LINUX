@@ -34,6 +34,7 @@ struct InstanceData {
     PFN_vkGetInstanceProcAddr GetInstanceProcAddr = nullptr;
     PFN_vkDestroyInstance DestroyInstance = nullptr;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties = nullptr;
+    PFN_vkGetPhysicalDeviceMemoryProperties GetPhysicalDeviceMemoryProperties = nullptr;
 };
 
 struct FrameResources {
@@ -44,6 +45,13 @@ struct FrameResources {
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     VkSemaphore semaphore = VK_NULL_HANDLE;
+
+    // Staging resources for screen recording
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    void* mapped_ptr = nullptr;
+    VkDeviceSize buffer_size = 0;
+    bool has_valid_capture = false;
 };
 
 struct DeviceData {
@@ -83,6 +91,19 @@ struct DeviceData {
     PFN_vkResetFences ResetFences = nullptr;
     PFN_vkCreateSemaphore CreateSemaphore = nullptr;
     PFN_vkDestroySemaphore DestroySemaphore = nullptr;
+
+    // Frame capture device function pointers
+    PFN_vkCreateBuffer CreateBuffer = nullptr;
+    PFN_vkDestroyBuffer DestroyBuffer = nullptr;
+    PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements = nullptr;
+    PFN_vkAllocateMemory AllocateMemory = nullptr;
+    PFN_vkFreeMemory FreeMemory = nullptr;
+    PFN_vkBindBufferMemory BindBufferMemory = nullptr;
+    PFN_vkMapMemory MapMemory = nullptr;
+    PFN_vkUnmapMemory UnmapMemory = nullptr;
+    PFN_vkCmdCopyImageToBuffer CmdCopyImageToBuffer = nullptr;
+    PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
+    PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges = nullptr;
 };
 
 struct SwapchainData {
@@ -186,6 +207,21 @@ void destroy_swapchain_data(SwapchainData* sd) {
     }
 
     for (auto& f : sd->frames) {
+        if (f.mapped_ptr && dd->UnmapMemory) {
+            dd->UnmapMemory(dd->device, f.staging_memory);
+            f.mapped_ptr = nullptr;
+        }
+        if (f.staging_buffer && dd->DestroyBuffer) {
+            dd->DestroyBuffer(dd->device, f.staging_buffer, nullptr);
+            f.staging_buffer = VK_NULL_HANDLE;
+        }
+        if (f.staging_memory && dd->FreeMemory) {
+            dd->FreeMemory(dd->device, f.staging_memory, nullptr);
+            f.staging_memory = VK_NULL_HANDLE;
+        }
+        f.buffer_size = 0;
+        f.has_valid_capture = false;
+
         if (f.fence && dd->DestroyFence) dd->DestroyFence(dd->device, f.fence, nullptr);
         if (f.semaphore && dd->DestroySemaphore) dd->DestroySemaphore(dd->device, f.semaphore, nullptr);
         if (f.command_pool && dd->DestroyCommandPool) dd->DestroyCommandPool(dd->device, f.command_pool, nullptr);
@@ -353,6 +389,105 @@ bool init_swapchain_overlay(SwapchainData* sd) {
     return sd->imgui_initialized;
 }
 
+static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResources& frame) {
+    VkDeviceSize required_size = static_cast<VkDeviceSize>(sd->extent.width) * sd->extent.height * 4;
+    if (frame.staging_buffer != VK_NULL_HANDLE && frame.buffer_size >= required_size) {
+        return true;
+    }
+
+    if (frame.mapped_ptr && dd->UnmapMemory) {
+        dd->UnmapMemory(dd->device, frame.staging_memory);
+        frame.mapped_ptr = nullptr;
+    }
+    if (frame.staging_buffer && dd->DestroyBuffer) {
+        dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
+        frame.staging_buffer = VK_NULL_HANDLE;
+    }
+    if (frame.staging_memory && dd->FreeMemory) {
+        dd->FreeMemory(dd->device, frame.staging_memory, nullptr);
+        frame.staging_memory = VK_NULL_HANDLE;
+    }
+    frame.buffer_size = 0;
+
+    if (!dd->CreateBuffer || !dd->AllocateMemory || !dd->BindBufferMemory || !dd->MapMemory) {
+        return false;
+    }
+
+    VkBufferCreateInfo buf_info{};
+    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_info.size = required_size;
+    buf_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (dd->CreateBuffer(dd->device, &buf_info, nullptr, &frame.staging_buffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements mem_req{};
+    dd->GetBufferMemoryRequirements(dd->device, frame.staging_buffer, &mem_req);
+
+    uint32_t mem_type = 0;
+    bool found = false;
+    if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
+        VkPhysicalDeviceMemoryProperties mem_props{};
+        dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
+        for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+            if ((mem_req.memoryTypeBits & (1 << i)) &&
+                (mem_props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+                mem_type = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+                if ((mem_req.memoryTypeBits & (1 << i)) &&
+                    (mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                    mem_type = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!found) {
+        dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
+        frame.staging_buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_req.size;
+    alloc_info.memoryTypeIndex = mem_type;
+    if (dd->AllocateMemory(dd->device, &alloc_info, nullptr, &frame.staging_memory) != VK_SUCCESS) {
+        dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
+        frame.staging_buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    if (dd->BindBufferMemory(dd->device, frame.staging_buffer, frame.staging_memory, 0) != VK_SUCCESS) {
+        dd->FreeMemory(dd->device, frame.staging_memory, nullptr);
+        dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
+        frame.staging_buffer = VK_NULL_HANDLE;
+        frame.staging_memory = VK_NULL_HANDLE;
+        return false;
+    }
+
+    if (dd->MapMemory(dd->device, frame.staging_memory, 0, required_size, 0, &frame.mapped_ptr) != VK_SUCCESS) {
+        dd->FreeMemory(dd->device, frame.staging_memory, nullptr);
+        dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
+        frame.staging_buffer = VK_NULL_HANDLE;
+        frame.staging_memory = VK_NULL_HANDLE;
+        frame.mapped_ptr = nullptr;
+        return false;
+    }
+
+    frame.buffer_size = required_size;
+    return true;
+}
+
 // ============================================================================
 // Intercepted Vulkan Functions
 // ============================================================================
@@ -396,6 +531,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(
         fpGetInstanceProcAddr(*pInstance, "vkDestroyInstance"));
     id->GetPhysicalDeviceQueueFamilyProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
         fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+    id->GetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
+        fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
 
     std::lock_guard<std::mutex> lock(g_map_mutex);
     g_instance_map[get_dispatch_key(*pInstance)] = id;
@@ -493,6 +630,17 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     LOAD_DEV_FN(ResetFences);
     LOAD_DEV_FN(CreateSemaphore);
     LOAD_DEV_FN(DestroySemaphore);
+    LOAD_DEV_FN(CreateBuffer);
+    LOAD_DEV_FN(DestroyBuffer);
+    LOAD_DEV_FN(GetBufferMemoryRequirements);
+    LOAD_DEV_FN(AllocateMemory);
+    LOAD_DEV_FN(FreeMemory);
+    LOAD_DEV_FN(BindBufferMemory);
+    LOAD_DEV_FN(MapMemory);
+    LOAD_DEV_FN(UnmapMemory);
+    LOAD_DEV_FN(CmdCopyImageToBuffer);
+    LOAD_DEV_FN(CmdPipelineBarrier);
+    LOAD_DEV_FN(InvalidateMappedMemoryRanges);
     #undef LOAD_DEV_FN
 
     uint32_t chosen_family = 0;
@@ -596,12 +744,16 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
     }
 
     VkSwapchainCreateInfoKHR modified_info = *pCreateInfo;
-    modified_info.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    modified_info.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     VkResult res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
     if (res != VK_SUCCESS) {
-        res = dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
-        if (res != VK_SUCCESS) return res;
+        modified_info.imageUsage = pCreateInfo->imageUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
+        if (res != VK_SUCCESS) {
+            res = dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+            if (res != VK_SUCCESS) return res;
+        }
     }
 
     if (!fpshud::get_global_config().enabled) {
@@ -688,6 +840,23 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     dd->ResetFences(dd->device, 1, &frame.fence);
     dd->ResetCommandBuffer(frame.command_buffer, 0);
 
+    // If recording is active and previous GPU frame copy finished, send to recorder
+    if (fpshud::RecorderController::instance().is_recording() && frame.has_valid_capture && frame.mapped_ptr) {
+        if (dd->InvalidateMappedMemoryRanges) {
+            VkMappedMemoryRange range{};
+            range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+            range.memory = frame.staging_memory;
+            range.offset = 0;
+            range.size = VK_WHOLE_SIZE;
+            dd->InvalidateMappedMemoryRanges(dd->device, 1, &range);
+        }
+        uint32_t fmt = 0; // 0 = BGRA
+        if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB) {
+            fmt = 1; // 1 = RGBA
+        }
+        fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width, sd->extent.height, fmt, false);
+    }
+
     ImGui::SetCurrentContext(sd->imgui_context);
     ImGuiIO& io = ImGui::GetIO();
     float w = static_cast<float>(sd->extent.width);
@@ -721,6 +890,78 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.command_buffer);
 
     dd->CmdEndRenderPass(frame.command_buffer);
+
+    // Record GPU copy of swapchain image to staging buffer if recording is active
+    if (fpshud::RecorderController::instance().is_recording() && ensure_frame_capture_buffer(dd, sd, frame)) {
+        VkImageMemoryBarrier b1{};
+        b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b1.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.image = frame.image;
+        b1.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b1.subresourceRange.baseMipLevel = 0;
+        b1.subresourceRange.levelCount = 1;
+        b1.subresourceRange.baseArrayLayer = 0;
+        b1.subresourceRange.layerCount = 1;
+        b1.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        b1.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        dd->CmdPipelineBarrier(
+            frame.command_buffer,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b1
+        );
+
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {sd->extent.width, sd->extent.height, 1};
+
+        dd->CmdCopyImageToBuffer(
+            frame.command_buffer,
+            frame.image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            frame.staging_buffer,
+            1,
+            &region
+        );
+
+        VkImageMemoryBarrier b2{};
+        b2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b2.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b2.image = frame.image;
+        b2.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b2.subresourceRange.baseMipLevel = 0;
+        b2.subresourceRange.levelCount = 1;
+        b2.subresourceRange.baseArrayLayer = 0;
+        b2.subresourceRange.layerCount = 1;
+        b2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        b2.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+
+        dd->CmdPipelineBarrier(
+            frame.command_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b2
+        );
+
+        frame.has_valid_capture = true;
+    } else {
+        frame.has_valid_capture = false;
+    }
+
     dd->EndCommandBuffer(frame.command_buffer);
 
     VkPipelineStageFlags stack_wait_stages[8] = {

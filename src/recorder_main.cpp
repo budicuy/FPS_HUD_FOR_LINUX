@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -85,6 +86,7 @@ int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
 
     std::string socket_path;
+    std::string shm_path;
     int target_width = 1920;
     int target_height = 1080;
     int target_fps = 60;
@@ -94,6 +96,7 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--socket" && i + 1 < argc) socket_path = argv[++i];
+        else if (arg == "--shm" && i + 1 < argc) shm_path = argv[++i];
         else if (arg == "--width" && i + 1 < argc) target_width = std::max(640, std::atoi(argv[++i]));
         else if (arg == "--height" && i + 1 < argc) target_height = std::max(360, std::atoi(argv[++i]));
         else if (arg == "--fps" && i + 1 < argc) target_fps = std::clamp(std::atoi(argv[++i]), 15, 240);
@@ -102,9 +105,32 @@ int main(int argc, char* argv[]) {
     }
 
     if (socket_path.empty()) {
-        std::fprintf(stderr, "Usage: fpshud_recorder --socket <path> [--width W] [--height H] [--fps F] [--bitrate B] [--dir D]\n");
+        std::fprintf(stderr, "Usage: fpshud_recorder --socket <path> [--shm <path>] [--width W] [--height H] [--fps F] [--bitrate B] [--dir D]\n");
         return 1;
     }
+
+    void* shm_base = nullptr;
+    size_t shm_size = 0;
+    fpshud::ShmFrameHeader* shm_hdr = nullptr;
+
+    auto try_map_shm = [&](const std::string& path) {
+        if (shm_base || path.empty()) return;
+        int sfd = open(path.c_str(), O_RDONLY);
+        if (sfd >= 0) {
+            struct stat st{};
+            if (fstat(sfd, &st) == 0 && st.st_size > 4096) {
+                shm_size = static_cast<size_t>(st.st_size);
+                shm_base = mmap(nullptr, shm_size, PROT_READ, MAP_SHARED, sfd, 0);
+                if (shm_base != MAP_FAILED) {
+                    shm_hdr = reinterpret_cast<fpshud::ShmFrameHeader*>(shm_base);
+                } else {
+                    shm_base = nullptr;
+                }
+            }
+            close(sfd);
+        }
+    };
+    try_map_shm(shm_path);
 
     // 1. Setup Unix Domain Socket Server for On-Demand Control
     unlink(socket_path.c_str());
@@ -427,15 +453,34 @@ int main(int argc, char* argv[]) {
     // 6. Main Socket Event Loop: Handle Frame Signals & Stop / Replay Commands
     AVPacket* v_pkt = av_packet_alloc();
     auto session_start = std::chrono::steady_clock::now();
+    bool has_received_game_frame = false;
+    AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
+    int last_src_w = 0, last_src_h = 0;
+
+    auto frame_interval = std::chrono::microseconds(1000000 / target_fps);
+    auto next_frame_time = std::chrono::steady_clock::now();
+    int64_t next_pts = 0;
 
     while (g_running.load(std::memory_order_relaxed)) {
+        struct timeval sel_tv{};
+        if (has_received_game_frame) {
+            auto now = std::chrono::steady_clock::now();
+            if (next_frame_time > now) {
+                auto diff = std::chrono::duration_cast<std::chrono::microseconds>(next_frame_time - now).count();
+                sel_tv.tv_sec = static_cast<long>(diff / 1000000);
+                sel_tv.tv_usec = static_cast<long>(diff % 1000000);
+            } else {
+                sel_tv.tv_sec = 0;
+                sel_tv.tv_usec = 0;
+            }
+        } else {
+            sel_tv.tv_sec = 0;
+            sel_tv.tv_usec = 50000; // 50ms wait for first frame
+        }
+
         fd_set read_fds;
         FD_ZERO(&read_fds);
         FD_SET(client_fd, &read_fds);
-
-        struct timeval sel_tv{};
-        sel_tv.tv_sec = 0;
-        sel_tv.tv_usec = 16000; // ~60 Hz tick
 
         int ret = select(client_fd + 1, &read_fds, nullptr, nullptr, &sel_tv);
         if (ret > 0 && FD_ISSET(client_fd, &read_fds)) {
@@ -452,6 +497,49 @@ int main(int argc, char* argv[]) {
                 if (cmd == fpshud::RecorderCommand::StopRecord) {
                     g_running.store(false, std::memory_order_relaxed);
                     break;
+                } else if (cmd == fpshud::RecorderCommand::SendFrame) {
+                    fpshud::IpcFrameNotify notify{};
+                    size_t rem = sizeof(notify) - sizeof(fpshud::IpcPacketHeader);
+                    ssize_t nr = recv(client_fd, reinterpret_cast<char*>(&notify) + sizeof(fpshud::IpcPacketHeader), rem, MSG_WAITALL);
+                    if (nr == static_cast<ssize_t>(rem)) {
+                        try_map_shm(shm_path);
+
+                        if (shm_base && shm_hdr && notify.slot < 2) {
+                            const uint8_t* src = static_cast<const uint8_t*>(shm_base) + shm_hdr->offset[notify.slot];
+                            int stride = notify.width * 4;
+
+                            AVPixelFormat src_fmt = (notify.format == 1) ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
+                            if (!sws_ctx || last_src_fmt != src_fmt || last_src_w != static_cast<int>(notify.width) || last_src_h != static_cast<int>(notify.height)) {
+                                if (sws_ctx) sws_freeContext(sws_ctx);
+                                sws_ctx = sws_getContext(
+                                    notify.width, notify.height, src_fmt,
+                                    target_width, target_height, vctx->pix_fmt,
+                                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
+                                );
+                                last_src_fmt = src_fmt;
+                                last_src_w = notify.width;
+                                last_src_h = notify.height;
+                            }
+
+                            av_frame_make_writable(vframe);
+                            if (notify.flip_y) {
+                                const uint8_t* src_slice[1] = { src + static_cast<size_t>(notify.height - 1) * stride };
+                                int src_stride[1] = { -stride };
+                                sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
+                            } else {
+                                const uint8_t* src_slice[1] = { src };
+                                int src_stride[1] = { stride };
+                                sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
+                            }
+
+                            if (!has_received_game_frame) {
+                                has_received_game_frame = true;
+                                session_start = std::chrono::steady_clock::now();
+                                next_frame_time = session_start;
+                                next_pts = 0;
+                            }
+                        }
+                    }
                 } else if (cmd == fpshud::RecorderCommand::QueryStatus) {
                     fpshud::IpcStatusResponse status_resp{};
                     status_resp.magic = fpshud::kRecorderIpcMagic;
@@ -464,20 +552,30 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Generate synthetic/paced frame timestamp and submit frame to encoder
-        int64_t current_idx = video_frame_idx.fetch_add(1, std::memory_order_relaxed);
-        av_frame_make_writable(vframe);
-        vframe->pts = current_idx;
+        // Emit frames locked to exact wall-clock intervals
+        if (has_received_game_frame) {
+            auto cur_time = std::chrono::steady_clock::now();
+            while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
+                vframe->pts = next_pts++;
+                video_frame_idx.store(next_pts, std::memory_order_relaxed);
 
-        if (avcodec_send_frame(vctx, vframe) >= 0) {
-            while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-                av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-                v_pkt->stream_index = vstream->index;
-                std::lock_guard<std::mutex> lock(mux_mutex);
-                av_interleaved_write_frame(oc, v_pkt);
-                av_packet_unref(v_pkt);
+                if (avcodec_send_frame(vctx, vframe) >= 0) {
+                    while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+                        av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
+                        v_pkt->stream_index = vstream->index;
+                        std::lock_guard<std::mutex> lock(mux_mutex);
+                        av_interleaved_write_frame(oc, v_pkt);
+                        av_packet_unref(v_pkt);
+                    }
+                }
+                next_frame_time += frame_interval;
             }
         }
+    }
+
+    if (shm_base && shm_size > 0) {
+        munmap(shm_base, shm_size);
+        shm_base = nullptr;
     }
 
     // 7. Finalize & Flush Streams cleanly
