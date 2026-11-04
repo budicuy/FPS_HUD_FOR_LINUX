@@ -81,7 +81,7 @@ jobs:
         distro:
           - name: "Arch Linux (Rolling)"
             image: "archlinux:latest"
-            cmd: "pacman -Syu --noconfirm --needed tar gzip procps-ng libvulkan && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "pacman -Syu --noconfirm --needed tar gzip procps-ng vulkan-icd-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Fedora Latest (RPM)"
             image: "fedora:latest"
             cmd: "dnf install -y tar gzip procps-ng vulkan-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
