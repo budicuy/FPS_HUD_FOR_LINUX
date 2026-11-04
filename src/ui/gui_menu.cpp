@@ -5,6 +5,7 @@
 
 #include "imgui.h"
 
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace fpshud {
 
@@ -29,19 +31,22 @@ void set_status_message(const std::string& msg) {
 }
 
 void open_system_folder(const std::string& path) {
-  pid_t pid = fork();
-  if (pid == 0) {
-    // Child: fork again so the grandchild reparents to init/systemd (prevents zombie <defunct>
-    // processes)
-    if (fork() == 0) {
-      unsetenv("LD_PRELOAD");
-      execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
-      _exit(0);
-    }
-    _exit(0);
-  } else if (pid > 0) {
-    waitpid(pid, nullptr, 0);
+  std::vector<std::string> env_strings;
+  for (char** env = environ; env && *env; ++env) {
+    std::string e = *env;
+    if (e.rfind("LD_PRELOAD=", 0) == 0) continue;
+    env_strings.push_back(std::move(e));
   }
+  std::vector<char*> envp;
+  envp.reserve(env_strings.size() + 1);
+  for (auto& s : env_strings) {
+    envp.push_back(s.data());
+  }
+  envp.push_back(nullptr);
+
+  char* argv[] = {const_cast<char*>("xdg-open"), const_cast<char*>(path.c_str()), nullptr};
+  pid_t pid = 0;
+  posix_spawnp(&pid, "xdg-open", nullptr, nullptr, argv, envp.data());
 }
 
 void draw_section_header(const char* title,

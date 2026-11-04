@@ -835,9 +835,9 @@ int main(int argc, char* argv[]) {
     int ret = select(client_fd + 1, &read_fds, nullptr, nullptr, &sel_tv);
     if (ret > 0 && FD_ISSET(client_fd, &read_fds)) {
       fpshud::IpcPacketHeader in_hdr{};
-      ssize_t rd = recv(client_fd, &in_hdr, sizeof(in_hdr), 0);
-      if (rd <= 0) {
-        // Client disconnected -> stop recording cleanly
+      ssize_t rd = recv(client_fd, &in_hdr, sizeof(in_hdr), MSG_WAITALL);
+      if (rd < static_cast<ssize_t>(sizeof(in_hdr))) {
+        // Client disconnected or partial stream close -> stop recording cleanly
         g_running.store(false, std::memory_order_relaxed);
         break;
       }
