@@ -235,6 +235,9 @@ cat > "$VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json" <<EOF
             "vkGetInstanceProcAddr": "vkGetInstanceProcAddr",
             "vkGetDeviceProcAddr": "vkGetDeviceProcAddr"
         },
+        "enable_environment": {
+            "FPS_HUD": "1"
+        },
         "disable_environment": {
             "DISABLE_FPS_HUD": "1"
         }

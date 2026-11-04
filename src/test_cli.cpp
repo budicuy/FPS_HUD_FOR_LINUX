@@ -975,16 +975,37 @@ void run_elf_and_layer_abi_suite() {
                 pfn_destroy_instance(VK_NULL_HANDLE, nullptr);
             }
 
+            // Verify Vulkan Implicit Layer System-Wide Isolation Manifest & Device Groups (C1, M2)
+            bool manifest_isolated = false;
+            fs::path repo_root = find_repo_root();
+            std::string manifest_content = read_text_file(repo_root / "manifest" / "VkLayer_FPSHUD_overlay.json.in");
+            std::string install_content = read_text_file(repo_root / "install.sh");
+            if (manifest_content.find("\"enable_environment\"") != std::string::npos &&
+                manifest_content.find("\"FPS_HUD\"") != std::string::npos &&
+                manifest_content.find("\"disable_environment\"") != std::string::npos &&
+                install_content.find("\"enable_environment\"") != std::string::npos) {
+                manifest_isolated = true;
+            }
+
+            PFN_vkVoidFunction pfn_enum_groups = pfn_gpa ?
+                pfn_gpa(fake_instance, "vkEnumeratePhysicalDeviceGroups") : nullptr;
+            PFN_vkVoidFunction pfn_enum_groups_khr = pfn_gpa ?
+                pfn_gpa(fake_instance, "vkEnumeratePhysicalDeviceGroupsKHR") : nullptr;
+            bool dev_groups_hooked = (pfn_enum_groups != nullptr && pfn_enum_groups_khr != nullptr);
+
             bool ops_ok = (null_destroy_ok && inst_res == VK_SUCCESS && devA_res == VK_SUCCESS && devB_res == VK_SUCCESS &&
                            queueA != VK_NULL_HANDLE && queueB != VK_NULL_HANDLE &&
-                           sc_res == VK_SUCCESS && pres_res == VK_SUCCESS && unreg_pres_res == VK_SUCCESS);
+                           sc_res == VK_SUCCESS && pres_res == VK_SUCCESS && unreg_pres_res == VK_SUCCESS &&
+                           manifest_isolated && dev_groups_hooked);
             if (ops_ok) {
                 lifecycle_ok = true;
-                lifecycle_detail = "2 Devices created, vkGetDeviceQueue2 intercepted, (0, 0) swapchain accepted, devA DestroyDevice UAF-free, NULL handles safe, & devB presented VK_SUCCESS";
+                lifecycle_detail = "2 Devices created, vkGetDeviceQueue2 intercepted, (0, 0) swapchain accepted, devA DestroyDevice UAF-free, NULL handles safe, devB presented VK_SUCCESS, manifest isolated to FPS_HUD=1, and vkEnumeratePhysicalDeviceGroups hooked";
             } else {
                 lifecycle_detail = "Failed: inst=" + std::to_string(inst_res) + " devA=" + std::to_string(devA_res) +
                                    " devB=" + std::to_string(devB_res) + " sc=" + std::to_string(sc_res) +
-                                   " pres=" + std::to_string(pres_res) + " unreg_pres=" + std::to_string(unreg_pres_res);
+                                   " pres=" + std::to_string(pres_res) + " unreg_pres=" + std::to_string(unreg_pres_res) +
+                                   " manifest_isolated=" + std::to_string(manifest_isolated) +
+                                   " dev_groups_hooked=" + std::to_string(dev_groups_hooked);
             }
         }
 

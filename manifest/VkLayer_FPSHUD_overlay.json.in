@@ -12,6 +12,9 @@
             "vkGetInstanceProcAddr": "vkGetInstanceProcAddr",
             "vkGetDeviceProcAddr": "vkGetDeviceProcAddr"
         },
+        "enable_environment": {
+            "FPS_HUD": "1"
+        },
         "disable_environment": {
             "DISABLE_FPS_HUD": "1"
         }

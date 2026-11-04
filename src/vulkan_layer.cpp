@@ -39,6 +39,7 @@ struct InstanceData {
     PFN_vkGetPhysicalDeviceMemoryProperties2 GetPhysicalDeviceMemoryProperties2 = nullptr;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties = nullptr;
     PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties = nullptr;
+    PFN_vkEnumeratePhysicalDeviceGroups EnumeratePhysicalDeviceGroups = nullptr;
 };
 
 struct FrameResources {
@@ -605,6 +606,12 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(
     }
     id->EnumerateDeviceExtensionProperties = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
         fpGetInstanceProcAddr(*pInstance, "vkEnumerateDeviceExtensionProperties"));
+    id->EnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(
+        fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroups"));
+    if (!id->EnumeratePhysicalDeviceGroups) {
+        id->EnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(
+            fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroupsKHR"));
+    }
 
     std::lock_guard<std::mutex> lock(g_map_mutex);
     g_instance_map[get_dispatch_key(*pInstance)] = id;
@@ -671,6 +678,34 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDevices(
         for (uint32_t i = 0; i < *pPhysicalDeviceCount; ++i) {
             if (pPhysicalDevices[i] != VK_NULL_HANDLE) {
                 g_instance_map[get_dispatch_key(pPhysicalDevices[i])] = id;
+            }
+        }
+    }
+    return res;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDeviceGroups(
+    VkInstance instance,
+    uint32_t* pPhysicalDeviceGroupCount,
+    VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) {
+
+    if (!instance) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->EnumeratePhysicalDeviceGroups) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    VkResult res = id->EnumeratePhysicalDeviceGroups(instance, pPhysicalDeviceGroupCount, pPhysicalDeviceGroupProperties);
+    if (res == VK_SUCCESS && pPhysicalDeviceGroupProperties && pPhysicalDeviceGroupCount && *pPhysicalDeviceGroupCount > 0) {
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        for (uint32_t i = 0; i < *pPhysicalDeviceGroupCount; ++i) {
+            for (uint32_t j = 0; j < pPhysicalDeviceGroupProperties[i].physicalDeviceCount; ++j) {
+                if (pPhysicalDeviceGroupProperties[i].physicalDevices[j] != VK_NULL_HANDLE) {
+                    g_instance_map[get_dispatch_key(pPhysicalDeviceGroupProperties[i].physicalDevices[j])] = id;
+                }
             }
         }
     }
@@ -842,41 +877,43 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
         copy_dispatch_key(dd->graphics_queue, *pDevice);
     }
 
-    // Bind Active GPU to Telemetry
-    if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
-        VkPhysicalDeviceProperties props{};
-        dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
-        fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
-    }
+    // Bind Active GPU to Telemetry only if layer is enabled
+    if (fpshud::get_global_config().enabled) {
+        if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
+            VkPhysicalDeviceProperties props{};
+            dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
+            fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
+        }
 
-    // Query initial VRAM budget
-    uint64_t total_vram = 0;
-    uint64_t used_vram = 0;
-    if (dd->has_memory_budget_ext && dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties2) {
-        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget_props{};
-        budget_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
-        VkPhysicalDeviceMemoryProperties2 mem_props2{};
-        mem_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
-        mem_props2.pNext = &budget_props;
+        // Query initial VRAM budget
+        uint64_t total_vram = 0;
+        uint64_t used_vram = 0;
+        if (dd->has_memory_budget_ext && dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties2) {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget_props{};
+            budget_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+            VkPhysicalDeviceMemoryProperties2 mem_props2{};
+            mem_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+            mem_props2.pNext = &budget_props;
 
-        dd->instance_data->GetPhysicalDeviceMemoryProperties2(physicalDevice, &mem_props2);
-        for (uint32_t i = 0; i < mem_props2.memoryProperties.memoryHeapCount; ++i) {
-            if (mem_props2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-                total_vram += mem_props2.memoryProperties.memoryHeaps[i].size;
-                used_vram += budget_props.heapUsage[i];
+            dd->instance_data->GetPhysicalDeviceMemoryProperties2(physicalDevice, &mem_props2);
+            for (uint32_t i = 0; i < mem_props2.memoryProperties.memoryHeapCount; ++i) {
+                if (mem_props2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                    total_vram += mem_props2.memoryProperties.memoryHeaps[i].size;
+                    used_vram += budget_props.heapUsage[i];
+                }
+            }
+        } else if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
+            VkPhysicalDeviceMemoryProperties mem_props{};
+            dd->instance_data->GetPhysicalDeviceMemoryProperties(physicalDevice, &mem_props);
+            for (uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
+                if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                    total_vram += mem_props.memoryHeaps[i].size;
+                }
             }
         }
-    } else if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
-        VkPhysicalDeviceMemoryProperties mem_props{};
-        dd->instance_data->GetPhysicalDeviceMemoryProperties(physicalDevice, &mem_props);
-        for (uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
-            if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-                total_vram += mem_props.memoryHeaps[i].size;
-            }
+        if (total_vram > 0) {
+            fpshud::get_telemetry().update_api_vram_info(used_vram, total_vram);
         }
-    }
-    if (total_vram > 0) {
-        fpshud::get_telemetry().update_api_vram_info(used_vram, total_vram);
     }
     dd->last_vram_update = std::chrono::steady_clock::now();
 
@@ -1020,6 +1057,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
         }
     }
 
+    // When overlay is disabled, bypass all imageUsage mutations and overlay allocations
+    if (!fpshud::get_global_config().enabled) {
+        return dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+    }
+
     VkSwapchainCreateInfoKHR modified_info = *pCreateInfo;
     modified_info.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     bool supports_transfer = true;
@@ -1033,10 +1075,6 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
             res = dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
             if (res != VK_SUCCESS) return res;
         }
-    }
-
-    if (!fpshud::get_global_config().enabled) {
-        return VK_SUCCESS;
     }
 
     auto* sd = new SwapchainData();
@@ -1383,6 +1421,8 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instan
     if (std::strcmp(pName, "vkCreateInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateInstance);
     if (std::strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyInstance);
     if (std::strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDevices);
+    if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
+    if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroupsKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
     if (std::strcmp(pName, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateDevice);
     if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
     if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
