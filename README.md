@@ -136,14 +136,18 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
 
 ## 3. How to Use in Steam, Lutris, Heroic & Terminal
 
-### 1. Steam (Proton / DXVK / Vulkan Games)
+### 1. Steam (Proton / DXVK / Vulkan Games — 99% of Steam Games)
 Right-click your game in Steam -> **Properties** -> **General** -> **Launch Options**:
 ```bash
 FPS_HUD=1 %command%
 ```
 *(To disable temporarily, change it to `FPS_HUD=0 %command%`)*
 
-### 2. Steam (Native Linux OpenGL Games)
+> [!NOTE]
+> All Windows games running through Proton, DXVK, and modern native Linux Vulkan games use this single option.
+
+### 2. Steam (Legacy Native Linux OpenGL Games Only)
+Only required for older native Linux games running on legacy OpenGL:
 ```bash
 FPS_HUD=1 ~/.local/bin/fpshud %command%
 ```
@@ -175,6 +179,10 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 | **`F7`** | Start or Stop **Hardware-Accelerated Screen Recording** (`~/Videos/FPSHUD`) |
 | **`F9`** | Start or Stop **CSV Benchmark Recording** (`~/Documents/fpshud_benchmark.csv`) |
 | **`ESC`** | Close the GUI menu and return mouse control to the game |
+
+> [!TIP]
+> **Steam Deck & Handheld Gaming Devices:**
+> You can easily open the configuration menu without a physical keyboard by mapping a back grip button (such as **`L4`** or **`R4`**) to keyboard key **`F12`** or **`Insert`** via **Steam Controller Settings -> Edit Layout**.
 
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
@@ -290,10 +298,20 @@ flowchart TD
 
 If you are a developer or want to compile **FPSHUD** from source instead of using the prebuilt binary:
 
-### 1. Install Build Dependencies
-- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf clang lld llvm vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata ffmpeg libpulse`
-- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config clang lld llvm libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev`
-- **Fedora**: `sudo dnf install -y gcc-c++ clang lld llvm cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata ffmpeg-free-devel pulseaudio-libs-devel`
+### 1. Build & Toolchain Requirements
+
+To build FPSHUD from source, ensure your environment meets these specifications:
+
+| Requirement | Minimum Version / Specification | Purpose |
+| :--- | :--- | :--- |
+| **C++ Compiler** | **Clang 18+** (Clang 23 recommended) or **GCC 14+** | Full ISO C++26 support (`-std=c++26`), `std::inplace_vector`, Pack Indexing |
+| **Build System** | **CMake >= 3.25** & **Ninja** | Fast multi-threaded build orchestration |
+| **Linker** | **LLD (`lld`)** | Fast linking with ThinLTO (`-flto=thin`) optimization |
+| **Graphics APIs** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Swapchain presentation hooking |
+| **Windowing & Input** | **libX11**, **Wayland client headers**, **Linux evdev** (`linux-api-headers`) | In-game input grabbing & cursor management |
+| **Screen Recorder** | **FFmpeg development libraries** (`libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavutil`) & **libpulse** | Hardware video encoding & audio capture |
+| **Hardware Database** | **hwdata** or **pci.ids** | Discrete & integrated GPU model name identification |
+| **Asset Generator** | **Python 3.8+** | Generates embedded font C++ headers from TTF assets |
 
 ### 2. Clone, Compile & Run Multi-Device Verification Suite
 ```bash

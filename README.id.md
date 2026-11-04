@@ -71,7 +71,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 
 - **Aktivasi Simpel (`FPS_HUD=1` / `FPS_HUD=0`)**:
   - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, dan menu In-Game GUI Configurator.
-  - `FPS_HUD=0` (or dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
+  - `FPS_HUD=0` (atau dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
   - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 25 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
@@ -134,14 +134,18 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
 
 ## 3. Cara Pakai di Steam, Lutris, Heroic & Terminal
 
-### 1. Steam (Game Proton / DXVK / Vulkan)
+### 1. Steam (Game Proton / DXVK / Vulkan — 99% Game Steam)
 Klik kanan game di Steam -> **Properties** -> **General** -> **Launch Options**:
 ```bash
 FPS_HUD=1 %command%
 ```
 *(Untuk mematikan sementara, cukup ubah menjadi `FPS_HUD=0 %command%`)*
 
-### 2. Steam (Game Linux OpenGL Native)
+> [!NOTE]
+> Seluruh game Windows yang berjalan melalui Proton, DXVK, serta game native Linux berbasis Vulkan modern cukup menggunakan opsi ini.
+
+### 2. Steam (Khusus Game Native Linux OpenGL Lawas)
+Hanya dibutuhkan untuk game native Linux jadul yang masih memakai API OpenGL:
 ```bash
 FPS_HUD=1 ~/.local/bin/fpshud %command%
 ```
@@ -173,6 +177,10 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 | **`F7`** | Memulai atau Menghentikan **Screen Recorder Ringan** (`~/Videos/FPSHUD`) |
 | **`F9`** | Memulai atau Menghentikan perekaman **Benchmark CSV** |
 | **`ESC`** | Menutup menu GUI dan mengembalikan kursor mouse ke dalam game |
+
+> [!TIP]
+> **Pengguna Steam Deck & Perangkat Gaming Handheld:**
+> Anda dapat membuka menu pengaturan in-game tanpa keyboard fisik dengan memetakan tombol belakang (seperti **`L4`** atau **`R4`**) ke tombol keyboard **`F12`** atau **`Insert`** melalui menu **Steam Controller Settings -> Edit Layout**.
 
 ### 4 Pilihan Preset di Dalam GUI
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
@@ -288,10 +296,20 @@ flowchart TD
 
 Bagi pengembang (*developer*) yang ingin memodifikasi kode sumber atau melakukan kompilasi manual:
 
-### 1. Instal Paket Dependensi Build
-- **Arch Linux**: `sudo pacman -S --needed base-devel cmake ninja git pkgconf clang lld llvm vulkan-headers vulkan-icd-loader mesa libglvnd libx11 wayland hwdata ffmpeg libpulse`
-- **Ubuntu / Debian**: `sudo apt install -y build-essential cmake ninja-build git pkg-config clang lld llvm libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev`
-- **Fedora**: `sudo dnf install -y gcc-c++ clang lld llvm cmake ninja-build git pkgconf-pkg-config vulkan-headers vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel hwdata ffmpeg-free-devel pulseaudio-libs-devel`
+### 1. Persyaratan Sistem & Toolchain (Requirements)
+
+Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi spesifikasi berikut:
+
+| Kebutuhan | Versi Minimum / Spesifikasi | Fungsi |
+| :--- | :--- | :--- |
+| **Kompiler C++** | **Clang 18+** (Direkomendasikan Clang 23) atau **GCC 14+** | Dukungan penuh standar ISO C++26 (`-std=c++26`), `std::inplace_vector`, Pack Indexing |
+| **Sistem Build** | **CMake >= 3.25** & **Ninja** | Orkestrasi kompilasi multi-threaded cepat |
+| **Linker** | **LLD (`lld`)** | Fast linking dengan optimasi ThinLTO (`-flto=thin`) |
+| **API Grafis** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Intersepsi swapchain presentasi frame |
+| **Windowing & Input** | **libX11**, **Header klien Wayland**, **Linux evdev** (`linux-api-headers`) | Penangkapan input in-game & kontrol kursor |
+| **Perekam Layar** | **Pustaka pengembang FFmpeg** (`libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavutil`) & **libpulse** | Encoding video hardware & penangkapan audio |
+| **Database Hardware** | **hwdata** atau **pci.ids** | Identifikasi nama kartu grafis GPU diskrit/terintegrasi |
+| **Peralatan Asset** | **Python 3.8+** | Menghasilkan header C++ font tertanam dari berkas TTF |
 
 ### 2. Clone, Compile & Jalankan Pengujian Simulasi 5 Perangkat
 ```bash
