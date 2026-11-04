@@ -21,8 +21,10 @@ jobs:
         run: |
           sudo apt-get update
           EXTRA_COMPILER=""
-          if apt-cache show g++-16 >/dev/null 2>&1; then
-            EXTRA_COMPILER="gcc-16 g++-16"
+          if apt-cache show clang-19 >/dev/null 2>&1; then
+            EXTRA_COMPILER="clang-19 lld-19"
+          elif apt-cache show g++-15 >/dev/null 2>&1; then
+            EXTRA_COMPILER="gcc-15 g++-15"
           else
             EXTRA_COMPILER="clang"
           fi
@@ -35,9 +37,12 @@ jobs:
 
       - name: Configure, Build & Verify ABI/GLIBC Portability Gates
         run: |
-          if command -v g++-16 >/dev/null 2>&1; then
-            CC_BIN="gcc-16"
-            CXX_BIN="g++-16"
+          if command -v clang++-19 >/dev/null 2>&1; then
+            CC_BIN="clang-19"
+            CXX_BIN="clang++-19"
+          elif command -v g++-15 >/dev/null 2>&1; then
+            CC_BIN="gcc-15"
+            CXX_BIN="g++-15"
           elif command -v clang++ >/dev/null 2>&1; then
             CC_BIN="clang"
             CXX_BIN="clang++"
@@ -63,7 +68,7 @@ jobs:
             echo "::error::Direct dynamic link to OpenGL/GLX/EGL detected in libfpshud.so DT_NEEDED!"
             exit 1
           fi
-          "$CXX_BIN" -std=c++20 -Wall -Wextra -Werror -fsyntax-only -Isrc -Isrc/recorder -Isrc/core \
+          "$CXX_BIN" -std=c++26 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsyntax-only -Isrc -Isrc/recorder -Isrc/core \
             $(pkg-config --cflags libavcodec libavformat libavutil libswscale libswresample libpulse) \
             src/recorder/recorder_main.cpp
           strip --strip-unneeded build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
@@ -140,15 +145,23 @@ jobs:
       - name: Install Toolchain & Dependencies for Sanitizers
         run: |
           sudo apt-get update
+          EXTRA_COMPILER="clang"
+          if apt-cache show clang-19 >/dev/null 2>&1; then
+            EXTRA_COMPILER="clang-19"
+          fi
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            clang build-essential cmake ninja-build pkg-config \
+            $EXTRA_COMPILER build-essential cmake ninja-build pkg-config \
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
             fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev
 
       - name: Run Memory Safety & Undefined Behavior Suite (ASan + UBSan)
         run: |
-          CC=clang CXX=clang++ ./scripts/run_sanitizers.sh
+          SAN_CC="clang"
+          SAN_CXX="clang++"
+          command -v clang-19 >/dev/null 2>&1 && SAN_CC="clang-19"
+          command -v clang++-19 >/dev/null 2>&1 && SAN_CXX="clang++-19"
+          CC="$SAN_CC" CXX="$SAN_CXX" ./scripts/run_sanitizers.sh
           rm -rf build_asan
 
   publish-release:

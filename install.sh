@@ -56,12 +56,12 @@ get_gcc_version() {
 select_cpp_toolchain() {
     CXX_BIN=""
     CC_BIN=""
-    # 1. Probe Clang candidate compilers (Clang 18+)
-    for cand in clang++-23 clang++-22 clang++-21 clang++-20 clang++-19 clang++-18 clang++; do
+    # 1. Probe Clang candidate compilers (Clang 19+)
+    for cand in clang++-23 clang++-22 clang++-21 clang++-20 clang++-19 clang++; do
         if command -v "$cand" >/dev/null 2>&1; then
             local ver
             ver="$(get_clang_version "$cand")"
-            if [ -n "$ver" ] && [ "$ver" -ge 18 ] 2>/dev/null; then
+            if [ -n "$ver" ] && [ "$ver" -ge 19 ] 2>/dev/null; then
                 CXX_BIN="$cand"
                 local cc_cand="${cand/clang++/clang}"
                 command -v "$cc_cand" >/dev/null 2>&1 && CC_BIN="$cc_cand" || CC_BIN="clang"
@@ -70,12 +70,12 @@ select_cpp_toolchain() {
         fi
     done
 
-    # 2. Probe GCC candidate compilers (GCC 14+)
-    for cand in g++-16 g++-15 g++-14 g++; do
+    # 2. Probe GCC candidate compilers (GCC 15+)
+    for cand in g++-16 g++-15 g++; do
         if command -v "$cand" >/dev/null 2>&1; then
             local ver
             ver="$(get_gcc_version "$cand")"
-            if [ -n "$ver" ] && [ "$ver" -ge 14 ] 2>/dev/null; then
+            if [ -n "$ver" ] && [ "$ver" -ge 15 ] 2>/dev/null; then
                 CXX_BIN="$cand"
                 local cc_cand="${cand/g++/gcc}"
                 command -v "$cc_cand" >/dev/null 2>&1 && CC_BIN="$cc_cand" || CC_BIN="gcc"
@@ -89,7 +89,7 @@ select_cpp_toolchain() {
 
 build_and_install_from_source() {
     if ! command -v cmake >/dev/null 2>&1 || ! select_cpp_toolchain; then
-        echo "[!] Cannot build from source: CMake and a modern C++26 compiler (Clang 18+ or GCC 14+) are required."
+        echo "[!] Cannot build from source: CMake and a pure native C++26 compiler (Clang 19+ or GCC 15+) are required."
         return 1
     fi
     echo "[*] Compiling FPSHUD from source using $CXX_BIN..."
@@ -254,7 +254,7 @@ if [ "$INSTALLED_FROM_SOURCE" -eq 0 ]; then
     fi
     if [ "$NEED_REBUILD" -eq 1 ]; then
         echo "    Rebuilding native FPSHUD binaries from source for this host..."
-        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & Clang 18+ or GCC 14+ to build locally)."
+        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & Clang 19+ or GCC 15+ to build locally)."
         chmod +x "$LIB_DIR/libfpshud.so"
         [ -f "$LIB_DIR/fpshud_test" ] && chmod +x "$LIB_DIR/fpshud_test"
     fi
@@ -288,10 +288,7 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
             REC_LAUNCHER_SRC="$REC_SRC_DIR/src/recorder_launcher.c"
         fi
         if [ -n "$REC_MAIN_SRC" ]; then
-            REC_STD_FLAG="-std=c++20"
-            if "$CXX_BIN" -std=c++26 -x c++ -E /dev/null >/dev/null 2>&1; then
-                REC_STD_FLAG="-std=c++26"
-            fi
+            REC_STD_FLAG="-std=c++26"
             if "$CXX_BIN" -O3 "$REC_STD_FLAG" "$REC_MAIN_SRC" \
                 -I"$REC_SRC_DIR/src" -I"$REC_SRC_DIR/src/recorder" -I"$REC_SRC_DIR/src/core" \
                 $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse) \
