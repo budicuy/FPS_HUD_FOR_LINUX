@@ -743,6 +743,19 @@ void run_elf_and_layer_abi_suite() {
             auto pfn_queue_present = reinterpret_cast<PFN_vkQueuePresentKHR>(pfn_gdpa(VK_NULL_HANDLE, "vkQueuePresentKHR"));
             auto pfn_get_queue2 = reinterpret_cast<PFN_vkGetDeviceQueue2>(q2_dev);
 
+            // Verify NULL-handle tolerance for vkDestroyDevice & vkDestroyInstance prior to creation (VUID compliant)
+            bool null_destroy_ok = true;
+            if (pfn_destroy_device) {
+                pfn_destroy_device(VK_NULL_HANDLE, nullptr);
+            } else {
+                null_destroy_ok = false;
+            }
+            if (pfn_destroy_instance) {
+                pfn_destroy_instance(VK_NULL_HANDLE, nullptr);
+            } else {
+                null_destroy_ok = false;
+            }
+
             // Reset mock dispatch objects before test run
             s_fake_instance.dispatch_table = kFakeInstDT;
             s_fake_phys_dev.dispatch_table = kFakePhysDT;
@@ -864,12 +877,20 @@ void run_elf_and_layer_abi_suite() {
                 pfn_destroy_instance(fake_instance, nullptr);
             }
 
-            bool ops_ok = (inst_res == VK_SUCCESS && devA_res == VK_SUCCESS && devB_res == VK_SUCCESS &&
+            // Verify NULL-handle tolerance post cleanup (VUID compliant)
+            if (pfn_destroy_device) {
+                pfn_destroy_device(VK_NULL_HANDLE, nullptr);
+            }
+            if (pfn_destroy_instance) {
+                pfn_destroy_instance(VK_NULL_HANDLE, nullptr);
+            }
+
+            bool ops_ok = (null_destroy_ok && inst_res == VK_SUCCESS && devA_res == VK_SUCCESS && devB_res == VK_SUCCESS &&
                            queueA != VK_NULL_HANDLE && queueB != VK_NULL_HANDLE &&
                            sc_res == VK_SUCCESS && pres_res == VK_SUCCESS && unreg_pres_res == VK_SUCCESS);
             if (ops_ok) {
                 lifecycle_ok = true;
-                lifecycle_detail = "2 Devices created, vkGetDeviceQueue2 intercepted, (0, 0) swapchain accepted, devA DestroyDevice UAF-free & devB presented VK_SUCCESS";
+                lifecycle_detail = "2 Devices created, vkGetDeviceQueue2 intercepted, (0, 0) swapchain accepted, devA DestroyDevice UAF-free, NULL handles safe, & devB presented VK_SUCCESS";
             } else {
                 lifecycle_detail = "Failed: inst=" + std::to_string(inst_res) + " devA=" + std::to_string(devA_res) +
                                    " devB=" + std::to_string(devB_res) + " sc=" + std::to_string(sc_res) +

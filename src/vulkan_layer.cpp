@@ -19,7 +19,7 @@ namespace {
 
 template <typename T>
 void* get_dispatch_key(T obj) {
-    return *reinterpret_cast<void**>(obj);
+    return obj ? *reinterpret_cast<void**>(obj) : nullptr;
 }
 
 template <typename ChildT, typename ParentT>
@@ -615,6 +615,8 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(
     VkInstance instance,
     const VkAllocationCallbacks* pAllocator) {
 
+    if (!instance) return;
+
     InstanceData* id = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -653,6 +655,10 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDevices(
     VkInstance instance,
     uint32_t* pPhysicalDeviceCount,
     VkPhysicalDevice* pPhysicalDevices) {
+
+    if (!instance) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
     if (!id || !id->EnumeratePhysicalDevices) {
@@ -889,6 +895,8 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(
     VkDevice device,
     const VkAllocationCallbacks* pAllocator) {
 
+    if (!device) return;
+
     DeviceData* dd = nullptr;
     std::vector<SwapchainData*> swapchains_to_destroy;
 
@@ -948,6 +956,8 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue(
     uint32_t queueIndex,
     VkQueue* pQueue) {
 
+    if (!device) return;
+
     DeviceData* dd = find_device_data(get_dispatch_key(device));
     if (dd && dd->GetDeviceQueue) {
         dd->GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
@@ -963,6 +973,8 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(
     VkDevice device,
     const VkDeviceQueueInfo2* pQueueInfo,
     VkQueue* pQueue) {
+
+    if (!device) return;
 
     DeviceData* dd = find_device_data(get_dispatch_key(device));
     if (dd && dd->GetDeviceQueue2) {
