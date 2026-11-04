@@ -44,6 +44,18 @@
 #ifndef GL_VIEWPORT
 #define GL_VIEWPORT 0x0BA2
 #endif
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#endif
+#ifndef GL_READ_FRAMEBUFFER_BINDING
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#endif
+#ifndef GL_PACK_ALIGNMENT
+#define GL_PACK_ALIGNMENT 0x0D05
+#endif
+#ifndef GL_PACK_ROW_LENGTH
+#define GL_PACK_ROW_LENGTH 0x0D02
+#endif
 
 namespace {
 
@@ -70,6 +82,8 @@ struct GlDispatchTable {
     using PFN_glMapBufferRange = void* (*)(GLenum target, ptrdiff_t offset, ptrdiff_t length, GLbitfield access);
     using PFN_glMapBuffer = void* (*)(GLenum target, GLenum access);
     using PFN_glUnmapBuffer = GLboolean (*)(GLenum target);
+    using PFN_glBindFramebuffer = void (*)(GLenum target, GLuint framebuffer);
+    using PFN_glPixelStorei = void (*)(GLenum pname, GLint param);
 
     using PFN_glXGetCurrentContext = GLXContext (*)();
     using PFN_glXQueryDrawable = void (*)(Display* dpy, GLXDrawable draw, int attribute, unsigned int* value);
@@ -87,6 +101,8 @@ struct GlDispatchTable {
     PFN_glMapBufferRange glMapBufferRange = nullptr;
     PFN_glMapBuffer glMapBuffer = nullptr;
     PFN_glUnmapBuffer glUnmapBuffer = nullptr;
+    PFN_glBindFramebuffer glBindFramebuffer = nullptr;
+    PFN_glPixelStorei glPixelStorei = nullptr;
 
     PFN_glXGetCurrentContext glXGetCurrentContext = nullptr;
     PFN_glXQueryDrawable glXQueryDrawable = nullptr;
@@ -256,6 +272,8 @@ void ensure_core_gl_resolved() {
     g_gl.glMapBufferRange = reinterpret_cast<GlDispatchTable::PFN_glMapBufferRange>(resolve_proc("glMapBufferRange"));
     g_gl.glMapBuffer = reinterpret_cast<GlDispatchTable::PFN_glMapBuffer>(resolve_proc("glMapBuffer"));
     g_gl.glUnmapBuffer = reinterpret_cast<GlDispatchTable::PFN_glUnmapBuffer>(resolve_proc("glUnmapBuffer"));
+    g_gl.glBindFramebuffer = reinterpret_cast<GlDispatchTable::PFN_glBindFramebuffer>(resolve_proc("glBindFramebuffer"));
+    g_gl.glPixelStorei = reinterpret_cast<GlDispatchTable::PFN_glPixelStorei>(resolve_proc("glPixelStorei"));
 
     g_core_gl_resolved = true;
 }
@@ -323,10 +341,25 @@ public:
     void capture_frame(const GlDispatchTable& gl, void* ctx, uint32_t width, uint32_t height) {
         if (width == 0 || height == 0) return;
 
-        // Save game's existing GL_PIXEL_PACK_BUFFER_BINDING
+        // Save game's existing GL state (PBO, Read FBO, and Pack Alignment/RowLength)
         GLint prev_pbo = 0;
+        GLint prev_read_fbo = 0;
+        GLint prev_pack_align = 4;
+        GLint prev_row_len = 0;
         if (gl.glGetIntegerv) {
             gl.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prev_pbo);
+            gl.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read_fbo);
+            gl.glGetIntegerv(GL_PACK_ALIGNMENT, &prev_pack_align);
+            gl.glGetIntegerv(GL_PACK_ROW_LENGTH, &prev_row_len);
+        }
+
+        // Ensure reading from default backbuffer and standard tightly packed RGBA/BGRA
+        if (gl.glBindFramebuffer && prev_read_fbo != 0) {
+            gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        }
+        if (gl.glPixelStorei) {
+            gl.glPixelStorei(GL_PACK_ALIGNMENT, 4);
+            gl.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
         }
 
         if (ensure_allocated(gl, ctx, width, height)) {
@@ -379,7 +412,14 @@ public:
             }
         }
 
-        // Restore game's previous GL_PIXEL_PACK_BUFFER binding
+        // Restore game's previous GL state
+        if (gl.glBindFramebuffer && prev_read_fbo != 0) {
+            gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prev_read_fbo));
+        }
+        if (gl.glPixelStorei) {
+            gl.glPixelStorei(GL_PACK_ALIGNMENT, prev_pack_align);
+            gl.glPixelStorei(GL_PACK_ROW_LENGTH, prev_row_len);
+        }
         if (gl.glBindBuffer) {
             gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pbo));
         }

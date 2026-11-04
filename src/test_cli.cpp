@@ -800,6 +800,16 @@ void run_elf_and_layer_abi_suite() {
 
         check_cond(!collision_detected, "2. Async Dual-PBO Ring Stop-Resume Invariant",
                    "Verified 2-slot PBO read/write indices never collide across session stop/resume");
+
+        // 2.1 OpenGL Read Framebuffer & Pack Alignment Preservation (I5)
+        fs::path rroot = find_repo_root();
+        std::string gl_src = read_text_file(rroot / "src" / "opengl_hook.cpp");
+        bool gl_state_preserved = (gl_src.find("GL_READ_FRAMEBUFFER_BINDING") != std::string::npos &&
+                                   gl_src.find("GL_PACK_ALIGNMENT") != std::string::npos &&
+                                   gl_src.find("GL_PACK_ROW_LENGTH") != std::string::npos);
+        check_cond(gl_state_preserved, "2.1 OpenGL Read Framebuffer & Pack Alignment Preservation",
+                   gl_state_preserved ? "GL_READ_FRAMEBUFFER, alignment & row length saved/restored around glReadPixels"
+                                      : "Failed: Missing FBO or pack state preservation in capture_frame");
     }
 
     // 3. Vulkan Layer vkGetDeviceQueue2 Export & Resolution Check
