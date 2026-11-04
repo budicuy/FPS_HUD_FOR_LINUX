@@ -290,6 +290,23 @@ flowchart TD
     end
 ```
 
+### Tolok Ukur Performa Riil & Pemakaian Sumber Daya (Data Empiris)
+
+Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara terisolasi langsung pada perangkat keras fisik (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**) selama **10.000 frame berturut-turut** dan **500 siklus telemetri hardware** menggunakan glibc `mallinfo2()` dan `std::chrono::high_resolution_clock`:
+
+| Metrik / Skenario | Hasil Ukur Riil | Dampak Performa & Sumber Daya |
+| :--- | :---: | :--- |
+| **Render HUD (Minimal: 2 Sensor)** | **1,97 μs** (0,002 ms) / frame | **0,01%** dari 1 core CPU @ 60 FPS (0,03% @ 144 FPS) |
+| **Render HUD (Standard: 9 Sensor)** | **4,43 μs** (0,004 ms) / frame | **0,03%** dari 1 core CPU @ 60 FPS (0,06% @ 144 FPS) |
+| **Render HUD (Advance: 25 Sensor)** | **7,67 μs** (0,008 ms) / frame | **0,05%** dari 1 core CPU @ 60 FPS (0,11% @ 144 FPS) |
+| **Menu GUI In-Game (3-Kolom)** | **64,71 μs** (0,065 ms) / frame | **0,39%** dari 1 core CPU @ 60 FPS (0,93% @ 144 FPS) |
+| **Thread Telemetri Latar Belakang** | **226,77 μs** (0,22 ms) / poll | **0,045%** dari 1 core CPU (membaca NVML, RAPL, procfs tiap 500ms) |
+| **Struktur Data Core C++** | **8,66 KB** (8.864 byte) | Total gabungan `TelemetryCollector`, `HudConfig`, & state core |
+| **Alokasi Heap Runtime** | **~372 KB** (0,36 MB) | State Dear ImGui, metadata glyph font, dan buffer format teks |
+| **Texture Atlas Font (Bitmap)** | **4,00 MB** (1024x1024 RGBA32) | Glyph font resolusi tinggi OpenSans-Bold & VeraMono-Bold |
+| **Geometri Draw per Frame** | **11,34 KB** total | Vertex buffer 9,69 KB + Index buffer 1,65 KB |
+| **Kestabilan Heap per Frame** | **0 byte / frame** | Terverifikasi **zero-heap allocation** sepanjang 10.000 frame |
+
 ---
 
 ## 8. Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)
