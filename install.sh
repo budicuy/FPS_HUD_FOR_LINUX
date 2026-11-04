@@ -617,13 +617,27 @@ echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat i
 echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
 echo "=================================================================="
 
-USER_CONFIRM=1
-if [ -t 0 ] && [ -z "${CI:-}" ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
-    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm
+USER_CONFIRM=0
+if [ "${FORCE_SETUP:-0}" = "1" ] || [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
+    USER_CONFIRM=1
+elif [ -n "${CI:-}" ]; then
+    USER_CONFIRM=0
+elif [ -t 0 ]; then
+    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm || confirm="n"
     case "$confirm" in
-        [yY][eE][sS]|[yY]) ;;
+        [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
+elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm < /dev/tty || confirm="n"
+    case "$confirm" in
+        [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
+        *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
+    esac
+else
+    echo "[*] Non-interactive environment detected without TTY. Skipping sudo configuration."
+    echo "    (Core overlay will install cleanly; to enable privileged sensors later, run: ~/.local/bin/fpshud --setup)"
+    USER_CONFIRM=0
 fi
 
 if [ "$USER_CONFIRM" -eq 1 ]; then
