@@ -183,7 +183,7 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
                 -I"$REC_SRC_DIR/src" \
                 $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse) \
                 -pthread -ldl \
-                -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
+                -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
                 -Wl,--disable-new-dtags \
                 -o "$LIB_DIR/fpshud_recorder_bin" 2>"$REC_TMP/err.log"; then
                 chmod +x "$LIB_DIR/fpshud_recorder_bin"

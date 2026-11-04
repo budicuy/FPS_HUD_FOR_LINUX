@@ -98,6 +98,10 @@ struct IpcFrameNotify {
     uint64_t seq = 0;
 };
 
+// Discovers container host paths for multiarch dynamic libraries (LD_LIBRARY_PATH)
+// and hardware VAAPI driver directories (LIBVA_DRIVERS_PATH) under <root>/run/host and <root>/var/run/host.
+bool build_container_host_env_paths(const std::string& root_prefix, std::string& out_ld_path, std::string& out_libva_path);
+
 // Singleton controller in libfpshud.so to manage on-demand helper process & IPC
 class RecorderController {
 public:

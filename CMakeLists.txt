@@ -282,8 +282,8 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
     )
 
     set_target_properties(fpshud_recorder_bin PROPERTIES
-        BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
-        INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
+        BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
+        INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
     )
     target_link_options(fpshud_recorder_bin PRIVATE
         "-Wl,--disable-new-dtags"

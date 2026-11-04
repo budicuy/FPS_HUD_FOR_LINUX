@@ -269,6 +269,27 @@ fs::path find_recorder_bin_path() {
     return {};
 }
 
+fs::path find_recorder_launcher_path() {
+    std::vector<fs::path> candidates;
+    char exe_buf[4096] = {0};
+    ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+        candidates.push_back(exe_dir / "fpshud_recorder");
+        candidates.push_back(exe_dir / "build" / "fpshud_recorder");
+    }
+    candidates.push_back(fs::path("./build/fpshud_recorder"));
+    candidates.push_back(fs::path("./fpshud_recorder"));
+
+    for (const auto& p : candidates) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            return fs::canonical(p, ec);
+        }
+    }
+    return {};
+}
+
 ElfVerificationResult inspect_libfpshud_elf(const fs::path& so_path) {
     ElfVerificationResult res;
     if (so_path.empty()) {
@@ -1057,6 +1078,58 @@ void run_elf_and_layer_abi_suite() {
         }
 
         check_cond(test_passed, "5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio", detail.c_str());
+    }
+
+    // 6. Steam Proton Multiarch Container Host Library & VAAPI Driver Resolution
+    {
+        std::string mock_pv_dir = "/tmp/fpshud_mock_pv_" + std::to_string(::getpid());
+        std::error_code ec;
+        fs::remove_all(mock_pv_dir, ec);
+        fs::create_directories(mock_pv_dir + "/run/host/usr/lib/x86_64-linux-gnu/dri", ec);
+        fs::create_directories(mock_pv_dir + "/run/host/usr/lib64/dri", ec);
+
+        std::string out_ld_path;
+        std::string out_libva_path;
+        fpshud::build_container_host_env_paths(mock_pv_dir, out_ld_path, out_libva_path);
+
+        bool ld_has_multiarch = (out_ld_path.find("x86_64-linux-gnu") != std::string::npos);
+        bool ld_has_lib64 = (out_ld_path.find("lib64") != std::string::npos);
+        bool va_has_multiarch = (out_libva_path.find("x86_64-linux-gnu") != std::string::npos);
+        bool va_has_lib64 = (out_libva_path.find("lib64") != std::string::npos);
+
+        // Always clean up the temporary mock directory
+        fs::remove_all(mock_pv_dir, ec);
+
+        fs::path launcher_path = find_recorder_launcher_path();
+        bool launcher_ok = false;
+        std::string launcher_output;
+        int exit_code = -1;
+
+        if (!launcher_path.empty()) {
+            std::string cmd = "\"" + launcher_path.string() + "\" --probe-encoders 2>&1";
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (pipe) {
+                char pbuf[256];
+                while (fgets(pbuf, sizeof(pbuf), pipe)) {
+                    launcher_output += pbuf;
+                }
+                int status = pclose(pipe);
+                exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+            if (exit_code == 0 && launcher_output.find("Encoder Probe") != std::string::npos) {
+                launcher_ok = true;
+            }
+        }
+
+        bool test_passed = (ld_has_multiarch && ld_has_lib64 && va_has_multiarch && va_has_lib64 && launcher_ok);
+        std::string detail = "ld_multiarch=" + std::to_string(ld_has_multiarch) +
+                             ", ld_lib64=" + std::to_string(ld_has_lib64) +
+                             ", va_multiarch=" + std::to_string(va_has_multiarch) +
+                             ", va_lib64=" + std::to_string(va_has_lib64) +
+                             ", launcher_ok=" + std::to_string(launcher_ok) +
+                             " (exit=" + std::to_string(exit_code) + ")";
+
+        check_cond(test_passed, "6. Multiarch Steam Proton Container & VAAPI Resolution", detail.c_str());
     }
 }
 

@@ -237,6 +237,64 @@ void RecorderController::stop_recording() {
     toast_time_ = std::chrono::steady_clock::now();
 }
 
+bool build_container_host_env_paths(const std::string& root_prefix, std::string& out_ld_path, std::string& out_libva_path) {
+    out_ld_path.clear();
+    out_libva_path.clear();
+
+    const char* const host_roots[] = {"/run/host", "/var/run/host"};
+    const char* host_root = nullptr;
+    std::error_code ec;
+
+    for (const char* hr : host_roots) {
+        std::string test_path = root_prefix + hr;
+        if (fs::exists(test_path, ec)) {
+            host_root = hr;
+            break;
+        }
+    }
+
+    if (!host_root) {
+        return false;
+    }
+
+    static const char* const kLdCandidates[] = {
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu/pulseaudio",
+        "/usr/lib64",
+        "/usr/lib64/pulseaudio",
+        "/usr/lib",
+        "/usr/lib/pulseaudio"
+    };
+
+    static const char* const kLibvaCandidates[] = {
+        "/usr/lib/x86_64-linux-gnu/dri",
+        "/usr/lib64/dri",
+        "/usr/lib/dri"
+    };
+
+    for (const char* cand : kLdCandidates) {
+        std::string full_scan_path = root_prefix + host_root + cand;
+        if (fs::exists(full_scan_path, ec)) {
+            if (!out_ld_path.empty()) {
+                out_ld_path += ":";
+            }
+            out_ld_path += std::string(host_root) + cand;
+        }
+    }
+
+    for (const char* cand : kLibvaCandidates) {
+        std::string full_scan_path = root_prefix + host_root + cand;
+        if (fs::exists(full_scan_path, ec)) {
+            if (!out_libva_path.empty()) {
+                out_libva_path += ":";
+            }
+            out_libva_path += std::string(host_root) + cand;
+        }
+    }
+
+    return (!out_ld_path.empty() || !out_libva_path.empty());
+}
+
 bool RecorderController::spawn_helper_process(const HudConfig& cfg, float display_w, float display_h) {
     if (helper_pid_ > 0) {
         int status = 0;
@@ -280,17 +338,9 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
     // Prepare clean environment variables with container / pressure-vessel library path support
     std::vector<std::string> env_strings;
     std::string new_ld_path;
+    std::string host_libva_path;
 
-    // If inside pressure-vessel / bubblewrap container, add host library paths
-    std::error_code ec;
-    if (fs::exists("/run/host/usr/lib", ec)) {
-        new_ld_path = "/run/host/usr/lib/pulseaudio:/run/host/usr/lib";
-        if (fs::exists("/run/host/usr/lib64", ec)) {
-            new_ld_path += ":/run/host/usr/lib64";
-        }
-    } else if (fs::exists("/var/run/host/usr/lib", ec)) {
-        new_ld_path = "/var/run/host/usr/lib/pulseaudio:/var/run/host/usr/lib";
-    }
+    build_container_host_env_paths("", new_ld_path, host_libva_path);
 
     const char* cur_ld = std::getenv("LD_LIBRARY_PATH");
     if (cur_ld && *cur_ld) {
@@ -300,6 +350,9 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
         new_ld_path += cur_ld;
     }
 
+    const char* cur_libva = std::getenv("LIBVA_DRIVERS_PATH");
+    bool has_user_libva = (cur_libva && *cur_libva);
+
     for (char** ep = environ; ep && *ep; ++ep) {
         std::string e = *ep;
         if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) {
@@ -308,11 +361,18 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
         if (e.rfind("LD_PRELOAD=", 0) == 0) {
             continue; // Do not leak game's LD_PRELOAD into daemon
         }
+        if (!has_user_libva && e.rfind("LIBVA_DRIVERS_PATH=", 0) == 0) {
+            continue; // Will inject container LIBVA_DRIVERS_PATH if needed
+        }
         env_strings.push_back(std::move(e));
     }
 
     if (!new_ld_path.empty()) {
         env_strings.push_back("LD_LIBRARY_PATH=" + new_ld_path);
+    }
+
+    if (!has_user_libva && !host_libva_path.empty()) {
+        env_strings.push_back("LIBVA_DRIVERS_PATH=" + host_libva_path);
     }
 
     std::vector<char*> envp;
