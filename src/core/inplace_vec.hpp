@@ -123,6 +123,32 @@ public:
     size_ = 0;
   }
 
+  [[nodiscard]] constexpr reference front() noexcept { return data()[0]; }
+  [[nodiscard]] constexpr const_reference front() const noexcept { return data()[0]; }
+  [[nodiscard]] constexpr reference back() noexcept { return data()[size_ - 1]; }
+  [[nodiscard]] constexpr const_reference back() const noexcept { return data()[size_ - 1]; }
+
+  constexpr void pop_back() noexcept {
+    if (size_ > 0) {
+      data()[--size_].~T();
+    }
+  }
+
+  template <typename... Args>
+  constexpr pointer try_emplace_back(Args&&... args) {
+    if (size_ >= N) return nullptr;
+    new (static_cast<void*>(data() + size_)) T(std::forward<Args>(args)...);
+    ++size_;
+    return data() + (size_ - 1);
+  }
+
+  template <typename... Args>
+  constexpr reference emplace_back(Args&&... args) {
+    pointer p = try_emplace_back(std::forward<Args>(args)...);
+    if (!p) throw std::bad_alloc();
+    return *p;
+  }
+
   constexpr pointer try_push_back(const T& val) {
     if (size_ >= N) return nullptr;
     new (static_cast<void*>(data() + size_)) T(val);
