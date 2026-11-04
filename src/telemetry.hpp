@@ -144,15 +144,21 @@ public:
     // Force an immediate synchronous poll (useful for CLI test)
     void poll_once_sync();
 
+    // Active GPU binding & rendering API VRAM reporting
+    void notify_active_gpu(uint32_t vendor_id, uint32_t device_id);
+    void update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept;
+
 private:
     void worker_loop();
     void init_sensors();
     void init_cpu_sensors();
     void init_gpu_sensors();
+    void init_gpu_sensors_locked();
     void init_ram_info();
     bool load_ram_info_file(const std::string& path);
     bool load_ram_info_dmi(const std::string& entries_dir);
     void shutdown_sensors();
+    void shutdown_sensors_locked();
 
     void poll_cpu_load();
     void poll_cpu_clock();
@@ -166,9 +172,14 @@ private:
     void poll_drm_sysfs_gpu();
     void poll_local_clock();
 
+    mutable std::mutex gpu_sensor_mutex_;
     GpuBackendType gpu_backend_ = GpuBackendType::None;
     std::string root_prefix_;
     bool disable_nvml_ = false;
+    uint32_t bound_vendor_id_ = 0;
+    uint32_t bound_device_id_ = 0;
+    std::atomic<uint64_t> api_vram_used_bytes_{0};
+    std::atomic<uint64_t> api_vram_total_bytes_{0};
 
     // Dynamic NVML state (NVIDIA GPUs)
     void* nvml_lib_ = nullptr;
@@ -203,6 +214,7 @@ private:
     std::string drm_pp_dpm_sclk_path_;    // AMD fallback: device/pp_dpm_sclk ("1: 2400Mhz *")
     bool        drm_sclk_in_hz_ = true;
     std::string drm_temp_path_;           // hwmon/temp1_input (millidegrees C)
+    std::string drm_temp_fallback_path_;  // fallback edge temp if junction temp2_input used
     std::string drm_fan_pwm_path_;        // hwmon/pwm1 (0..255)
     std::string drm_fan_rpm_path_;        // hwmon/fan1_input
     std::string drm_fan_max_path_;        // hwmon/fan1_max
@@ -228,6 +240,8 @@ private:
     std::chrono::steady_clock::time_point prev_rapl_time_{};
     uint64_t prev_gpu_energy_uj_ = 0;
     std::chrono::steady_clock::time_point prev_gpu_energy_time_{};
+    uint64_t prev_drm_render_ns_ = 0;
+    std::chrono::steady_clock::time_point prev_drm_render_time_{};
 
     // Frame timing state (exclusively render thread — no mutex needed)
     std::chrono::steady_clock::time_point last_frame_time_{};

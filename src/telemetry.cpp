@@ -1,7 +1,9 @@
 #include "telemetry.hpp"
 
+#include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <algorithm>
 #include <cmath>
@@ -41,6 +43,20 @@ constexpr int NVML_CLOCK_GRAPHICS = 0;
 constexpr int NVML_CLOCK_MEM = 2;
 constexpr int NVML_PCIE_UTIL_TX_BYTES = 0;
 constexpr int NVML_PCIE_UTIL_RX_BYTES = 1;
+
+#ifndef SYS_getdents64
+#ifdef __NR_getdents64
+#define SYS_getdents64 __NR_getdents64
+#endif
+#endif
+
+struct LinuxDirent64 {
+    uint64_t       d_ino;
+    int64_t        d_off;
+    unsigned short d_reclen;
+    unsigned char  d_type;
+    char           d_name[1];
+};
 constexpr int NVML_SUCCESS = 0;
 
 // Fast zero-allocation sysfs reader using stack buffer
@@ -480,16 +496,91 @@ void TelemetryCollector::init_cpu_sensors() {
 }
 
 void TelemetryCollector::init_gpu_sensors() {
+    std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
+    init_gpu_sensors_locked();
+}
+
+void TelemetryCollector::init_gpu_sensors_locked() {
     std::error_code ec;
     char buf[128];
 
+    // Clear DRM paths before discovery (crucial when switching bound GPU)
+    drm_gpu_busy_path_.clear();
+    drm_vram_used_path_.clear();
+    drm_vram_total_path_.clear();
+    drm_gtt_used_path_.clear();
+    drm_gtt_total_path_.clear();
+    drm_mem_busy_path_.clear();
+    drm_sclk_freq_path_.clear();
+    drm_mclk_freq_path_.clear();
+    drm_max_freq_path_.clear();
+    drm_pp_dpm_sclk_path_.clear();
+    drm_temp_path_.clear();
+    drm_temp_fallback_path_.clear();
+    drm_fan_pwm_path_.clear();
+    drm_fan_rpm_path_.clear();
+    drm_fan_max_path_.clear();
+    drm_power_uw_path_.clear();
+    drm_energy_uj_path_.clear();
+    drm_sclk_in_hz_ = true;
+    gpu_backend_ = GpuBackendType::None;
+
+    std::string drm_base = root_prefix_ + "/sys/class/drm";
+
     // ========================================================================
-    // Backend 1: Try NVIDIA NVML first (libnvidia-ml.so.1) unless disabled for mock testing
+    // Optimus D3cold Protection: Check if all NVIDIA cards are in D3cold (suspended)
     // ========================================================================
-    if (!disable_nvml_ && root_prefix_.empty()) {
-        nvml_lib_ = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
-        if (!nvml_lib_) {
-            nvml_lib_ = dlopen("libnvidia-ml.so", RTLD_LAZY | RTLD_LOCAL);
+    bool nvidia_all_suspended = false;
+    bool has_nvidia_card = false;
+    if (fs::exists(drm_base, ec)) {
+        bool all_susp = true;
+        for (int card_idx = 0; card_idx < 8; ++card_idx) {
+            fs::path dev_dir = fs::path(drm_base) / ("card" + std::to_string(card_idx)) / "device";
+            if (!fs::exists(dev_dir, ec)) continue;
+            char vbuf[32] = {0};
+            if (read_sysfs_buf((dev_dir / "vendor").c_str(), vbuf, sizeof(vbuf))) {
+                if (std::strcmp(vbuf, "0x10de") == 0 || std::strtoul(vbuf, nullptr, 16) == 0x10de) {
+                    has_nvidia_card = true;
+                    char pbuf[32] = {0};
+                    if (read_sysfs_buf((dev_dir / "power/runtime_status").c_str(), pbuf, sizeof(pbuf))) {
+                        if (std::strcmp(pbuf, "suspended") != 0 && std::strstr(pbuf, "suspended") == nullptr) {
+                            all_susp = false;
+                        }
+                    } else {
+                        all_susp = false;
+                    }
+                }
+            }
+        }
+        if (has_nvidia_card && all_susp) {
+            nvidia_all_suspended = true;
+        }
+    }
+
+    // ========================================================================
+    // Backend 1: Try NVIDIA NVML first (libnvidia-ml.so.1) unless:
+    // - disabled by config/mock
+    // - bound explicitly to a non-NVIDIA GPU (vendor_id != 0x10de)
+    // - all NVIDIA GPUs are currently suspended (Optimus D3cold protection) and not explicitly bound to 0x10de
+    // ========================================================================
+    bool allow_nvml = !disable_nvml_ && root_prefix_.empty();
+    if (bound_vendor_id_ != 0 && bound_vendor_id_ != 0x10de) {
+        allow_nvml = false;
+    }
+    if (nvidia_all_suspended && bound_vendor_id_ != 0x10de) {
+        allow_nvml = false;
+    }
+
+    if (allow_nvml) {
+        const char* nvml_candidates[] = {
+            "libnvidia-ml.so.1",
+            "libnvidia-ml.so",
+            "/run/host/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+            "/run/host/usr/lib64/libnvidia-ml.so.1"
+        };
+        for (const char* path : nvml_candidates) {
+            nvml_lib_ = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+            if (nvml_lib_) break;
         }
     }
 
@@ -525,6 +616,7 @@ void TelemetryCollector::init_gpu_sensors() {
                 if (pfn_nvmlDeviceGetHandleByIndex_v2_(0, &nvml_device_) == NVML_SUCCESS && nvml_device_) {
                     gpu_backend_ = GpuBackendType::NvidiaNvml;
                     std::lock_guard<std::mutex> lock(data_mutex_);
+                    hw_data_.gpu_available = true;
                     std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "NVIDIA");
 
                     if (pfn_nvmlDeviceGetName_) {
@@ -555,7 +647,6 @@ void TelemetryCollector::init_gpu_sensors() {
     // Backend 2 & 3: Universal Linux DRM sysfs for AMD (amdgpu/radeon) & Intel (i915/xe)
     // Automatically prioritizes Discrete GPU (largest VRAM) on Dual-GPU / Hybrid laptops!
     // ========================================================================
-    std::string drm_base = root_prefix_ + "/sys/class/drm";
     if (!fs::exists(drm_base, ec)) return;
 
     int best_card_idx = -1;
@@ -564,50 +655,81 @@ void TelemetryCollector::init_gpu_sensors() {
     std::string best_device_id;
 
     for (int card_idx = 0; card_idx < 8; ++card_idx) {
-        fs::path dev_dir = drm_base + "/card" + std::to_string(card_idx) + "/device";
+        fs::path card_root = fs::path(drm_base) / ("card" + std::to_string(card_idx));
+        fs::path dev_dir = card_root / "device";
         if (!fs::exists(dev_dir, ec)) continue;
 
         std::string vendor_id;
         if (read_sysfs_buf((dev_dir / "vendor").c_str(), buf, sizeof(buf))) {
             vendor_id = buf;
         }
-        bool is_amd    = (vendor_id == "0x1002");
-        bool is_intel  = (vendor_id == "0x8086");
-        bool is_nvidia = (vendor_id == "0x10de");
+        uint32_t card_vendor = static_cast<uint32_t>(std::strtoul(vendor_id.c_str(), nullptr, 16));
+        bool is_amd    = (card_vendor == 0x1002);
+        bool is_intel  = (card_vendor == 0x8086);
+        bool is_nvidia = (card_vendor == 0x10de);
         if (!is_amd && !is_intel && !is_nvidia) continue;
+
+        std::string device_id;
+        if (read_sysfs_buf((dev_dir / "device").c_str(), buf, sizeof(buf))) {
+            device_id = buf;
+        }
+        uint32_t card_device = static_cast<uint32_t>(std::strtoul(device_id.c_str(), nullptr, 16));
+
+        // Filtering by bound GPU if specified
+        if (bound_vendor_id_ != 0) {
+            if (card_vendor != bound_vendor_id_) continue;
+            if (bound_device_id_ != 0 && card_device != 0 && card_device != bound_device_id_) continue;
+        } else {
+            // Unbound: if NVIDIA card is suspended, do not pick it over an active iGPU!
+            if (is_nvidia) {
+                char pbuf[32] = {0};
+                if (read_sysfs_buf((dev_dir / "power/runtime_status").c_str(), pbuf, sizeof(pbuf))) {
+                    if (std::strcmp(pbuf, "suspended") == 0 || std::strstr(pbuf, "suspended") != nullptr) {
+                        continue;
+                    }
+                }
+            }
+        }
 
         uint64_t card_vram = 0;
         if (read_sysfs_buf((dev_dir / "mem_info_vram_total").c_str(), buf, sizeof(buf))) {
             card_vram = std::strtoull(buf, nullptr, 10);
-        } else if (read_sysfs_buf((fs::path(drm_base + "/card" + std::to_string(card_idx)) / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
+        } else if (read_sysfs_buf((card_root / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
             card_vram = std::strtoull(buf, nullptr, 10);
         } else if (read_sysfs_buf((dev_dir / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
             card_vram = std::strtoull(buf, nullptr, 10);
         }
 
-        if (best_card_idx < 0 || card_vram > best_vram_bytes) {
+        // If explicitly bound to this vendor/device, immediate preference
+        if (bound_vendor_id_ != 0 && card_vendor == bound_vendor_id_) {
+            if (best_card_idx < 0 || (bound_device_id_ != 0 && card_device == bound_device_id_) || card_vram > best_vram_bytes) {
+                best_card_idx = card_idx;
+                best_vram_bytes = card_vram;
+                best_vendor_id = vendor_id;
+                best_device_id = device_id;
+                if (bound_device_id_ != 0 && card_device == bound_device_id_) break;
+            }
+        } else if (best_card_idx < 0 || card_vram > best_vram_bytes) {
             best_card_idx = card_idx;
             best_vram_bytes = card_vram;
             best_vendor_id = vendor_id;
-            if (read_sysfs_buf((dev_dir / "device").c_str(), buf, sizeof(buf))) {
-                best_device_id = buf;
-            } else {
-                best_device_id.clear();
-            }
+            best_device_id = device_id;
         }
     }
 
     if (best_card_idx < 0) return;
 
-    fs::path card_root = drm_base + "/card" + std::to_string(best_card_idx);
+    fs::path card_root = fs::path(drm_base) / ("card" + std::to_string(best_card_idx));
     fs::path dev_dir = card_root / "device";
-    bool is_amd    = (best_vendor_id == "0x1002");
-    bool is_intel  = (best_vendor_id == "0x8086");
-    bool is_nvidia = (best_vendor_id == "0x10de");
+    uint32_t best_vendor_num = static_cast<uint32_t>(std::strtoul(best_vendor_id.c_str(), nullptr, 16));
+    bool is_amd    = (best_vendor_num == 0x1002);
+    bool is_intel  = (best_vendor_num == 0x8086);
+    bool is_nvidia = (best_vendor_num == 0x10de);
 
-    if (best_vendor_id == "0x1002") gpu_backend_ = GpuBackendType::AmdSysfs;
-    else if (best_vendor_id == "0x8086") gpu_backend_ = GpuBackendType::IntelSysfs;
+    if (is_amd) gpu_backend_ = GpuBackendType::AmdSysfs;
+    else if (is_intel) gpu_backend_ = GpuBackendType::IntelSysfs;
     else gpu_backend_ = GpuBackendType::AmdSysfs; // generic DRM sysfs for Nouveau
+
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         hw_data_.gpu_available = true;
@@ -665,18 +787,25 @@ void TelemetryCollector::init_gpu_sensors() {
     }
 
     // Intel i915 / xe specific frequency paths
-    if (fs::exists(card_root / "gt_cur_freq_mhz", ec)) {
+    if (fs::exists(dev_dir / "tile0/gt0/freq0/act_freq", ec)) {
+        drm_sclk_freq_path_ = (dev_dir / "tile0/gt0/freq0/act_freq").string();
+        drm_sclk_in_hz_ = false;
+    } else if (fs::exists(dev_dir / "tile0/gt0/freq0/cur_freq", ec)) {
+        drm_sclk_freq_path_ = (dev_dir / "tile0/gt0/freq0/cur_freq").string();
+        drm_sclk_in_hz_ = false;
+    } else if (fs::exists(card_root / "gt_cur_freq_mhz", ec)) {
         drm_sclk_freq_path_ = (card_root / "gt_cur_freq_mhz").string();
         drm_sclk_in_hz_ = false;
     } else if (fs::exists(card_root / "gt/gt0/rps_cur_freq_mhz", ec)) {
         drm_sclk_freq_path_ = (card_root / "gt/gt0/rps_cur_freq_mhz").string();
         drm_sclk_in_hz_ = false;
-    } else if (fs::exists(dev_dir / "tile0/gt0/freq0/cur_freq", ec)) {
-        drm_sclk_freq_path_ = (dev_dir / "tile0/gt0/freq0/cur_freq").string();
-        drm_sclk_in_hz_ = false;
     }
 
-    if (fs::exists(card_root / "gt_max_freq_mhz", ec)) {
+    if (fs::exists(dev_dir / "tile0/gt0/freq0/max_freq", ec)) {
+        drm_max_freq_path_ = (dev_dir / "tile0/gt0/freq0/max_freq").string();
+    } else if (fs::exists(dev_dir / "tile0/gt0/freq0/rp0_freq", ec)) {
+        drm_max_freq_path_ = (dev_dir / "tile0/gt0/freq0/rp0_freq").string();
+    } else if (fs::exists(card_root / "gt_max_freq_mhz", ec)) {
         drm_max_freq_path_ = (card_root / "gt_max_freq_mhz").string();
     } else if (fs::exists(card_root / "gt/gt0/rps_max_freq_mhz", ec)) {
         drm_max_freq_path_ = (card_root / "gt/gt0/rps_max_freq_mhz").string();
@@ -694,9 +823,35 @@ void TelemetryCollector::init_gpu_sensors() {
             if (fs::exists(hp / "freq2_input", ec)) {
                 drm_mclk_freq_path_ = (hp / "freq2_input").string();
             }
+
+            // Junction / Hotspot (temp2_input) detection with fallback to temp1_input
+            std::string temp1_path;
+            std::string temp2_path;
             if (fs::exists(hp / "temp1_input", ec)) {
-                drm_temp_path_ = (hp / "temp1_input").string();
+                temp1_path = (hp / "temp1_input").string();
             }
+            if (fs::exists(hp / "temp2_input", ec)) {
+                bool is_junction = false;
+                if (fs::exists(hp / "temp2_label", ec)) {
+                    char lbl[64] = {0};
+                    if (read_sysfs_buf((hp / "temp2_label").c_str(), lbl, sizeof(lbl))) {
+                        if (std::strstr(lbl, "junction") != nullptr) {
+                            is_junction = true;
+                        }
+                    }
+                }
+                if (is_junction || is_amd) {
+                    temp2_path = (hp / "temp2_input").string();
+                }
+            }
+            if (!temp2_path.empty()) {
+                drm_temp_path_ = temp2_path;
+                drm_temp_fallback_path_ = temp1_path;
+            } else if (!temp1_path.empty()) {
+                drm_temp_path_ = temp1_path;
+                drm_temp_fallback_path_.clear();
+            }
+
             if (fs::exists(hp / "pwm1", ec)) {
                 drm_fan_pwm_path_ = (hp / "pwm1").string();
             }
@@ -726,6 +881,11 @@ void TelemetryCollector::init_gpu_sensors() {
 }
 
 void TelemetryCollector::shutdown_sensors() {
+    std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
+    shutdown_sensors_locked();
+}
+
+void TelemetryCollector::shutdown_sensors_locked() {
     if (nvml_initialized_ && pfn_nvmlShutdown_) {
         pfn_nvmlShutdown_();
         nvml_initialized_ = false;
@@ -734,6 +894,8 @@ void TelemetryCollector::shutdown_sensors() {
         dlclose(nvml_lib_);
         nvml_lib_ = nullptr;
     }
+    nvml_device_ = nullptr;
+    gpu_backend_ = GpuBackendType::None;
 }
 
 void TelemetryCollector::on_frame() {
@@ -1152,6 +1314,27 @@ void TelemetryCollector::poll_once_sync() {
     poll_local_clock();
 }
 
+void TelemetryCollector::notify_active_gpu(uint32_t vendor_id, uint32_t device_id) {
+    std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
+    if (bound_vendor_id_ == vendor_id && bound_device_id_ == device_id && gpu_backend_ != GpuBackendType::None) {
+        return;
+    }
+    bound_vendor_id_ = vendor_id;
+    bound_device_id_ = device_id;
+    shutdown_sensors_locked();
+    init_gpu_sensors_locked();
+    if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
+        poll_nvidia_gpu();
+    } else if (gpu_backend_ == GpuBackendType::AmdSysfs || gpu_backend_ == GpuBackendType::IntelSysfs) {
+        poll_drm_sysfs_gpu();
+    }
+}
+
+void TelemetryCollector::update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept {
+    api_vram_used_bytes_.store(used_bytes, std::memory_order_relaxed);
+    api_vram_total_bytes_.store(total_bytes, std::memory_order_relaxed);
+}
+
 void TelemetryCollector::worker_loop() {
     while (running_.load(std::memory_order_relaxed)) {
         poll_once_sync();
@@ -1358,6 +1541,7 @@ void TelemetryCollector::poll_mem_pressure() {
 }
 
 void TelemetryCollector::poll_gpu() {
+    std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
     if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
         poll_nvidia_gpu();
     } else if (gpu_backend_ == GpuBackendType::AmdSysfs || gpu_backend_ == GpuBackendType::IntelSysfs) {
@@ -1453,10 +1637,7 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     int fan_pct = 0;
     float watts = 0.0f;
 
-    if (!drm_gpu_busy_path_.empty() && read_sysfs_buf(drm_gpu_busy_path_.c_str(), buf, sizeof(buf))) {
-        load_pct = std::strtof(buf, nullptr);
-    }
-
+    // 1. Clock frequency
     if (!drm_sclk_freq_path_.empty() && read_sysfs_buf(drm_sclk_freq_path_.c_str(), buf, sizeof(buf))) {
         uint64_t raw = std::strtoull(buf, nullptr, 10);
         clock_mhz = drm_sclk_in_hz_ ? static_cast<int>((raw + 500000) / 1000000) : static_cast<int>(raw);
@@ -1477,8 +1658,67 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         }
     }
 
-    // Fallback GPU Load for Intel i915 integrated GPUs without gpu_busy_percent
+    // 2. GPU Utilization / Load
+    if (!drm_gpu_busy_path_.empty() && read_sysfs_buf(drm_gpu_busy_path_.c_str(), buf, sizeof(buf))) {
+        load_pct = std::strtof(buf, nullptr);
+    }
+
+    // Intel i915 / xe fallback utilization
     if (load_pct < 0.0f) {
+        // Fallback 1: Parse /proc/self/fdinfo for drm-engine-render or drm-cycles-rcs (zero runtime heap)
+        int dfd = open("/proc/self/fdinfo", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (dfd >= 0) {
+            uint64_t total_render_ns = 0;
+            bool found_drm_fd = false;
+            char d_buf[512];
+            long nread = 0;
+            while ((nread = syscall(SYS_getdents64, dfd, d_buf, sizeof(d_buf))) > 0) {
+                for (long bpos = 0; bpos < nread; ) {
+                    auto* d = reinterpret_cast<const LinuxDirent64*>(d_buf + bpos);
+                    if (d->d_name[0] != '.') {
+                        char fd_path[64];
+                        std::snprintf(fd_path, sizeof(fd_path), "/proc/self/fdinfo/%s", d->d_name);
+                        int fd = open(fd_path, O_RDONLY | O_CLOEXEC);
+                        if (fd >= 0) {
+                            char fdbuf[512];
+                            ssize_t rn = read(fd, fdbuf, sizeof(fdbuf) - 1);
+                            close(fd);
+                            if (rn > 0) {
+                                fdbuf[rn] = '\0';
+                                const char* tag = std::strstr(fdbuf, "drm-engine-render:");
+                                if (tag) {
+                                    uint64_t ns = std::strtoull(tag + 18, nullptr, 10);
+                                    total_render_ns += ns;
+                                    found_drm_fd = true;
+                                } else if ((tag = std::strstr(fdbuf, "drm-cycles-rcs:"))) {
+                                    uint64_t ns = std::strtoull(tag + 15, nullptr, 10);
+                                    total_render_ns += ns;
+                                    found_drm_fd = true;
+                                }
+                            }
+                        }
+                    }
+                    bpos += d->d_reclen;
+                }
+            }
+            close(dfd);
+
+            if (found_drm_fd) {
+                auto now = std::chrono::steady_clock::now();
+                if (prev_drm_render_time_.time_since_epoch().count() != 0 && total_render_ns >= prev_drm_render_ns_) {
+                    auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - prev_drm_render_time_).count();
+                    if (dt_ns > 1000000) {
+                        load_pct = std::clamp(static_cast<float>((total_render_ns - prev_drm_render_ns_) * 100.0 / dt_ns), 0.0f, 100.0f);
+                    }
+                }
+                prev_drm_render_ns_ = total_render_ns;
+                prev_drm_render_time_ = now;
+            }
+        }
+    }
+
+    if (load_pct < 0.0f) {
+        // Fallback 2: Frequency ratio (clock_mhz * 100) / max_mhz
         if (!drm_max_freq_path_.empty() && read_sysfs_buf(drm_max_freq_path_.c_str(), buf, sizeof(buf))) {
             int max_mhz = static_cast<int>(std::strtol(buf, nullptr, 10));
             if (max_mhz > 0 && clock_mhz > 0) {
@@ -1488,6 +1728,7 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         if (load_pct < 0.0f) load_pct = 0.0f;
     }
 
+    // 3. VRAM and GTT Shared Memory
     if (!drm_vram_used_path_.empty() && read_sysfs_buf(drm_vram_used_path_.c_str(), buf, sizeof(buf))) {
         uint64_t bytes = std::strtoull(buf, nullptr, 10);
         vram_used_gb = static_cast<float>(bytes) / (1024.0f * 1024.0f * 1024.0f);
@@ -1497,8 +1738,10 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         vram_total_gb = static_cast<float>(bytes) / (1024.0f * 1024.0f * 1024.0f);
     }
 
-    // Fallback / combined shared GTT memory for AMD APUs & Steam Deck (when dedicated VRAM <= 1 GB)
-    if (vram_total_gb <= 1.0f && !drm_gtt_used_path_.empty() && read_sysfs_buf(drm_gtt_used_path_.c_str(), buf, sizeof(buf))) {
+    // Fallback / combined shared GTT memory for AMD APUs & Steam Deck
+    bool is_apu_gtt = (vram_total_gb <= 1.0f) ||
+                      (!drm_gtt_used_path_.empty() && drm_mclk_freq_path_.empty() && vram_total_gb <= 8.5f);
+    if (is_apu_gtt && !drm_gtt_used_path_.empty() && read_sysfs_buf(drm_gtt_used_path_.c_str(), buf, sizeof(buf))) {
         uint64_t gtt_used = std::strtoull(buf, nullptr, 10);
         vram_used_gb += static_cast<float>(gtt_used) / (1024.0f * 1024.0f * 1024.0f);
         if (!drm_gtt_total_path_.empty() && read_sysfs_buf(drm_gtt_total_path_.c_str(), buf, sizeof(buf))) {
@@ -1507,7 +1750,43 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         }
     }
 
-    // Calculate GPU Memory Bandwidth (GB/s) for AMD (freq2_input + mem_busy_percent) & Intel
+    // Intel iGPU without lmem or Nouveau fallback
+    if (vram_total_gb <= 0.0f) {
+        uint64_t api_tot = api_vram_total_bytes_.load(std::memory_order_relaxed);
+        if (api_tot > 0) {
+            uint64_t api_usd = api_vram_used_bytes_.load(std::memory_order_relaxed);
+            vram_total_gb = static_cast<float>(api_tot) / (1024.0f * 1024.0f * 1024.0f);
+            vram_used_gb = static_cast<float>(api_usd) / (1024.0f * 1024.0f * 1024.0f);
+        } else {
+            float sys_ram_total = 0.0f;
+            float sys_game_ram = 0.0f;
+            {
+                std::lock_guard<std::mutex> lock(data_mutex_);
+                sys_ram_total = hw_data_.ram_total_gb;
+                sys_game_ram = hw_data_.game_ram_gb;
+            }
+            if (sys_ram_total <= 0.0f) {
+                std::string meminfo_path = root_prefix_ + "/proc/meminfo";
+                if (FILE* f = std::fopen(meminfo_path.c_str(), "r")) {
+                    char mbuf[128];
+                    while (std::fgets(mbuf, sizeof(mbuf), f)) {
+                        unsigned long long kb = 0;
+                        if (std::sscanf(mbuf, "MemTotal: %llu kB", &kb) == 1) {
+                            sys_ram_total = static_cast<float>(kb) / (1024.0f * 1024.0f);
+                            break;
+                        }
+                    }
+                    std::fclose(f);
+                }
+            }
+            if (sys_ram_total > 0.0f) {
+                vram_total_gb = sys_ram_total * 0.5f;
+                vram_used_gb = std::min(sys_game_ram > 0.0f ? sys_game_ram : 0.0f, vram_total_gb);
+            }
+        }
+    }
+
+    // 4. Memory Bandwidth (GB/s)
     int mclk_mhz = 0;
     if (!drm_mclk_freq_path_.empty() && read_sysfs_buf(drm_mclk_freq_path_.c_str(), buf, sizeof(buf))) {
         uint64_t raw_hz = std::strtoull(buf, nullptr, 10);
@@ -1518,20 +1797,33 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
         mem_util_ratio = std::clamp(std::strtof(buf, nullptr) / 100.0f, 0.0f, 1.0f);
     }
     if (mclk_mhz > 0) {
-        // Estimate effective bus width from VRAM capacity (256-bit for >=12GB, 128-bit for >=4GB, 64-bit for APU)
         float bus_bytes = (vram_total_gb >= 11.5f) ? 32.0f : ((vram_total_gb >= 3.5f) ? 16.0f : 8.0f);
         max_bw_gbs = (static_cast<float>(mclk_mhz) * 2.0f * bus_bytes) / 1000.0f;
         bw_gbs = max_bw_gbs * mem_util_ratio;
     } else if (clock_mhz > 0) {
-        // Intel Arc / iGPU fallback bandwidth estimation
         float bus_bytes = (vram_total_gb >= 7.5f) ? 32.0f : 16.0f;
         max_bw_gbs = (static_cast<float>(clock_mhz) * bus_bytes) / 1000.0f;
         bw_gbs = max_bw_gbs * mem_util_ratio;
     }
 
+    // 5. Temperature (with RDNA Hotspot / Junction & Edge Fallback)
     if (!drm_temp_path_.empty() && read_sysfs_buf(drm_temp_path_.c_str(), buf, sizeof(buf))) {
         long millideg = std::strtol(buf, nullptr, 10);
-        temp_c = static_cast<int>((millideg + 500) / 1000);
+        if (millideg > 0 && millideg < 130000) {
+            temp_c = static_cast<int>((millideg + 500) / 1000);
+        } else if (!drm_temp_fallback_path_.empty() &&
+                   read_sysfs_buf(drm_temp_fallback_path_.c_str(), buf, sizeof(buf))) {
+            long millideg_fb = std::strtol(buf, nullptr, 10);
+            if (millideg_fb > 0 && millideg_fb < 130000) {
+                temp_c = static_cast<int>((millideg_fb + 500) / 1000);
+            }
+        }
+    } else if (!drm_temp_fallback_path_.empty() &&
+               read_sysfs_buf(drm_temp_fallback_path_.c_str(), buf, sizeof(buf))) {
+        long millideg_fb = std::strtol(buf, nullptr, 10);
+        if (millideg_fb > 0 && millideg_fb < 130000) {
+            temp_c = static_cast<int>((millideg_fb + 500) / 1000);
+        }
     }
 
     if (!drm_fan_pwm_path_.empty() && read_sysfs_buf(drm_fan_pwm_path_.c_str(), buf, sizeof(buf))) {

@@ -845,6 +845,158 @@ void run_all_devices_and_features_suite() {
 
     fs::remove_all(base, ec);
 
+    // ------------------------------------------------------------------------
+    // PROFILE 8: Intel Arc Battlemage / Lunar Lake (Driver xe) + Intel iGPU Shared Memory
+    // ------------------------------------------------------------------------
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: Intel(R) Core(TM) Ultra 7 268V\n");
+    write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       33554432 kB\nMemAvailable:   25165824 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      2097152 kB\n");
+    write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4800000");
+
+    fs::path xe_card = base / "sys/class/drm/card0";
+    fs::path xe_dev = xe_card / "device";
+    write_mock_file(xe_dev / "vendor", "0x8086");
+    write_mock_file(xe_dev / "device", "0xe20b"); // Intel Arc Battlemage B580 / Lunar Lake
+    // Diskrit xe: tanpa gpu_busy_percent dan tanpa gt_max_freq_mhz
+    write_mock_file(xe_dev / "tile0/gt0/freq0/act_freq", "2100");
+    write_mock_file(xe_dev / "tile0/gt0/freq0/max_freq", "2800");
+    write_mock_file(xe_card / "lmem_total_bytes", "12884901888"); // 12 GB VRAM
+    write_mock_file(xe_card / "lmem_used_bytes", "4294967296");   // 4 GB VRAM
+    write_mock_file(xe_dev / "hwmon/hwmon1/temp1_input", "58000");
+
+    {
+        TelemetryCollector xe_tc(base.string(), true);
+        xe_tc.poll_once_sync();
+        auto xe_snap = xe_tc.get_snapshot();
+        bool xe_clk_ok = (xe_snap.gpu_clock_mhz == 2100);
+        bool xe_load_ok = (xe_snap.gpu_load_pct >= 74.0f && xe_snap.gpu_load_pct <= 76.0f);
+        check_cond(xe_snap.gpu_available && xe_clk_ok && xe_load_ok,
+                   "PROFILE 8.1: Intel xe Driver Telemetry (act_freq / max_freq ratio)",
+                   "Parsed act_freq=2100MHz, max_freq=2800MHz -> clock=2100MHz, load=75%");
+    }
+
+    // Intel integrated GPU without lmem (Shared Host Memory fallback + API reporting)
+    fs::remove_all(base, ec);
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: 12th Gen Intel(R) Core(TM) i5-12400\n");
+    write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       16777216 kB\nMemAvailable:   12582912 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      2097152 kB\n");
+    write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4400000");
+
+    fs::path igpu_intel_card = base / "sys/class/drm/card0";
+    fs::path igpu_intel_dev = igpu_intel_card / "device";
+    write_mock_file(igpu_intel_dev / "vendor", "0x8086");
+    write_mock_file(igpu_intel_dev / "device", "0x4692"); // Intel UHD Graphics 730
+    write_mock_file(igpu_intel_card / "gt_cur_freq_mhz", "1250");
+    write_mock_file(igpu_intel_card / "gt_max_freq_mhz", "1250");
+
+    {
+        TelemetryCollector igpu_tc(base.string(), true);
+        igpu_tc.poll_once_sync();
+        auto snap_fallback = igpu_tc.get_snapshot();
+        // Fallback: 50% of 16 GB = 8.00 GB
+        bool fb_total_ok = (snap_fallback.gpu_vram_total_gb > 7.5f && snap_fallback.gpu_vram_total_gb < 8.5f);
+
+        // API reporting: 2 GB used, 8 GB total
+        igpu_tc.update_api_vram_info(2ULL << 30, 8ULL << 30);
+        igpu_tc.poll_once_sync();
+        auto snap_api = igpu_tc.get_snapshot();
+        bool api_vram_ok = (snap_api.gpu_vram_used_gb > 1.9f && snap_api.gpu_vram_used_gb < 2.1f &&
+                            snap_api.gpu_vram_total_gb > 7.9f && snap_api.gpu_vram_total_gb < 8.1f);
+
+        check_cond(fb_total_ok && api_vram_ok,
+                   "PROFILE 8.2: Intel iGPU Shared VRAM & API Reporting",
+                   "Fallback MemTotal/2 (>0 GB) and update_api_vram_info (2.00 / 8.00 GB) verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // PROFILE 9: AMD Handheld APU BIOS UMA 4GB + Hotspot + Hybrid Active GPU Switch
+    // ------------------------------------------------------------------------
+    fs::remove_all(base, ec);
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: AMD Ryzen Z1 Extreme\n");
+    write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       16777216 kB\nMemAvailable:   10485760 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      3145728 kB\n");
+    write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "3800000");
+
+    fs::path apu9_dev = base / "sys/class/drm/card0/device";
+    write_mock_file(apu9_dev / "vendor", "0x1002");
+    write_mock_file(apu9_dev / "device", "0x15bf"); // Radeon 780M
+    write_mock_file(apu9_dev / "gpu_busy_percent", "82");
+    // APU configured with 4 GB BIOS UMA + 8 GB dynamic GTT
+    write_mock_file(apu9_dev / "mem_info_vram_total", "4294967296");  // 4 GB
+    write_mock_file(apu9_dev / "mem_info_vram_used", "2147483648");   // 2 GB
+    write_mock_file(apu9_dev / "mem_info_gtt_total", "8589934592");   // 8 GB
+    write_mock_file(apu9_dev / "mem_info_gtt_used", "3221225472");    // 3 GB
+    write_mock_file(apu9_dev / "hwmon/hwmon1/freq1_input", "2200000000");
+    write_mock_file(apu9_dev / "hwmon/hwmon1/temp1_input", "62000");  // Edge temp 62 C
+    write_mock_file(apu9_dev / "hwmon/hwmon1/temp2_label", "junction");
+    write_mock_file(apu9_dev / "hwmon/hwmon1/temp2_input", "79000");  // Hotspot temp 79 C
+    {
+        TelemetryCollector apu9_tc(base.string(), true);
+        apu9_tc.poll_once_sync();
+        auto apu9_snap = apu9_tc.get_snapshot();
+        // Combined VRAM: 2GB + 3GB = 5.00 GB used; 4GB + 8GB = 12.00 GB total
+        bool vram_comb_ok = (apu9_snap.gpu_vram_used_gb > 4.9f && apu9_snap.gpu_vram_used_gb < 5.1f &&
+                             apu9_snap.gpu_vram_total_gb > 11.9f && apu9_snap.gpu_vram_total_gb < 12.1f);
+        bool hotspot_ok = (apu9_snap.gpu_temp_c == 79);
+        check_cond(apu9_snap.gpu_available && vram_comb_ok && hotspot_ok,
+                   "PROFILE 9.1: AMD APU 4GB UMA + GTT and RDNA Hotspot Temperature",
+                   "Combined VRAM=5.00/12.00 GB & hotspot temp=79C verified");
+    }
+
+    // Dual-GPU hybrid system: card0 Intel iGPU + card1 NVIDIA dGPU (suspended)
+    fs::remove_all(base, ec);
+    write_mock_file(base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: 12th Gen Intel(R) Core(TM) i7-12700H\n");
+    write_mock_file(base / "proc/stat", "cpu  10000 0 2000 88000 0 0 0 0 0 0");
+    write_mock_file(base / "proc/meminfo",
+                    "MemTotal:       33554432 kB\nMemAvailable:   20971520 kB\n"
+                    "SwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    write_mock_file(base / "proc/self/status", "VmRSS:      2097152 kB\n");
+    write_mock_file(base / "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "4500000");
+
+    // card0: Intel Iris Xe (0x8086:0x46a6)
+    fs::path c0_dev = base / "sys/class/drm/card0/device";
+    write_mock_file(c0_dev / "vendor", "0x8086");
+    write_mock_file(c0_dev / "device", "0x46a6");
+    write_mock_file(base / "sys/class/drm/card0/gt_cur_freq_mhz", "1400");
+    write_mock_file(base / "sys/class/drm/card0/gt_max_freq_mhz", "1400");
+
+    // card1: NVIDIA RTX 3050 Mobile (0x10de:0x25a0) in D3cold (suspended)
+    fs::path c1_dev = base / "sys/class/drm/card1/device";
+    write_mock_file(c1_dev / "vendor", "0x10de");
+    write_mock_file(c1_dev / "device", "0x25a0");
+    write_mock_file(c1_dev / "power/runtime_status", "suspended\n");
+    write_mock_file(base / "sys/class/drm/card1/lmem_total_bytes", "4294967296"); // 4 GB
+    write_mock_file(base / "sys/class/drm/card1/lmem_used_bytes", "1073741824");  // 1 GB
+
+    {
+        TelemetryCollector hybrid_tc(base.string(), true);
+        // Bind to Intel card0 explicitly
+        hybrid_tc.notify_active_gpu(0x8086, 0x46a6);
+        hybrid_tc.poll_once_sync();
+        auto snap = hybrid_tc.get_snapshot();
+        bool vendor_intel = (std::strcmp(snap.gpu_vendor, "Intel") == 0);
+        bool clock_ok = (snap.gpu_clock_mhz == 1400);
+
+        check_cond(snap.gpu_available && vendor_intel && clock_ok,
+                   "PROFILE 9.2: Optimus D3cold Protection & notify_active_gpu Binding",
+                   "Bound to Intel card0 without waking suspended NVIDIA dGPU (card1)");
+    }
+
+    fs::remove_all(base, ec);
+
     // --------------------------------------------------------------------
     // SUITE 6 [MEMORY SAFETY & HARDENING]: Robustness & Leak-Free Validation
     // --------------------------------------------------------------------
