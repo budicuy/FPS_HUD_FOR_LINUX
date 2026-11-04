@@ -1632,11 +1632,8 @@ void run_elf_and_layer_abi_suite() {
         std::string out_true;
         while (fgets(pbuf, sizeof(pbuf), pipe_true)) out_true += pbuf;
         int status = pclose(pipe_true);
-        bool asan_runtime_msg = (out_true.find("asan") != std::string::npos ||
-                                 out_true.find("ASan") != std::string::npos);
-        if ((WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
-             out_true.find("ELFCLASS32") == std::string::npos) ||
-            asan_runtime_msg) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+            out_true.find("ELFCLASS32") == std::string::npos) {
           elf64_runs_ok = true;
         }
       }

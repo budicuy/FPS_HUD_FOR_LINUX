@@ -17,7 +17,15 @@ if [ -z "${CXX:-}" ]; then
         export CC="gcc"
     fi
 else
-    export CC="${CC:-gcc}"
+    if [ -z "${CC:-}" ]; then
+        if [[ "$CXX" == *clang* ]]; then
+            export CC="clang"
+        elif [[ "$CXX" == *g++* ]]; then
+            export CC="${CXX/g++/gcc}"
+        else
+            export CC="gcc"
+        fi
+    fi
     export CXX="${CXX}"
 fi
 

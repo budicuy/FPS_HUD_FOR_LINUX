@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <iterator>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -117,10 +118,10 @@ public:
   constexpr const_iterator end() const noexcept { return data() + size_; }
 
   constexpr void clear() noexcept {
-    for (size_t i = 0; i < size_; ++i) {
-      data()[i].~T();
+    while (size_ > 0) {
+      --size_;
+      std::destroy_at(data() + size_);
     }
-    size_ = 0;
   }
 
   [[nodiscard]] constexpr reference front() noexcept { return data()[0]; }
@@ -130,16 +131,17 @@ public:
 
   constexpr void pop_back() noexcept {
     if (size_ > 0) {
-      data()[--size_].~T();
+      --size_;
+      std::destroy_at(data() + size_);
     }
   }
 
   template <typename... Args>
   constexpr pointer try_emplace_back(Args&&... args) {
     if (size_ >= N) return nullptr;
-    new (static_cast<void*>(data() + size_)) T(std::forward<Args>(args)...);
+    pointer p = std::construct_at(data() + size_, std::forward<Args>(args)...);
     ++size_;
-    return data() + (size_ - 1);
+    return p;
   }
 
   template <typename... Args>
@@ -151,16 +153,16 @@ public:
 
   constexpr pointer try_push_back(const T& val) {
     if (size_ >= N) return nullptr;
-    new (static_cast<void*>(data() + size_)) T(val);
+    pointer p = std::construct_at(data() + size_, val);
     ++size_;
-    return data() + (size_ - 1);
+    return p;
   }
 
   constexpr pointer try_push_back(T&& val) {
     if (size_ >= N) return nullptr;
-    new (static_cast<void*>(data() + size_)) T(std::move(val));
+    pointer p = std::construct_at(data() + size_, std::move(val));
     ++size_;
-    return data() + (size_ - 1);
+    return p;
   }
 
   constexpr reference push_back(const T& val) {
@@ -200,10 +202,11 @@ public:
   constexpr void resize(size_type count) {
     if (count > N) throw std::bad_alloc();
     while (size_ > count) {
-      data()[--size_].~T();
+      --size_;
+      std::destroy_at(data() + size_);
     }
     while (size_ < count) {
-      new (static_cast<void*>(data() + size_)) T();
+      std::construct_at(data() + size_);
       ++size_;
     }
   }

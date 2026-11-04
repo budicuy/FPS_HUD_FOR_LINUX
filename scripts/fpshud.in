@@ -320,10 +320,12 @@ if [ "$IS_ELF32" -eq 1 ]; then
     exec "$@"
 fi
 
-# Check if libfpshud.so requires AddressSanitizer runtime
+# Check if libfpshud.so requires AddressSanitizer runtime.
+# If so, the ASan runtime DSO MUST be placed strictly FIRST in LD_PRELOAD
+# before any instrumented shared objects or application binaries.
+ASAN_RT=""
 if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
     if readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
-        ASAN_RT=""
         if command -v clang >/dev/null 2>&1; then
             ASAN_RT="$(clang -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)"
         fi
@@ -335,9 +337,6 @@ if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
         if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
             ASAN_RT="$(ldconfig -p 2>/dev/null | grep 'libasan\.so' | awk '{print $NF}' | head -n1 || true)"
         fi
-        if [ -n "$ASAN_RT" ] && [ -f "$ASAN_RT" ]; then
-            export LD_PRELOAD="${ASAN_RT}${LD_PRELOAD:+:$LD_PRELOAD}"
-        fi
     fi
 fi
 
@@ -346,5 +345,10 @@ if [ -z "$FPS_HUD" ]; then
     export FPS_HUD=1
 fi
 export LD_LIBRARY_PATH="$(dirname "$LIB_SO")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export LD_PRELOAD="libfpshud.so${LD_PRELOAD:+:$LD_PRELOAD}"
+if [ -n "$ASAN_RT" ] && [ -f "$ASAN_RT" ]; then
+    export LD_PRELOAD="${ASAN_RT}:libfpshud.so${LD_PRELOAD:+:$LD_PRELOAD}"
+else
+    export LD_PRELOAD="libfpshud.so${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
+
 exec "$@"
