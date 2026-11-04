@@ -76,9 +76,9 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 25 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
-- **Perekam Layar Hardware Zero-Stutter**:
+- **Perekam Layar Hardware Terpisah**:
   - Companion daemon khusus (`fpshud_recorder`) yang berjalan terpisah dengan zero copy lewat triple-buffered POSIX Shared Memory IPC.
-  - Mendukung standar video modern **HEVC (H.265 / `hvc1`)** dan **H.264** dengan kualitas **Adaptive CQP (CQ 16–30)** untuk hasil rekaman tajam tanpa artifak piksel.
+  - Mendukung akselerasi hardware **HEVC (H.265 / `hvc1`)** dan **H.264** via NVIDIA NVENC dan VAAPI dengan kualitas **Adaptive CQP (CQ 16–30)** untuk hasil rekaman tajam tanpa artifak piksel.
   - Perekaman audio multi-sumber (Game Audio, Mikrofon, Campuran, atau Mute) via PulseAudio/PipeWire yang langsung tersimpan rapi ke folder `~/Videos/FPSHUD`.
 - **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
   - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
@@ -86,11 +86,22 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Backend dinamis Intel Level Zero Sysman (`libze_loader.so.1` via runtime `dlopen`), fallback sensor Linux DRM & `hwmon`, serta sensor daya Intel RAPL.
   - **Topologi Core Intel Hybrid (P-Core vs E-Core)**: Penguraian otomatis topologi prosesor Intel Core Generasi 12/13/14 dan Core Ultra via `/sys/devices/cpu_{core,atom}/cpus` dengan beban kerja klaster terpisah secara real-time.
   - **Status Baterai Laptop & Handheld (`/sys/class/power_supply`)**: Persentase kapasitas baterai, daya listrik Watt (discharge/charge), dan indikator charging dengan deteksi otomatis Desktop PC (otomatis di-disabled dan digelapkan pada komputer desktop tanpa baterai).
-  - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
+  - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU gaming diskrit dibanding kartu grafis terintegrasi (iGPU) dengan mengevaluasi kelas perangkat PCI (`0x030000`), atribut `boot_vga`, dan flag perangkat diskrit Vulkan daripada nomor urut `cardN` statis, disertai resolusi nama model GPU akurat lewat `/usr/share/hwdata/pci.ids`.
+- **Keterbacaan Kontras Tinggi & Peringatan Dinamis**:
+  - Badge warna kategori (`FPS` Emas, `GPU` Hijau, `CPU` Cyan, `RAM` Ungu, `SYS` Perak), pemisah titik tengah (`·`), dan peringatan suhu dinamis (**Kuning saat `>= 72°C`**, **Merah saat `>= 82°C`**; penyesuaian nilai ambang batas direncanakan pada rilis mendatang).
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
   - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
 - **Optimasi Toolchain LLVM/Clang & Keamanan Memori**:
   - Dikompilasi menggunakan modern Clang, linker LLD, ThinLTO (`-flto=thin`), dan `-O3` menghasilkan biner shared library ramping **1.3 MB** dengan keamanan memori yang diverifikasi melalui AddressSanitizer & UndefinedBehaviorSanitizer.
+
+### Komparasi dengan MangoHud
+
+| Aspek | **MangoHud** | **FPSHUD** |
+| :--- | :--- | :--- |
+| **Filosofi Utama** | Overlay standar industri Linux dengan opsi konfigurasi berbasis berkas teks yang sangat mendalam. | Pengalaman modern serba-ada di dalam game dengan konfigurasi visual langsung (*live*). |
+| **Alur Konfigurasi** | Memerlukan keluar dari game dan mengedit berkas teks konfigurasi (`~/.config/MangoHud/MangoHud.conf`) atau memanfaatkan aplikasi GUI eksternal seperti GOverlay. | **In-game 3-Column GUI (`Insert` / `F12` / `F10`)**: ubah posisi, tata letak, 25 sensor, font, warna, dan tombol pintas langsung di layar tanpa keluar dari permainan. |
+| **Perekaman Layar** | Membutuhkan perangkat lunak capture eksternal terpisah (OBS Studio, GPU Screen Recorder, ReplaySorcery). | **Built-in companion daemon perekam (`fpshud_recorder`)** dengan tombol rekam 1-klik (`F7`), HEVC/H.264 CQP terakselerasi hardware, dan mixing audio. |
+| **Maturitas & Ekosistem** | Sangat matang, diadopsi luas di berbagai distro Linux, menjadi overlay standar di SteamOS GameScope. | Alternatif modern dan ramping bagi gamer yang menginginkan kustomisasi visual instan dan perekam klip terintegrasi. |
 
 ---
 
@@ -222,11 +233,30 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 - **`Advance`**: Menampilkan lengkap **25 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 5 sensor `CPU` termasuk `P/E Core Load`, 5 sensor `RAM/Memori`, `Render API`, `Local Clock`, dan `Battery & Power`).
 - **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
 
+### Peringatan Suhu Panas & Ambang Batas
+Secara default, FPSHUD memberikan badge warna dinamis pada angka suhu:
+- **Peringatan Kuning/Oranye (Amber)** ketika suhu GPU atau CPU mencapai **`>= 72°C`**
+- **Peringatan Kritis Merah** ketika suhu GPU atau CPU mencapai **`>= 82°C`**
+
+> [!NOTE]
+> Ambang batas suhu default ini dikalibrasi mengikuti batas wajar termal silikon desktop dan laptop gaming. Dukungan untuk penyesuaian nilai ambang batas pada `config.ini` direncanakan pada rilis mendatang.
+
 ---
 
 ## 5. Perekam Layar Hardware
 
 FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat ringan (`fpshud_recorder`) dan berjalan terpisah dari proses game utama. Frame dikirimkan melalui triple-buffered POSIX Shared Memory (`/dev/shm`), memastikan bahwa proses encoding video hardware tidak pernah menyebabkan stutter (*frame drop*) atau *micro-freeze* pada permainan Anda.
+
+### Arsitektur Hardware Encoder & GPU Readback
+Untuk memastikan performa framerate game tetap mulus selama proses perekaman aktif:
+- **Dukungan Hardware Encoder**:
+  - **NVIDIA**: Akselerasi hardware otomatis via **NVENC** (`hevc_nvenc`, `h264_nvenc`).
+  - **AMD & Intel**: Akselerasi hardware otomatis via **VAAPI** (`hevc_vaapi`, `h264_vaapi`).
+  - **Software Fallback**: Fallback otomatis ke `libx265` / `libx264` jika inisialisasi context encoder hardware tidak tersedia.
+- **Pipeline GPU Readback Asinkron**:
+  - **Vulkan**: Salinan staging buffer *double-buffered* menggunakan `vkCmdCopyImageToBuffer` ke memori *host-cached*. Pengiriman frame ke shared memory IPC dipipelinemen di balik fence transfer GPU, sehingga meniadakan jeda tunggu (stall) pada thread presentasi CPU.
+  - **OpenGL**: Ring buffer *dual-PBO* (`GL_PIXEL_PACK_BUFFER`) asinkron. Perekaman frame menjalankan *DMA readback* non-blocking pada `pbo[write]` sembari memetakan frame yang sudah selesai dari `pbo[read]`.
+  - **Daemon Terpisah**: Proses encoding video, muxing kontainer, dan mixing audio dijalankan sepenuhnya di dalam daemon mandiri `fpshud_recorder` lewat *zero-copy* POSIX shared memory (`/dev/shm`), sehingga beban komputasi encoder tidak membebani render thread game.
 
 ### Fitur Utama & Opsi Codec
 

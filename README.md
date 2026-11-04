@@ -77,8 +77,8 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
   - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
 - **Hardware-Accelerated Screen Recording Hub**:
-  - Dedicated background recording daemon (`fpshud_recorder`) with zero frame stutter, using triple-buffered POSIX Shared Memory IPC.
-  - Supports industry-standard **HEVC (H.265 / `hvc1`)** and **H.264** with **Adaptive CQP (CQ 16–30)** for crisp, artifact-free gameplay video.
+  - Dedicated background recording daemon (`fpshud_recorder`) with decoupled triple-buffered POSIX Shared Memory IPC.
+  - Supports hardware-accelerated **HEVC (H.265 / `hvc1`)** and **H.264** via NVIDIA NVENC and VAAPI with **Adaptive CQP (CQ 16–30)** for crisp, artifact-free gameplay video.
   - Multi-source audio recording (Game Audio, Microphone, Mixed, or Mute) via PulseAudio/PipeWire saved directly to `~/Videos/FPSHUD`.
 - **Universal Multi-Vendor Hardware Support**:
   - **NVIDIA**: Uses `libnvidia-ml.so.1` (NVML) dynamically.
@@ -86,13 +86,22 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`), Linux DRM & `hwmon` sysfs fallback, and Intel RAPL power counters.
   - **Intel Hybrid Architecture (P-Core & E-Core)**: Automatic topology discovery for 12th/13th/14th Gen Intel Core and Core Ultra processors via `/sys/devices/cpu_{core,atom}/cpus` with real-time cluster load breakdown.
   - **Laptop & Handheld Battery (`/sys/class/power_supply`)**: Real-time capacity percentage, discharge/charge wattage, and charging state with automatic desktop PC detection (auto-disabled and grayed out on desktop machines).
-  - **Hybrid Gaming Laptops**: Automatically prioritizes the dedicated gaming GPU (`card1`) over the integrated GPU (`card0`) and identifies exact GPU model names via `/usr/share/hwdata/pci.ids`.
+  - **Hybrid Gaming Laptops**: Automatically prioritizes the dedicated gaming GPU over integrated graphics by evaluating PCI device class (`0x030000`), `boot_vga` attributes, and Vulkan discrete device flags rather than static card numbering, with exact GPU model resolution via `/usr/share/hwdata/pci.ids`.
 - **High-Contrast Readability & Dynamic Alerts**:
-  - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and automatic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**).
+  - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and dynamic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**; threshold customization planned for upcoming release).
 - **Mini Frametime Graph & CSV Benchmark Logging (`F9`)**:
   - Optional live frametime waveform graph right on the HUD, plus 1-key CSV benchmarking (`~/Documents/fpshud_benchmark.csv`) that logs Avg FPS, 1% Low, 0.1% Low, Min/Max FPS, and peak GPU/CPU temperatures and wattage.
 - **Optimized LLVM/Clang Toolchain & Memory Hardening**:
   - Compiled with modern Clang, LLD linker, ThinLTO (`-flto=thin`), and `-O3` producing a compact **1.3 MB** library with memory safety verified by AddressSanitizer and UndefinedBehaviorSanitizer.
+
+### Comparison with MangoHud
+
+| Aspect | **MangoHud** | **FPSHUD** |
+| :--- | :--- | :--- |
+| **Primary Philosophy** | Standard industry overlay with exhaustive textual config file options. | Modern all-in-one in-game experience with live visual configuration. |
+| **Configuration Workflow** | Requires closing the game and editing text configuration files (`~/.config/MangoHud/MangoHud.conf`) or using external tools like GOverlay. | **In-game 3-Column GUI (`Insert` / `F12` / `F10`)**: adjust position, layout, 25 metrics, fonts, colors, and hotkeys live on screen without leaving the game. |
+| **Screen Recording** | Requires separate capture software (OBS Studio, GPU Screen Recorder, ReplaySorcery). | **Built-in companion recording daemon (`fpshud_recorder`)** with 1-click recording (`F7`), HEVC/H.264 CQP, and audio mixing. |
+| **Maturity & Ecosystem** | Extremely mature, widely adopted across Linux distros, default overlay in SteamOS GameScope. | Modern lightweight alternative designed for gamers wanting immediate visual customization and integrated clipping. |
 
 ---
 
@@ -224,11 +233,30 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 - **`Advance`**: Enables all **25 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 5 `CPU` metrics including `P/E Core Load`, all 5 `Memory/RAM` metrics, `Render API`, `Local Clock`, and `Battery & Power`).
 - **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
 
+### Thermal Warning Alerts & Thresholds
+By default, FPSHUD highlights temperature values using dynamic color badges:
+- **Amber Warning** when GPU or CPU reaches **`>= 72°C`**
+- **Red Critical Alert** when GPU or CPU reaches **`>= 82°C`**
+
+> [!NOTE]
+> These default thermal thresholds are calibrated for typical gaming desktop and laptop thermal throttling envelopes. Support for customizable threshold values in `config.ini` is planned for an upcoming release.
+
 ---
 
 ## 5. Hardware-Accelerated Screen Recording
 
 FPSHUD includes a dedicated, lightweight background screen recording daemon (`fpshud_recorder`) that runs decoupled from the game process. Frames are submitted via triple-buffered POSIX Shared Memory (`/dev/shm`), ensuring that hardware video encoding never introduces frame stutter or micro-freezes to your gameplay.
+
+### Hardware Encoder & GPU Readback Architecture
+To ensure high-framerate gameplay is never penalized during active recording:
+- **Hardware Encoders Supported**:
+  - **NVIDIA**: Automatic hardware acceleration via **NVENC** (`hevc_nvenc`, `h264_nvenc`).
+  - **AMD & Intel**: Automatic hardware acceleration via **VAAPI** (`hevc_vaapi`, `h264_vaapi`).
+  - **Software Fallback**: Graceful fallback to `libx265` / `libx264` if hardware encoder contexts cannot be initialized.
+- **Asynchronous GPU Readback Pipeline**:
+  - **Vulkan**: Double-buffered staging copy using `vkCmdCopyImageToBuffer` into host-cached staging memory. Frame submission to IPC shared memory is pipelined behind GPU transfer completion fences, eliminating CPU presentation stalls.
+  - **OpenGL**: Asynchronous dual-PBO (`GL_PIXEL_PACK_BUFFER`) ring buffer. Frame capture executes non-blocking DMA readback in `pbo[write]` while mapping the previously completed frame in `pbo[read]`.
+  - **Decoupled Worker Daemon**: Video encoding, container muxing, and audio mixing occur entirely in the standalone `fpshud_recorder` process via zero-copy POSIX shared memory (`/dev/shm`), preventing encoder overhead from impacting the game's render thread.
 
 ### Key Capabilities & Codec Options
 
