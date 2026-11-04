@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C++26](https://img.shields.io/badge/C%2B%2B-26-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
-[![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry.cpp)
+[![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry/telemetry.cpp)
 
 > 🌐 **Language / Bahasa Dokumentasi:** **[English (Default)](README.md)** | **[Bahasa Indonesia](README.id.md)**
 
@@ -195,9 +195,9 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 | **Video Codecs** | **HEVC (H.265 / `hvc1`)** or **H.264 (AVC)** | **HEVC (`hvc1`)** for 50% smaller files and universal compatibility in Discord, Chrome, QuickTime, and Premiere. |
 | **Rate Control** | **Adaptive CQP (Constant Quantization Parameter)** or **Fixed VBR** | **Adaptive CQP (Level 22)**: dynamically allocates bitrates based on scene complexity so fast action never pixelates. |
 | **CQP Levels** | Fine-tune visual quality from **CQ 16** (Near-lossless, higher bitrate) to **CQ 30** (Maximum compression). | **CQ 20 - 22** |
-| **Framerate & Resolution** | Native (Matches game resolution), 1080p, 720p, or 1440p at **30, 60, 120, or 144 FPS**. | **Native @ 60 FPS** |
+| **Framerate & Resolution** | Native (Matches game resolution), 1080p, 720p, or 1440p at **30, 60, 120 FPS, or Match Display** (up to 144+ FPS via CLI). | **Native @ 60 FPS** |
 | **Audio Capture** | Low-latency audio recording via PulseAudio / PipeWire: **Game Only**, **Microphone Only**, **Game + Microphone (Stereo Downmixed)**, or **Mute**. | **Game Audio Only** |
-| **Storage Destination** | Clips automatically saved to `~/Videos/FPSHUD/` with timestamped filenames (`FPSHUD_REC_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
+| **Storage Destination** | Clips automatically saved to `~/Videos/FPSHUD/` with timestamped filenames (`FPSHUD_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
 
 ### How to Use Screen Recorder
 
@@ -240,10 +240,10 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 | `11` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
 | `12` | **GPU Power** | `GPU` | GPU power draw in Watts | `185 W` |
 | `13` | **CPU Load** | `CPU` | Total CPU utilization across all threads | `42%` |
-| `14` | **P/E Core Load** | `CPU` | Intel Hybrid Core breakdown (P-Core % / E-Core %; auto-disabled on non-hybrid CPUs) | `P/E: 45/20%` |
-| `15` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
-| `16` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
-| `17` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
+| `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
+| `15` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
+| `16` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
+| `17` | **P/E Core Load** | `CPU` | Intel Hybrid Core breakdown (P-Core % / E-Core %; auto-disabled on non-hybrid CPUs) | `P/E: 45/20%` |
 | `18` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
 | `19` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
 | `20` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
@@ -303,7 +303,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 42-check verification suite across 5 simulated device profiles + memory safety:
+# 2. Run the automated 61-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
 
 # 3. (Optional) Run AddressSanitizer + LeakSanitizer + UBSan diagnostic bug detection:
@@ -316,30 +316,34 @@ ninja -C build clang-tidy
 ### Project Structure
 ```text
 FPS_HUD_FOR_LINUX/
-├── .github/workflows/ci.yml             # Automated CI build, 5-device test & GitHub Release publisher
+├── .github/workflows/ci.yml             # Automated CI build, 5-device test, multi-distro matrix & GitHub Release
 ├── .clang-tidy                          # Automated static code analysis rules for C++ memory safety
 ├── CMakeLists.txt                       # C++26 build config with ThinLTO, LLD, ASan/UBSan & static libstdc++
 ├── dist/fpshud-linux-x86_64.tar.gz      # Prebuilt portable binary package for 1-command curl install
 ├── install.sh / uninstall.sh            # 1-command curl installer & uninstaller
+├── manifest/
+│   ├── libfpshud.version                # Export symbol map (hides internal symbols from game process)
+│   └── VkLayer_FPSHUD_overlay.json.in   # Vulkan Implicit Layer manifest template
 ├── README.md / README.id.md             # English & Indonesian documentation
 ├── scripts/
 │   ├── build_clang.sh                   # Clang 23 + LLD + ThinLTO build script
+│   ├── fpshud.in                        # Management CLI & OpenGL LD_PRELOAD wrapper script
+│   ├── gen_embedded_fonts.py            # Converts TTF fonts into C++ byte arrays
+│   ├── install.sh / uninstall.sh        # Local build installer & uninstaller forwarders
+│   ├── package_release.sh               # Standalone release packager for portable distribution
 │   ├── run_sanitizers.sh                # AddressSanitizer, LeakSanitizer & UBSan test runner
-│   ├── install.sh / uninstall.sh        # Local build installer & uninstaller
-│   └── gen_embedded_fonts.py            # Converts TTF fonts into C++ byte arrays
-└── src/
-    ├── config.hpp / config.cpp          # Preset manager & INI configuration persistence
-    ├── embedded_fonts.hpp               # Embedded OpenSans-Bold & VeraMono-Bold TTF byte arrays
-    ├── telemetry.hpp / telemetry.cpp    # Multi-vendor GPU/CPU telemetry & CSV benchmark recorder
-    ├── input_manager.hpp / .cpp         # Linux evdev + X11 input polling & EVIOCGRAB mouse lock
-    ├── gui_menu.hpp / gui_menu.cpp      # 3-Column Split View Dear ImGui in-game configurator
-    ├── overlay_ui.hpp / overlay_ui.cpp  # Two-tone HUD renderer, outline/shadow & mini FT graph
-    ├── vulkan_layer.cpp                 # Vulkan Implicit Layer dispatch & vkQueuePresentKHR hook
-    ├── opengl_hook.cpp                  # OpenGL GLX/EGL buffer swap hooks
-    ├── recorder_ipc.hpp / .cpp          # Zero-overhead IPC controller for screen recorder
-    ├── recorder_main.cpp                # Companion screen recorder daemon (HEVC/H.264 & PulseAudio capture)
-    ├── recorder_launcher.c              # Lightweight container-aware companion launcher
-    └── test_cli.cpp                     # Automated 5-Device Sysfs Simulation & Memory Safety Suite
+│   ├── test_e2e_install.sh              # Sandbox end-to-end install & uninstall lifecycle verification
+│   └── test_vulkan_headless.sh          # Headless Mesa Lavapipe Vulkan rendering & swapchain verification
+├── src/
+│   ├── core/                            # Config manager, INI parser, inplace_vec & pack_indexing
+│   ├── input/                           # Linux evdev + X11 input polling & EVIOCGRAB mouse lock
+│   ├── layer/                           # Vulkan Implicit Layer & OpenGL GLX/EGL swapchain hooks
+│   ├── recorder/                        # FFmpeg screen recorder daemon, IPC & container launcher
+│   ├── telemetry/                       # Multi-vendor GPU/CPU telemetry & CSV benchmark recorder
+│   ├── ui/                              # Dear ImGui in-game GUI menu, two-tone HUD & embedded fonts
+│   └── main.cpp                         # Diagnostic CLI entry point
+└── tests/
+    └── test_cli.cpp                     # Automated 61-check 5-device simulation & memory safety suite
 ```
 
 ---
@@ -358,7 +362,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 42 multi-vendor checks and memory safety tests pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 61 multi-vendor checks and memory safety tests pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.

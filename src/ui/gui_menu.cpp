@@ -291,7 +291,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     // ====================================================================
     // 3. Three-Column Split View Dashboard
     //    Col 1 (Left ~32%):   HUD Style, Typography, Colors & Hotkeys
-    //    Col 2 (Center ~36%): 23 Hardware Telemetry Sensors Grid
+    //    Col 2 (Center ~36%): 25 Hardware Telemetry Sensors Grid
     //    Col 3 (Right ~32%):  Screen Recorder & Benchmark Hub
     // ====================================================================
     float footer_height = 42.0f * scale;
@@ -548,7 +548,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::SameLine(0.0f, col_gap);
 
     // --------------------------------------------------------------------
-    // COLUMN 2: 23 Hardware Telemetry Sensors Grid
+    // COLUMN 2: 25 Hardware Telemetry Sensors Grid
     // --------------------------------------------------------------------
     ImGui::BeginChild("##Col2_HardwareSensors", ImVec2(col2_w, panel_height), true);
 

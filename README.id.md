@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C++26](https://img.shields.io/badge/C%2B%2B-26-00599C.svg?logo=c%2B%2B)](CMakeLists.txt)
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
-[![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry.cpp)
+[![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry/telemetry.cpp)
 
 > 🌐 **Bahasa Dokumentasi / Language:** **[English](README.md)** | **[Bahasa Indonesia (Aktif)](README.id.md)**
 
@@ -193,9 +193,9 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 | **Codec Video** | **HEVC (H.265 / `hvc1`)** atau **H.264 (AVC)** | **HEVC (`hvc1`)** untuk ukuran file 50% lebih hemat dengan kompatibilitas universal di Discord, Chrome, QuickTime, dan Premiere. |
 | **Kontrol Bitrate** | **Adaptive CQP (Constant Quantization Parameter)** atau **Fixed VBR** | **Adaptive CQP (Level 22)**: mengalokasikan bitrate secara dinamis berdasarkan kompleksitas adegan sehingga aksi cepat tetap tajam tanpa pecah piksel. |
 | **Tingkat Kualitas CQP** | Sesuaikan kualitas visual dari **CQ 16** (*Near-lossless*, bitrate tinggi) hingga **CQ 30** (Kompresi maksimal). | **CQ 20 - 22** |
-| **Framerate & Resolusi** | Native (Sesuai resolusi game), 1080p, 720p, atau 1440p pada **30, 60, 120, atau 144 FPS**. | **Native @ 60 FPS** |
+| **Framerate & Resolusi** | Native (Sesuai resolusi game), 1080p, 720p, atau 1440p pada **30, 60, 120 FPS, atau Match Display** (hingga 144+ FPS via CLI). | **Native @ 60 FPS** |
 | **Perekaman Audio** | Rekam audio latensi rendah via PulseAudio / PipeWire: **Hanya Game**, **Hanya Mikrofon**, **Game + Mikrofon (Stereo Downmixed)**, atau **Mute**. | **Hanya Audio Game** |
-| **Lokasi Penyimpanan** | Klip video otomatis disimpan ke folder `~/Videos/FPSHUD/` dengan nama file berstempel waktu (`FPSHUD_REC_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
+| **Lokasi Penyimpanan** | Klip video otomatis disimpan ke folder `~/Videos/FPSHUD/` dengan nama file berstempel waktu (`FPSHUD_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
 
 ### Cara Menggunakan Perekam Layar
 
@@ -238,10 +238,10 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 | `11` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
 | `12` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
 | `13` | **CPU Load** | `CPU` | Persentase pemakaian total seluruh thread CPU | `42%` |
-| `14` | **P/E Core Load** | `CPU` | Penguraian beban core Intel Hybrid (P-Core % / E-Core %; auto-disabled pada non-hybrid) | `P/E: 45/20%` |
-| `15` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
-| `16` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
-| `17` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
+| `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
+| `15` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
+| `16` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
+| `17` | **P/E Core Load** | `CPU` | Penguraian beban core Intel Hybrid (P-Core % / E-Core %; auto-disabled pada non-hybrid) | `P/E: 45/20%` |
 | `18` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
 | `19` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
 | `20` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
@@ -301,7 +301,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 42 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
+# 2. Jalankan 61 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
 
 # 3. (Opsional) Jalankan pendeteksi bug AddressSanitizer + LeakSanitizer + UBSan:
@@ -314,30 +314,34 @@ ninja -C build clang-tidy
 ### Struktur Proyek
 ```text
 FPS_HUD_FOR_LINUX/
-├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat & rilis GitHub
+├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat, matriks multi-distro & rilis GitHub
 ├── .clang-tidy                          # Aturan analisis statis memori & keamanan kode C++
 ├── CMakeLists.txt                       # Konfigurasi build C++26 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
 ├── dist/fpshud-linux-x86_64.tar.gz      # Paket biner portabel siap pakai untuk instalasi 1-perintah curl
 ├── install.sh / uninstall.sh            # Skrip instalasi & uninstalasi instan curl
+├── manifest/
+│   ├── libfpshud.version                # Peta ekspor simbol (menyembunyikan simbol internal dari game)
+│   └── VkLayer_FPSHUD_overlay.json.in   # Templat manifes Vulkan Implicit Layer
 ├── README.md / README.id.md             # Dokumentasi lengkap Bahasa Inggris & Bahasa Indonesia
 ├── scripts/
 │   ├── build_clang.sh                   # Skrip kompilasi Clang 23 + LLD + ThinLTO
+│   ├── fpshud.in                        # Skrip pembungkus CLI manajemen & LD_PRELOAD OpenGL
+│   ├── gen_embedded_fonts.py            # Konversi file font TTF menjadi C++ byte array
+│   ├── install.sh / uninstall.sh        # Skrip penerus instalasi & uninstalasi build lokal
+│   ├── package_release.sh               # Pembuat paket rilis standalone untuk distribusi portabel
 │   ├── run_sanitizers.sh                # Skrip pengujian AddressSanitizer, LeakSanitizer & UBSan
-│   ├── install.sh / uninstall.sh        # Skrip instalasi & uninstalasi build lokal
-│   └── gen_embedded_fonts.py            # Konversi file font TTF menjadi C++ byte array
-└── src/
-    ├── config.hpp / config.cpp          # Pengelola preset & penyimpanan konfigurasi INI
-    ├── embedded_fonts.hpp               # Font OpenSans-Bold & VeraMono-Bold dalam format byte array
-    ├── telemetry.hpp / telemetry.cpp    # Telemetri GPU/CPU multi-vendor & perekam benchmark CSV
-    ├── input_manager.hpp / .cpp         # Pembaca input Linux evdev + X11 & pengunci mouse EVIOCGRAB
-    ├── gui_menu.hpp / gui_menu.cpp      # Dashboard in-game configurator Dear ImGui 3-Column Split View
-    ├── overlay_ui.hpp / overlay_ui.cpp  # Renderer HUD two-tone, efek outline/shadow & grafik FT
-    ├── vulkan_layer.cpp                 # Vulkan Implicit Layer dispatch & hook vkQueuePresentKHR
-    ├── opengl_hook.cpp                  # Hook buffer swap OpenGL GLX/EGL
-    ├── recorder_ipc.hpp / .cpp          # Pengontrol IPC zero-overhead untuk perekam layar
-    ├── recorder_main.cpp                # Daemon perekam layar (capture HEVC/H.264 & PulseAudio)
-    ├── recorder_launcher.c              # Peluncur ringan daemon perekam yang ramah container
-    └── test_cli.cpp                     # Suite pengujian simulasi sysfs 5-perangkat & keamanan memori
+│   ├── test_e2e_install.sh              # Pengujian end-to-end siklus hidup instalasi & uninstalasi sandbox
+│   └── test_vulkan_headless.sh          # Pengujian rendering Vulkan headless & swapchain Mesa Lavapipe
+├── src/
+│   ├── core/                            # Pengelola konfigurasi, parser INI, inplace_vec & pack_indexing
+│   ├── input/                           # Pembaca input Linux evdev + X11 & pengunci mouse EVIOCGRAB
+│   ├── layer/                           # Hook swapchain Vulkan Implicit Layer & OpenGL GLX/EGL
+│   ├── recorder/                        # Daemon perekam FFmpeg, IPC & peluncur ramah container
+│   ├── telemetry/                       # Telemetri GPU/CPU multi-vendor & perekam benchmark CSV
+│   ├── ui/                              # Menu in-game Dear ImGui, HUD two-tone & font embedded
+│   └── main.cpp                         # Titik masuk CLI diagnostik
+└── tests/
+    └── test_cli.cpp                     # Suite pengujian 61-check simulasi sysfs 5-perangkat & keamanan memori
 ```
 
 ---
@@ -356,7 +360,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 42 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 61 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.
