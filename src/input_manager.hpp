@@ -15,7 +15,7 @@ struct EvdevDevice {
 
 class InputManager {
 public:
-    InputManager();
+    InputManager() = default;
     ~InputManager();
 
     // Polls keyboard & mouse events and updates ImGuiIO + HudConfig::gui_open
@@ -25,6 +25,19 @@ public:
     void sync_grab_state(ImGuiIO& io, const HudConfig& cfg);
 
     bool has_evdev_access() const { return !evdev_devices_.empty(); }
+    bool is_wayland_hotkey_restricted() const noexcept;
+    void set_wayland_restricted_state_for_test(bool evdev_scanned, bool evdev_empty, bool x11_attempted, void* x11_display) noexcept {
+        evdev_scanned_ = evdev_scanned;
+        if (evdev_empty) {
+            evdev_devices_.clear();
+        } else {
+            if (evdev_devices_.empty()) {
+                evdev_devices_.push_back({-1, false, false});
+            }
+        }
+        x11_attempted_ = x11_attempted;
+        x11_display_ = x11_display;
+    }
 
 private:
     void scan_evdev_devices();

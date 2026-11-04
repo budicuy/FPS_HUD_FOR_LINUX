@@ -9,9 +9,17 @@ rm -rf "$HOME/.local/lib/fpshud"
 rm -f "$HOME/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
 rm -f "$HOME/.local/bin/fpshud"
 rm -f "$HOME/.local/bin/fpshud_test"
+rm -f "$HOME/.local/bin/fpshud_recorder"
+rm -f "$HOME/.local/bin/fpshud_recorder_bin"
+rm -f "$HOME/.var/app/com.valvesoftware.Steam/data/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
 rm -rf "$HOME/.local/share/fpshud"
 rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/fpshud"
 rm -rf "$HOME/.config/fpshud"
+
+# Reset Flatpak Steam overrides if flatpak is available
+if command -v flatpak >/dev/null 2>&1; then
+    flatpak override --user --nofilesystem="$HOME/.local/lib/fpshud" com.valvesoftware.Steam 2>/dev/null || true
+fi
 
 # Remove system-level udev rules & /etc/fpshud if installed
 if [ -f /etc/udev/rules.d/99-fpshud-rapl.rules ] || [ -f /etc/udev/rules.d/99-fpshud-input.rules ] || [ -d /etc/fpshud ]; then

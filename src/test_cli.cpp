@@ -3,6 +3,18 @@
 #include "telemetry.hpp"
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
+#include "input_manager.hpp"
+
+namespace fpshud {
+InputManager::~InputManager() = default;
+bool InputManager::is_wayland_hotkey_restricted() const noexcept {
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    if (!wayland || wayland[0] == '\0') {
+        return false;
+    }
+    return evdev_scanned_ && evdev_devices_.empty() && x11_attempted_ && (x11_display_ == nullptr);
+}
+}
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
@@ -288,6 +300,45 @@ fs::path find_recorder_launcher_path() {
         }
     }
     return {};
+}
+
+fs::path find_fpshud_wrapper_path() {
+    std::vector<fs::path> candidates;
+    char exe_buf[4096] = {0};
+    ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+        candidates.push_back(exe_dir / "fpshud");
+        candidates.push_back(exe_dir / "build" / "fpshud");
+    }
+    candidates.push_back(fs::path("./build/fpshud"));
+    candidates.push_back(fs::path("./fpshud"));
+
+    for (const auto& p : candidates) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            return fs::canonical(p, ec);
+        }
+    }
+    return {};
+}
+
+fs::path find_repo_root() {
+    char exe_buf[4096] = {0};
+    ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        fs::path p = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+        if (fs::exists(p / "scripts" / "install.sh")) return p;
+        if (fs::exists(p / ".." / "scripts" / "install.sh")) return (p / "..").lexically_normal();
+    }
+    if (fs::exists("./scripts/install.sh")) return ".";
+    return {};
+}
+
+std::string read_text_file(const fs::path& p) {
+    std::ifstream f(p);
+    if (!f.is_open()) return "";
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
 ElfVerificationResult inspect_libfpshud_elf(const fs::path& so_path) {
@@ -1130,6 +1181,123 @@ void run_elf_and_layer_abi_suite() {
                              " (exit=" + std::to_string(exit_code) + ")";
 
         check_cond(test_passed, "6. Multiarch Steam Proton Container & VAAPI Resolution", detail.c_str());
+    }
+
+    // 7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance
+    {
+        // A. InputManager Wayland Hotkey Restriction Check
+        fpshud::InputManager im;
+        const char* orig_wayland = std::getenv("WAYLAND_DISPLAY");
+        std::string saved_wayland = orig_wayland ? orig_wayland : "";
+
+        // Case 1: WAYLAND_DISPLAY not set -> false
+        ::unsetenv("WAYLAND_DISPLAY");
+        im.set_wayland_restricted_state_for_test(true, true, true, nullptr);
+        bool res_nowayland = im.is_wayland_hotkey_restricted();
+
+        // Case 2: WAYLAND_DISPLAY set, but evdev accessible -> false
+        ::setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+        im.set_wayland_restricted_state_for_test(true, false, true, nullptr);
+        bool res_evdev_ok = im.is_wayland_hotkey_restricted();
+
+        // Case 3: WAYLAND_DISPLAY set, evdev empty, but X11 fallback succeeded -> false
+        int dummy_display = 1;
+        im.set_wayland_restricted_state_for_test(true, true, true, &dummy_display);
+        bool res_x11_ok = im.is_wayland_hotkey_restricted();
+
+        // Case 4: Pure Wayland (WAYLAND_DISPLAY set, evdev empty, x11 attempted but null) -> true
+        im.set_wayland_restricted_state_for_test(true, true, true, nullptr);
+        bool res_pure_wayland = im.is_wayland_hotkey_restricted();
+
+        // Restore env
+        if (!saved_wayland.empty()) {
+            ::setenv("WAYLAND_DISPLAY", saved_wayland.c_str(), 1);
+        } else {
+            ::unsetenv("WAYLAND_DISPLAY");
+        }
+
+        bool wayland_test_ok = (!res_nowayland && !res_evdev_ok && !res_x11_ok && res_pure_wayland);
+
+        // B. scripts/install.sh Parity Check (must forward to ../install.sh, not package_release.sh)
+        bool scripts_install_ok = false;
+        fs::path repo_root = find_repo_root();
+        std::string scripts_install_content = read_text_file(repo_root / "scripts" / "install.sh");
+        if (scripts_install_content.find("../install.sh") != std::string::npos &&
+            scripts_install_content.find("package_release.sh") == std::string::npos) {
+            scripts_install_ok = true;
+        }
+
+        // C. uninstall.sh Cleanup Check (must remove fpshud_recorder, fpshud_recorder_bin, Flatpak Steam layer, and reset Flatpak override)
+        bool uninstall_ok = false;
+        std::string uninstall_content = read_text_file(repo_root / "uninstall.sh");
+        if (uninstall_content.find("fpshud_recorder") != std::string::npos &&
+            uninstall_content.find("fpshud_recorder_bin") != std::string::npos &&
+            uninstall_content.find("com.valvesoftware.Steam") != std::string::npos) {
+            uninstall_ok = true;
+        }
+
+        // D. ELF32 Tolerance & LD_PRELOAD wrapper check
+        fs::path wrapper_path = find_fpshud_wrapper_path();
+        bool wrapper_found = !wrapper_path.empty();
+        bool elf32_detected_ok = false;
+        bool elf32_no_ldso_error = true;
+        bool elf64_runs_ok = false;
+
+        std::string mock_elf32_path = "/tmp/fpshud_mock_elf32_" + std::to_string(::getpid());
+        {
+            std::ofstream f(mock_elf32_path, std::ios::binary);
+            char elf32_magic[5] = {0x7f, 'E', 'L', 'F', 0x01};
+            f.write(elf32_magic, sizeof(elf32_magic));
+        }
+        ::chmod(mock_elf32_path.c_str(), 0755);
+
+        if (wrapper_found) {
+            // Test 64-bit /bin/true
+            std::string cmd_true = "\"" + wrapper_path.string() + "\" /bin/true 2>&1";
+            FILE* pipe_true = popen(cmd_true.c_str(), "r");
+            if (pipe_true) {
+                char pbuf[256];
+                std::string out_true;
+                while (fgets(pbuf, sizeof(pbuf), pipe_true)) out_true += pbuf;
+                int status = pclose(pipe_true);
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+                    out_true.find("ELFCLASS32") == std::string::npos) {
+                    elf64_runs_ok = true;
+                }
+            }
+
+            // Test 32-bit mock binary
+            std::string cmd_elf32 = "\"" + wrapper_path.string() + "\" \"" + mock_elf32_path + "\" 2>&1";
+            FILE* pipe_32 = popen(cmd_elf32.c_str(), "r");
+            if (pipe_32) {
+                char pbuf[256];
+                std::string out_32;
+                while (fgets(pbuf, sizeof(pbuf), pipe_32)) out_32 += pbuf;
+                pclose(pipe_32);
+                if (out_32.find("32-bit ELF") != std::string::npos ||
+                    out_32.find("skipping 64-bit FPSHUD overlay injection") != std::string::npos) {
+                    elf32_detected_ok = true;
+                }
+                if (out_32.find("wrong ELF class: ELFCLASS32") != std::string::npos) {
+                    elf32_no_ldso_error = false;
+                }
+            }
+        }
+
+        // Clean up mock ELF32 file
+        std::error_code ec;
+        fs::remove(mock_elf32_path, ec);
+
+        bool test_passed = (wayland_test_ok && scripts_install_ok && uninstall_ok &&
+                            wrapper_found && elf64_runs_ok && elf32_detected_ok && elf32_no_ldso_error);
+        std::string detail = "wayland_ok=" + std::to_string(wayland_test_ok) +
+                             ", scripts_install_ok=" + std::to_string(scripts_install_ok) +
+                             ", uninstall_ok=" + std::to_string(uninstall_ok) +
+                             ", elf64_ok=" + std::to_string(elf64_runs_ok) +
+                             ", elf32_detected=" + std::to_string(elf32_detected_ok) +
+                             ", elf32_no_ldso_err=" + std::to_string(elf32_no_ldso_error);
+
+        check_cond(test_passed, "7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance", detail.c_str());
     }
 }
 

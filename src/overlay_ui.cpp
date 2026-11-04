@@ -722,6 +722,17 @@ void render_overlay_ui(HudConfig& cfg,
             draw_crisp_text(toast_msg.c_str(), IM_COL32(60, 245, 120, fg_alpha), cfg);
         }
 
+        // Show Wayland hotkey restriction notice banner for the first 10.0 seconds
+        if (get_input_manager().is_wayland_hotkey_restricted()) {
+            static const auto hud_start_time = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            double elapsed = std::chrono::duration<double>(now - hud_start_time).count();
+            if (elapsed < 10.0) {
+                draw_crisp_text("[INFO] Hotkey Wayland terkunci: jalankan 'fpshud --setup' untuk mengaktifkan GUI",
+                                IM_COL32(255, 210, 80, fg_alpha), cfg);
+            }
+        }
+
         // Optional Mini Frametime Graph directly on HUD
         if (cfg.hud_graph_enabled) {
             draw_mini_frametime_graph(cfg, fg_alpha);
