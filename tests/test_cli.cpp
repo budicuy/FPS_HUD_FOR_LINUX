@@ -1561,7 +1561,7 @@ void run_elf_and_layer_abi_suite() {
     bool uninstall_ok = false;
     bool pkg_decoupled_ok = false;
     bool setup_security_notice_ok = false;
-    bool inplace_polyfill_ok = false;
+    bool inplace_native_cxx26_ok = false;
 
     fs::path repo_root = find_repo_root();
     if (!repo_root.empty()) {
@@ -1596,17 +1596,15 @@ void run_elf_and_layer_abi_suite() {
         setup_security_notice_ok = true;
       }
 
-      std::string inplace_hdr = read_text_file(repo_root / "src" / "core" / "inplace_vec.hpp");
-      if (inplace_hdr.find("class inplace_vector") != std::string::npos ||
-          inplace_hdr.find("inplace_vector polyfill") != std::string::npos) {
-        inplace_polyfill_ok = true;
-      }
+#if defined(__cpp_lib_inplace_vector) && (__cpp_lib_inplace_vector >= 202406L)
+      inplace_native_cxx26_ok = true;
+#endif
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;
       pkg_decoupled_ok = true;
       setup_security_notice_ok = true;
-      inplace_polyfill_ok = true;
+      inplace_native_cxx26_ok = true;
     }
 
     // D. ELF32 Tolerance & LD_PRELOAD wrapper check
@@ -1668,7 +1666,7 @@ void run_elf_and_layer_abi_suite() {
 
     bool test_passed = (wayland_test_ok && scripts_install_ok && uninstall_ok && wrapper_found &&
                         elf64_runs_ok && elf32_detected_ok && elf32_no_ldso_error &&
-                        pkg_decoupled_ok && setup_security_notice_ok && inplace_polyfill_ok);
+                        pkg_decoupled_ok && setup_security_notice_ok && inplace_native_cxx26_ok);
     std::string detail = "wayland_ok=" + std::to_string(wayland_test_ok) +
                          ", scripts_install_ok=" + std::to_string(scripts_install_ok) +
                          ", uninstall_ok=" + std::to_string(uninstall_ok) +
@@ -1677,7 +1675,7 @@ void run_elf_and_layer_abi_suite() {
                          ", elf32_no_ldso_err=" + std::to_string(elf32_no_ldso_error) +
                          ", pkg_decoupled=" + std::to_string(pkg_decoupled_ok) +
                          ", setup_notice=" + std::to_string(setup_security_notice_ok) +
-                         ", polyfill=" + std::to_string(inplace_polyfill_ok);
+                         ", native_inplace_vec=" + std::to_string(inplace_native_cxx26_ok);
 
     check_cond(test_passed, "7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance",
                detail.c_str());
