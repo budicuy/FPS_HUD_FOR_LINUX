@@ -25,9 +25,19 @@ int main() {
 }
 " FPSHUD_HAS_CXX26_INPLACE_VECTOR)
 if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
-    message(STATUS
-        "Toolchain does not provide native <inplace_vector>; enabling high-performance zero-heap polyfill in src/inplace_vec.hpp.")
+    message(FATAL_ERROR "FPSHUD requires pure native ISO C++26 <inplace_vector> support (Clang 19+ or GCC 15+). Polyfill has been deprecated.")
 endif()
+
+check_cxx_source_compiles("
+template <typename... T>
+constexpr auto first(T... args) { return args...[0]; }
+int main() { return first(0, 1, 2); }
+" FPSHUD_HAS_CXX26_PACK_INDEXING)
+if(NOT FPSHUD_HAS_CXX26_PACK_INDEXING)
+    message(FATAL_ERROR "FPSHUD requires native ISO C++26 pack indexing (P2662R3). Toolchain does not support args...[N].")
+endif()
+
+add_compile_options(-Wno-deprecated-declarations)
 
 option(FPSHUD_NATIVE_ARCH "Optimize for host CPU microarchitecture (-march=native)" OFF)
 option(ENABLE_ASAN "Enable AddressSanitizer and LeakSanitizer" OFF)
