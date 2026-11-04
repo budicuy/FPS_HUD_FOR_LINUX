@@ -1149,11 +1149,20 @@ void run_elf_and_layer_abi_suite() {
             unlink(test_sock.c_str());
             fs::remove_all(test_dir, ec);
 
-            test_passed = (probe_ok && child_stopped_cleanly);
+            // Verify A/V Timestamp Synchronization & SHM Bounds Guard (I1, I4)
+            fs::path rroot = find_repo_root();
+            std::string rec_src = read_text_file(rroot / "src" / "recorder_main.cpp");
+            bool av_sync_guarded = (rec_src.find("g_has_received_game_frame") != std::string::npos);
+            bool shm_bounds_guarded = (rec_src.find("shm_size -") != std::string::npos ||
+                                       rec_src.find("<= shm_size") != std::string::npos);
+
+            test_passed = (probe_ok && child_stopped_cleanly && av_sync_guarded && shm_bounds_guarded);
             detail = "probe_ok=" + std::to_string(probe_ok) +
                      " (found hevc/h264_vaapi, exit=" + std::to_string(exit_code) + ")" +
                      ", child_stopped_cleanly=" + std::to_string(child_stopped_cleanly) +
-                     " (<1500ms exit on odd dim 321x241)";
+                     " (<1500ms exit on odd dim 321x241)" +
+                     ", av_sync=" + std::to_string(av_sync_guarded) +
+                     ", shm_bounds=" + std::to_string(shm_bounds_guarded);
         }
 
         check_cond(test_passed, "5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio", detail.c_str());

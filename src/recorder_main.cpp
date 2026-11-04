@@ -45,6 +45,7 @@ namespace fs = std::filesystem;
 namespace {
 
 std::atomic<bool> g_running{true};
+std::atomic<bool> g_has_received_game_frame{false};
 
 void sigint_handler(int) {
     g_running.store(false, std::memory_order_relaxed);
@@ -709,6 +710,15 @@ int main(int argc, char* argv[]) {
                 pa_stream_drop(pulse.stream);
             }
 
+            // A/V Sync Guard (I1): Discard or buffer audio samples until the first game video frame arrives
+            if (!g_has_received_game_frame.load(std::memory_order_relaxed)) {
+                if (pcm_ring.size() > static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
+                    pcm_ring.erase(pcm_ring.begin(), pcm_ring.end() - (kAudioSamplesPerFrame * 2));
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+
             while (pcm_ring.size() >= static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
                 av_frame_make_writable(aframe);
                 const uint8_t* in_data[1] = { reinterpret_cast<const uint8_t*>(pcm_ring.data()) };
@@ -814,38 +824,43 @@ int main(int argc, char* argv[]) {
                         try_map_shm(shm_path);
 
                         if (shm_base && shm_hdr && notify.slot < 3) {
-                            const uint8_t* src = static_cast<const uint8_t*>(shm_base) + shm_hdr->offset[notify.slot];
-                            int stride = notify.width * 4;
+                            size_t frame_bytes = static_cast<size_t>(notify.width) * notify.height * 4;
+                            size_t slot_offset = shm_hdr->offset[notify.slot];
+                            if (slot_offset < shm_size && frame_bytes <= (shm_size - slot_offset)) {
+                                const uint8_t* src = static_cast<const uint8_t*>(shm_base) + slot_offset;
+                                int stride = notify.width * 4;
 
-                            AVPixelFormat src_fmt = (notify.format == 1) ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
-                            if (!sws_ctx || last_src_fmt != src_fmt || last_src_w != static_cast<int>(notify.width) || last_src_h != static_cast<int>(notify.height)) {
-                                if (sws_ctx) sws_freeContext(sws_ctx);
-                                sws_ctx = sws_getContext(
-                                    notify.width, notify.height, src_fmt,
-                                    target_width, target_height, sw_pix_fmt,
-                                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
-                                );
-                                last_src_fmt = src_fmt;
-                                last_src_w = notify.width;
-                                last_src_h = notify.height;
-                            }
+                                AVPixelFormat src_fmt = (notify.format == 1) ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
+                                if (!sws_ctx || last_src_fmt != src_fmt || last_src_w != static_cast<int>(notify.width) || last_src_h != static_cast<int>(notify.height)) {
+                                    if (sws_ctx) sws_freeContext(sws_ctx);
+                                    sws_ctx = sws_getContext(
+                                        notify.width, notify.height, src_fmt,
+                                        target_width, target_height, sw_pix_fmt,
+                                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
+                                    );
+                                    last_src_fmt = src_fmt;
+                                    last_src_w = notify.width;
+                                    last_src_h = notify.height;
+                                }
 
-                            av_frame_make_writable(vframe);
-                            if (notify.flip_y) {
-                                const uint8_t* src_slice[1] = { src + static_cast<size_t>(notify.height - 1) * stride };
-                                int src_stride[1] = { -stride };
-                                sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
-                            } else {
-                                const uint8_t* src_slice[1] = { src };
-                                int src_stride[1] = { stride };
-                                sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
-                            }
+                                av_frame_make_writable(vframe);
+                                if (notify.flip_y) {
+                                    const uint8_t* src_slice[1] = { src + static_cast<size_t>(notify.height - 1) * stride };
+                                    int src_stride[1] = { -stride };
+                                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
+                                } else {
+                                    const uint8_t* src_slice[1] = { src };
+                                    int src_stride[1] = { stride };
+                                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data, vframe->linesize);
+                                }
 
-                            if (!has_received_game_frame) {
-                                has_received_game_frame = true;
-                                session_start = std::chrono::steady_clock::now();
-                                next_frame_time = session_start;
-                                next_pts = 0;
+                                if (!has_received_game_frame) {
+                                    has_received_game_frame = true;
+                                    g_has_received_game_frame.store(true, std::memory_order_relaxed);
+                                    session_start = std::chrono::steady_clock::now();
+                                    next_frame_time = session_start;
+                                    next_pts = 0;
+                                }
                             }
                         }
                     }
