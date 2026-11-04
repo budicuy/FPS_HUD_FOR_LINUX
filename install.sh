@@ -167,18 +167,30 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
     if [ -n "$CXX_BIN" ] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavformat libavcodec libavutil libswscale libswresample libpulse 2>/dev/null; then
         REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
         REC_SRC_DIR="$REC_TMP/src"
-        if [ -f "./src/recorder_main.cpp" ]; then
+        if [ -f "./src/recorder/recorder_main.cpp" ] || [ -f "./src/recorder_main.cpp" ]; then
             REC_SRC_DIR="."
         elif command -v git >/dev/null 2>&1; then
             git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REC_SRC_DIR" 2>/dev/null || true
         fi
-        if [ -f "$REC_SRC_DIR/src/recorder_main.cpp" ]; then
+        REC_MAIN_SRC=""
+        if [ -f "$REC_SRC_DIR/src/recorder/recorder_main.cpp" ]; then
+            REC_MAIN_SRC="$REC_SRC_DIR/src/recorder/recorder_main.cpp"
+        elif [ -f "$REC_SRC_DIR/src/recorder_main.cpp" ]; then
+            REC_MAIN_SRC="$REC_SRC_DIR/src/recorder_main.cpp"
+        fi
+        REC_LAUNCHER_SRC=""
+        if [ -f "$REC_SRC_DIR/src/recorder/recorder_launcher.c" ]; then
+            REC_LAUNCHER_SRC="$REC_SRC_DIR/src/recorder/recorder_launcher.c"
+        elif [ -f "$REC_SRC_DIR/src/recorder_launcher.c" ]; then
+            REC_LAUNCHER_SRC="$REC_SRC_DIR/src/recorder_launcher.c"
+        fi
+        if [ -n "$REC_MAIN_SRC" ]; then
             REC_STD_FLAG="-std=c++20"
             if "$CXX_BIN" -std=c++26 -x c++ -E /dev/null >/dev/null 2>&1; then
                 REC_STD_FLAG="-std=c++26"
             fi
-            if "$CXX_BIN" -O3 "$REC_STD_FLAG" "$REC_SRC_DIR/src/recorder_main.cpp" \
-                -I"$REC_SRC_DIR/src" \
+            if "$CXX_BIN" -O3 "$REC_STD_FLAG" "$REC_MAIN_SRC" \
+                -I"$REC_SRC_DIR/src" -I"$REC_SRC_DIR/src/recorder" -I"$REC_SRC_DIR/src/core" \
                 $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse) \
                 -pthread -ldl \
                 -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
@@ -186,8 +198,8 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
                 -o "$LIB_DIR/fpshud_recorder_bin" 2>"$REC_TMP/err.log"; then
                 chmod +x "$LIB_DIR/fpshud_recorder_bin"
                 cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-                if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1 && [ -f "$REC_SRC_DIR/src/recorder_launcher.c" ]; then
-                    "$CC_BIN" -O3 "$REC_SRC_DIR/src/recorder_launcher.c" -ldl -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && \
+                if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1 && [ -n "$REC_LAUNCHER_SRC" ]; then
+                    "$CC_BIN" -O3 "$REC_LAUNCHER_SRC" -ldl -o "$BIN_DIR/fpshud_recorder" 2>/dev/null && \
                         chmod +x "$BIN_DIR/fpshud_recorder" && \
                         cp -f "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder" || true
                 fi

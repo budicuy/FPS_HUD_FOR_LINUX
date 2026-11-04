@@ -50,7 +50,7 @@ echo "[✓] DT_NEEDED graphics portability gate PASSED (0 direct GL/GLX/EGL depe
 CXX_GATE="${CXX:-$(command -v clang++ || command -v g++ || true)}"
 if [ -n "$CXX_GATE" ]; then
     echo "[*] Verifying C++20 standalone compilation of recorder_main.cpp..."
-    "$CXX_GATE" -std=c++20 -Wall -Wextra -Werror -fsyntax-only "$PROJECT_DIR/src/recorder_main.cpp"
+    "$CXX_GATE" -std=c++20 -Wall -Wextra -Werror -fsyntax-only -I"$PROJECT_DIR/src" -I"$PROJECT_DIR/src/recorder" -I"$PROJECT_DIR/src/core" "$PROJECT_DIR/src/recorder/recorder_main.cpp"
     echo "[✓] C++20 recorder_main.cpp syntax gate PASSED."
 fi
 
