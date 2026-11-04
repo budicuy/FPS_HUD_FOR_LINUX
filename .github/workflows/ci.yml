@@ -41,6 +41,11 @@ jobs:
             echo "::error::Expected exactly 8 exported ABI symbols in libfpshud.so, got $EXPORT_COUNT"
             exit 1
           fi
+          if LC_ALL=C readelf -d build/libfpshud.so | grep NEEDED | grep -E "lib(GLX|EGL|OpenGL|GL)\.so"; then
+            echo "::error::Direct dynamic link to OpenGL/GLX/EGL detected in libfpshud.so DT_NEEDED!"
+            exit 1
+          fi
+          g++-15 -std=c++20 -Wall -Wextra -Werror -fsyntax-only src/recorder_main.cpp
           strip --strip-unneeded build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
 
       - name: Run Multi-Device Simulation & Feature Verification Suite

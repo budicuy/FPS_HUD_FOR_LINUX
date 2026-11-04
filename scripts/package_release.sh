@@ -40,6 +40,20 @@ if [ "$EXPORT_COUNT" -ne 8 ]; then
 fi
 echo "[✓] ABI symbol visibility gate PASSED (8 exported Vulkan/GLX/EGL entrypoints)."
 
+echo "[*] Verifying zero DT_NEEDED dependencies on libGL/libGLX/libEGL/libOpenGL..."
+if LC_ALL=C readelf -d "$BUILD_DIR/libfpshud.so" | grep NEEDED | grep -E "lib(GLX|EGL|OpenGL|GL)\.so"; then
+    echo "[!] ERROR: Direct dynamic link to OpenGL/GLX/EGL detected in libfpshud.so DT_NEEDED! Aborting packaging." >&2
+    exit 1
+fi
+echo "[✓] DT_NEEDED graphics portability gate PASSED (0 direct GL/GLX/EGL dependencies)."
+
+CXX_GATE="${CXX:-$(command -v clang++ || command -v g++ || true)}"
+if [ -n "$CXX_GATE" ]; then
+    echo "[*] Verifying C++20 standalone compilation of recorder_main.cpp..."
+    "$CXX_GATE" -std=c++20 -Wall -Wextra -Werror -fsyntax-only "$PROJECT_DIR/src/recorder_main.cpp"
+    echo "[✓] C++20 recorder_main.cpp syntax gate PASSED."
+fi
+
 YMM_COUNT="$(objdump -d "$BUILD_DIR/libfpshud.so" | grep -c '%ymm' || true)"
 if [ "$YMM_COUNT" -gt 32 ]; then
     echo "[i] Note: Host static libstdc++.a contains AVX/AVX2 instructions ($YMM_COUNT %ymm ops)."
