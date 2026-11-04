@@ -240,10 +240,242 @@ TelemetryCollector::TelemetryCollector() {
   worker_thread_ = std::thread(&TelemetryCollector::worker_loop, this);
 }
 
-TelemetryCollector::TelemetryCollector(std::string mock_root_prefix, bool disable_nvml)
-    : root_prefix_(std::move(mock_root_prefix)), disable_nvml_(disable_nvml) {
+TelemetryCollector::TelemetryCollector(std::string mock_root_prefix, bool disable_nvml,
+                                       bool disable_level_zero)
+    : root_prefix_(std::move(mock_root_prefix)),
+      disable_nvml_(disable_nvml),
+      disable_level_zero_(disable_level_zero) {
   init_sensors();
   poll_once_sync();
+}
+
+void TelemetryCollector::inject_mock_level_zero(const LevelZeroDispatch& dispatch) noexcept {
+  mock_ze_dispatch_ = dispatch;
+  has_mock_ze_ = true;
+  std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
+  shutdown_sensors_locked();
+  init_gpu_sensors_locked();
+}
+
+bool TelemetryCollector::init_intel_level_zero() {
+  if (disable_level_zero_) return false;
+
+  ze_dispatch_ = {};
+  if (has_mock_ze_) {
+    ze_dispatch_ = mock_ze_dispatch_;
+  } else {
+    if (!root_prefix_.empty()) return false;
+
+    const char* ze_candidates[] = {"libze_loader.so.1", "libze_loader.so",
+                                   "/run/host/usr/lib/x86_64-linux-gnu/libze_loader.so.1",
+                                   "/run/host/usr/lib64/libze_loader.so.1"};
+    for (const char* path : ze_candidates) {
+      ze_lib_ = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+      if (ze_lib_) break;
+    }
+    if (!ze_lib_) return false;
+
+    ze_dispatch_.zeInit = reinterpret_cast<int (*)(uint32_t)>(dlsym(ze_lib_, "zeInit"));
+    ze_dispatch_.zesInit = reinterpret_cast<int (*)(uint32_t)>(dlsym(ze_lib_, "zesInit"));
+    ze_dispatch_.zesDriverGet =
+        reinterpret_cast<int (*)(uint32_t*, void**)>(dlsym(ze_lib_, "zesDriverGet"));
+    ze_dispatch_.zesDeviceGet =
+        reinterpret_cast<int (*)(void*, uint32_t*, void**)>(dlsym(ze_lib_, "zesDeviceGet"));
+    ze_dispatch_.zesDeviceGetProperties =
+        reinterpret_cast<int (*)(void*, intel_ze::zes_device_properties_t*)>(
+            dlsym(ze_lib_, "zesDeviceGetProperties"));
+    ze_dispatch_.zesDeviceEnumFrequencyDomains =
+        reinterpret_cast<int (*)(void*, uint32_t*, void**)>(
+            dlsym(ze_lib_, "zesDeviceEnumFrequencyDomains"));
+    ze_dispatch_.zesFrequencyGetState =
+        reinterpret_cast<int (*)(void*, intel_ze::zes_freq_state_t*)>(
+            dlsym(ze_lib_, "zesFrequencyGetState"));
+    ze_dispatch_.zesDeviceEnumTemperatureSensors =
+        reinterpret_cast<int (*)(void*, uint32_t*, void**)>(
+            dlsym(ze_lib_, "zesDeviceEnumTemperatureSensors"));
+    ze_dispatch_.zesTemperatureGetState =
+        reinterpret_cast<int (*)(void*, double*)>(dlsym(ze_lib_, "zesTemperatureGetState"));
+    ze_dispatch_.zesDeviceEnumPowerDomains = reinterpret_cast<int (*)(void*, uint32_t*, void**)>(
+        dlsym(ze_lib_, "zesDeviceEnumPowerDomains"));
+    ze_dispatch_.zesPowerGetEnergyCounter =
+        reinterpret_cast<int (*)(void*, intel_ze::zes_power_energy_counter_t*)>(
+            dlsym(ze_lib_, "zesPowerGetEnergyCounter"));
+    ze_dispatch_.zesDeviceEnumMemoryModules = reinterpret_cast<int (*)(void*, uint32_t*, void**)>(
+        dlsym(ze_lib_, "zesDeviceEnumMemoryModules"));
+    ze_dispatch_.zesMemoryGetState = reinterpret_cast<int (*)(void*, intel_ze::zes_mem_state_t*)>(
+        dlsym(ze_lib_, "zesMemoryGetState"));
+    ze_dispatch_.zesDeviceEnumEngineGroups = reinterpret_cast<int (*)(void*, uint32_t*, void**)>(
+        dlsym(ze_lib_, "zesDeviceEnumEngineGroups"));
+    ze_dispatch_.zesEngineGetActivity =
+        reinterpret_cast<int (*)(void*, intel_ze::zes_engine_stats_t*)>(
+            dlsym(ze_lib_, "zesEngineGetActivity"));
+  }
+
+  // Initialize Level Zero / Sysman
+  int init_res = 1;
+  if (ze_dispatch_.zesInit) {
+    init_res = ze_dispatch_.zesInit(0);
+  } else if (ze_dispatch_.zeInit) {
+    init_res = ze_dispatch_.zeInit(0);
+  }
+  if (init_res != intel_ze::ZE_RESULT_SUCCESS) {
+    if (ze_lib_) {
+      dlclose(ze_lib_);
+      ze_lib_ = nullptr;
+    }
+    return false;
+  }
+
+  // Enumerate Sysman drivers & devices
+  if (!ze_dispatch_.zesDriverGet || !ze_dispatch_.zesDeviceGet) {
+    if (ze_lib_) {
+      dlclose(ze_lib_);
+      ze_lib_ = nullptr;
+    }
+    return false;
+  }
+
+  uint32_t drv_count = 1;
+  if (ze_dispatch_.zesDriverGet(&drv_count, &ze_driver_) != intel_ze::ZE_RESULT_SUCCESS ||
+      drv_count == 0 || !ze_driver_) {
+    if (ze_lib_) {
+      dlclose(ze_lib_);
+      ze_lib_ = nullptr;
+    }
+    return false;
+  }
+
+  uint32_t dev_count = 1;
+  if (ze_dispatch_.zesDeviceGet(ze_driver_, &dev_count, &ze_device_) !=
+          intel_ze::ZE_RESULT_SUCCESS ||
+      dev_count == 0 || !ze_device_) {
+    if (ze_lib_) {
+      dlclose(ze_lib_);
+      ze_lib_ = nullptr;
+    }
+    return false;
+  }
+
+  // Cache domain handles
+  uint32_t count = 1;
+  if (ze_dispatch_.zesDeviceEnumFrequencyDomains) {
+    ze_dispatch_.zesDeviceEnumFrequencyDomains(ze_device_, &count, &ze_freq_);
+  }
+  count = 1;
+  if (ze_dispatch_.zesDeviceEnumTemperatureSensors) {
+    ze_dispatch_.zesDeviceEnumTemperatureSensors(ze_device_, &count, &ze_temp_);
+  }
+  count = 1;
+  if (ze_dispatch_.zesDeviceEnumPowerDomains) {
+    ze_dispatch_.zesDeviceEnumPowerDomains(ze_device_, &count, &ze_pwr_);
+  }
+  count = 1;
+  if (ze_dispatch_.zesDeviceEnumMemoryModules) {
+    ze_dispatch_.zesDeviceEnumMemoryModules(ze_device_, &count, &ze_mem_);
+  }
+  count = 1;
+  if (ze_dispatch_.zesDeviceEnumEngineGroups) {
+    ze_dispatch_.zesDeviceEnumEngineGroups(ze_device_, &count, &ze_eng_);
+  }
+
+  gpu_backend_ = GpuBackendType::IntelLevelZero;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.gpu_available = true;
+    std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "Intel");
+    std::snprintf(hw_data_.gpu_name, sizeof(hw_data_.gpu_name), "Intel Arc / Xe Graphics");
+    std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version),
+                  "Level Zero Sysman");
+
+    if (ze_dispatch_.zesDeviceGetProperties) {
+      intel_ze::zes_device_properties_t props{};
+      props.stype = 0x1;
+      if (ze_dispatch_.zesDeviceGetProperties(ze_device_, &props) == intel_ze::ZE_RESULT_SUCCESS) {
+        if (props.modelName[0] != '\0') {
+          clean_hardware_name(props.modelName, hw_data_.gpu_name, sizeof(hw_data_.gpu_name));
+        }
+        if (props.driverVersion[0] != '\0') {
+          std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s",
+                        props.driverVersion);
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+void TelemetryCollector::poll_intel_level_zero_gpu() {
+  if (!ze_device_) return;
+
+  // 1. Clock (Frequency)
+  if (ze_freq_ && ze_dispatch_.zesFrequencyGetState) {
+    intel_ze::zes_freq_state_t fstate{};
+    if (ze_dispatch_.zesFrequencyGetState(ze_freq_, &fstate) == intel_ze::ZE_RESULT_SUCCESS) {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      hw_data_.gpu_clock_mhz = static_cast<int>(fstate.actual);
+    }
+  }
+
+  // 2. Temperature
+  if (ze_temp_ && ze_dispatch_.zesTemperatureGetState) {
+    double temp_val = 0.0;
+    if (ze_dispatch_.zesTemperatureGetState(ze_temp_, &temp_val) == intel_ze::ZE_RESULT_SUCCESS) {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      hw_data_.gpu_temp_c = static_cast<int>(temp_val + 0.5);
+    }
+  }
+
+  // 3. VRAM Memory
+  if (ze_mem_ && ze_dispatch_.zesMemoryGetState) {
+    intel_ze::zes_mem_state_t mstate{};
+    if (ze_dispatch_.zesMemoryGetState(ze_mem_, &mstate) == intel_ze::ZE_RESULT_SUCCESS &&
+        mstate.size > 0) {
+      constexpr float kBytesToGb = 1.0f / (1024.0f * 1024.0f * 1024.0f);
+      float total_gb = static_cast<float>(mstate.size) * kBytesToGb;
+      uint64_t used_bytes = (mstate.size > mstate.free) ? (mstate.size - mstate.free) : 0;
+      float used_gb = static_cast<float>(used_bytes) * kBytesToGb;
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      hw_data_.gpu_vram_total_gb = total_gb;
+      hw_data_.gpu_vram_used_gb = used_gb;
+    }
+  }
+
+  // 4. Power (Energy Counter Delta)
+  if (ze_pwr_ && ze_dispatch_.zesPowerGetEnergyCounter) {
+    intel_ze::zes_power_energy_counter_t pwr{};
+    if (ze_dispatch_.zesPowerGetEnergyCounter(ze_pwr_, &pwr) == intel_ze::ZE_RESULT_SUCCESS) {
+      if (prev_ze_pwr_ts_ != 0 && pwr.timestamp > prev_ze_pwr_ts_) {
+        uint64_t d_energy = pwr.energy - prev_ze_pwr_energy_;  // microjoules
+        uint64_t d_time = pwr.timestamp - prev_ze_pwr_ts_;     // microseconds
+        if (d_time > 0) {
+          float watts = static_cast<float>(d_energy) / static_cast<float>(d_time);
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          hw_data_.gpu_power_w = std::clamp(watts, 0.0f, 1000.0f);
+        }
+      }
+      prev_ze_pwr_energy_ = pwr.energy;
+      prev_ze_pwr_ts_ = pwr.timestamp;
+    }
+  }
+
+  // 5. Engine Activity (Load %)
+  if (ze_eng_ && ze_dispatch_.zesEngineGetActivity) {
+    intel_ze::zes_engine_stats_t stats{};
+    if (ze_dispatch_.zesEngineGetActivity(ze_eng_, &stats) == intel_ze::ZE_RESULT_SUCCESS) {
+      if (prev_ze_eng_ts_ != 0 && stats.timestamp > prev_ze_eng_ts_) {
+        uint64_t d_active = stats.activeTime - prev_ze_eng_active_;
+        uint64_t d_time = stats.timestamp - prev_ze_eng_ts_;
+        if (d_time > 0) {
+          float load = 100.0f * static_cast<float>(d_active) / static_cast<float>(d_time);
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          hw_data_.gpu_load_pct = std::clamp(load, 0.0f, 100.0f);
+        }
+      }
+      prev_ze_eng_active_ = stats.activeTime;
+      prev_ze_eng_ts_ = stats.timestamp;
+    }
+  }
 }
 
 TelemetryCollector::~TelemetryCollector() {
@@ -807,6 +1039,12 @@ void TelemetryCollector::init_gpu_sensors_locked() {
   bool is_intel = (best_vendor_num == 0x8086);
   bool is_nvidia = (best_vendor_num == 0x10de);
 
+  if (is_intel) {
+    if (init_intel_level_zero()) {
+      return;
+    }
+  }
+
   if (is_amd)
     gpu_backend_ = GpuBackendType::AmdSysfs;
   else if (is_intel)
@@ -981,6 +1219,20 @@ void TelemetryCollector::shutdown_sensors_locked() {
     nvml_lib_ = nullptr;
   }
   nvml_device_ = nullptr;
+
+  if (ze_lib_) {
+    dlclose(ze_lib_);
+    ze_lib_ = nullptr;
+  }
+  ze_driver_ = nullptr;
+  ze_device_ = nullptr;
+  ze_freq_ = nullptr;
+  ze_temp_ = nullptr;
+  ze_pwr_ = nullptr;
+  ze_mem_ = nullptr;
+  ze_eng_ = nullptr;
+  ze_dispatch_ = {};
+
   gpu_backend_ = GpuBackendType::None;
 }
 
@@ -1422,6 +1674,8 @@ void TelemetryCollector::notify_active_gpu(uint32_t vendor_id, uint32_t device_i
   init_gpu_sensors_locked();
   if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
     poll_nvidia_gpu();
+  } else if (gpu_backend_ == GpuBackendType::IntelLevelZero) {
+    poll_intel_level_zero_gpu();
   } else if (gpu_backend_ == GpuBackendType::AmdSysfs ||
              gpu_backend_ == GpuBackendType::IntelSysfs) {
     poll_drm_sysfs_gpu();
@@ -1848,6 +2102,8 @@ void TelemetryCollector::poll_gpu() {
   std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
   if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
     poll_nvidia_gpu();
+  } else if (gpu_backend_ == GpuBackendType::IntelLevelZero) {
+    poll_intel_level_zero_gpu();
   } else if (gpu_backend_ == GpuBackendType::AmdSysfs ||
              gpu_backend_ == GpuBackendType::IntelSysfs) {
     poll_drm_sysfs_gpu();

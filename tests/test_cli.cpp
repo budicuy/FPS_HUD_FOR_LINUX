@@ -442,7 +442,8 @@ ElfVerificationResult inspect_libfpshud_elf(const fs::path& so_path) {
         const char* name = &strtab[str_off];
         res.needed_libs.emplace_back(name);
         if (std::strstr(name, "libGLX") || std::strstr(name, "libEGL") ||
-            std::strstr(name, "libOpenGL") || std::strstr(name, "libGL")) {
+            std::strstr(name, "libOpenGL") || std::strstr(name, "libGL") ||
+            std::strstr(name, "libze_loader")) {
           res.banned_libs_found.emplace_back(name);
         }
       }
@@ -2390,6 +2391,141 @@ void run_all_devices_and_features_suite() {
     check_cond(hybrid_flag_ok && p_count_ok && e_count_ok && p_load_ok && e_load_ok,
                "PROFILE 9.4: Intel Hybrid CPU Topology (P-Core & E-Core)",
                "Parsed 16 P-threads (60% load) and 8 E-threads (25% load) from sysfs PMU topology");
+  }
+
+  // ------------------------------------------------------------------------
+  // PROFILE 9.5: Dynamic Intel Level Zero Backend with Sysfs Fallback
+  // ------------------------------------------------------------------------
+  {
+    std::string intel_base = "/tmp/fpshud_mock_intel_ze_" + std::to_string(::getpid());
+    fs::create_directories(intel_base + "/sys/class/drm/card0/device", ec);
+    write_mock_file(intel_base + "/sys/class/drm/card0/device/vendor", "0x8086\n");
+    write_mock_file(intel_base + "/sys/class/drm/card0/device/device", "0x56a0\n");  // Arc A770
+    write_mock_file(intel_base + "/sys/class/drm/card0/device/product_name", "Intel Arc A770\n");
+    // Fallback sysfs files
+    write_mock_file(intel_base + "/sys/class/drm/card0/device/gpu_busy_percent", "70\n");
+    write_mock_file(intel_base + "/sys/class/drm/card0/device/mem_info_vram_total",
+                    "17179869184\n");
+
+    // 1. Mock Level Zero dispatch table
+    LevelZeroDispatch ze_mock{};
+    ze_mock.zeInit = [](uint32_t) -> int { return 0; };
+    ze_mock.zesInit = [](uint32_t) -> int { return 0; };
+    ze_mock.zesDriverGet = [](uint32_t* count, void** phDrivers) -> int {
+      if (count) *count = 1;
+      if (phDrivers) *phDrivers = reinterpret_cast<void*>(0x1111);
+      return 0;
+    };
+    ze_mock.zesDeviceGet = [](void*, uint32_t* count, void** phDevices) -> int {
+      if (count) *count = 1;
+      if (phDevices) *phDevices = reinterpret_cast<void*>(0x2222);
+      return 0;
+    };
+    ze_mock.zesDeviceGetProperties = [](void*, intel_ze::zes_device_properties_t* pProps) -> int {
+      if (pProps) {
+        std::snprintf(pProps->modelName, sizeof(pProps->modelName), "Intel Arc A770 Graphics");
+        std::snprintf(pProps->driverVersion, sizeof(pProps->driverVersion), "Level Zero 1.14");
+      }
+      return 0;
+    };
+    ze_mock.zesDeviceEnumFrequencyDomains = [](void*, uint32_t* count, void** phFreq) -> int {
+      if (count) *count = 1;
+      if (phFreq) *phFreq = reinterpret_cast<void*>(0x3333);
+      return 0;
+    };
+    ze_mock.zesFrequencyGetState = [](void*, intel_ze::zes_freq_state_t* pState) -> int {
+      if (pState) pState->actual = 2400.0;  // 2400 MHz
+      return 0;
+    };
+    ze_mock.zesDeviceEnumTemperatureSensors = [](void*, uint32_t* count, void** phTemp) -> int {
+      if (count) *count = 1;
+      if (phTemp) *phTemp = reinterpret_cast<void*>(0x4444);
+      return 0;
+    };
+    ze_mock.zesTemperatureGetState = [](void*, double* pTemp) -> int {
+      if (pTemp) *pTemp = 65.0;  // 65 C
+      return 0;
+    };
+    ze_mock.zesDeviceEnumMemoryModules = [](void*, uint32_t* count, void** phMem) -> int {
+      if (count) *count = 1;
+      if (phMem) *phMem = reinterpret_cast<void*>(0x5555);
+      return 0;
+    };
+    ze_mock.zesMemoryGetState = [](void*, intel_ze::zes_mem_state_t* pState) -> int {
+      if (pState) {
+        pState->size = 17179869184ULL;  // 16 GB
+        pState->free = 10737418240ULL;  // 10 GB free -> 6 GB used
+      }
+      return 0;
+    };
+    static uint64_t s_mock_ze_pwr_ts = 1000000;
+    static uint64_t s_mock_ze_pwr_energy = 10000000;
+    ze_mock.zesDeviceEnumPowerDomains = [](void*, uint32_t* count, void** phPower) -> int {
+      if (count) *count = 1;
+      if (phPower) *phPower = reinterpret_cast<void*>(0x6666);
+      return 0;
+    };
+    ze_mock.zesPowerGetEnergyCounter = [](void*,
+                                          intel_ze::zes_power_energy_counter_t* pEnergy) -> int {
+      if (pEnergy) {
+        pEnergy->timestamp = s_mock_ze_pwr_ts;
+        pEnergy->energy = s_mock_ze_pwr_energy;
+      }
+      return 0;
+    };
+    static uint64_t s_mock_ze_eng_ts = 1000000;
+    static uint64_t s_mock_ze_eng_active = 200000;
+    ze_mock.zesDeviceEnumEngineGroups = [](void*, uint32_t* count, void** phEngine) -> int {
+      if (count) *count = 1;
+      if (phEngine) *phEngine = reinterpret_cast<void*>(0x7777);
+      return 0;
+    };
+    ze_mock.zesEngineGetActivity = [](void*, intel_ze::zes_engine_stats_t* pStats) -> int {
+      if (pStats) {
+        pStats->timestamp = s_mock_ze_eng_ts;
+        pStats->activeTime = s_mock_ze_eng_active;
+      }
+      return 0;
+    };
+
+    // Test A: Active Level Zero backend
+    TelemetryCollector ze_collector(intel_base, true);
+    ze_collector.inject_mock_level_zero(ze_mock);
+    ze_collector.poll_once_sync();  // Initial baseline
+
+    // Progress time for load and power
+    s_mock_ze_pwr_ts += 1000000;        // +1s
+    s_mock_ze_pwr_energy += 190000000;  // +190J -> 190 W
+    s_mock_ze_eng_ts += 1000000;        // +1s
+    s_mock_ze_eng_active += 850000;     // +850,000 us -> 85% load
+    ze_collector.poll_once_sync();      // Second poll with delta
+
+    auto ze_snap = ze_collector.get_snapshot();
+    bool ze_backend_ok = (ze_collector.get_gpu_backend() == GpuBackendType::IntelLevelZero);
+    bool ze_clock_ok = (ze_snap.gpu_clock_mhz == 2400);
+    bool ze_temp_ok = (ze_snap.gpu_temp_c == 65);
+    bool ze_vram_ok = (std::fabs(ze_snap.gpu_vram_used_gb - 6.0f) < 0.1f);
+    bool ze_power_ok = (std::fabs(ze_snap.gpu_power_w - 190.0f) < 1.0f);
+    bool ze_load_ok = (std::fabs(ze_snap.gpu_load_pct - 85.0f) < 1.0f);
+
+    // Test B: Seamless fallback when Level Zero is absent or fails zeInit
+    LevelZeroDispatch ze_fail_mock = ze_mock;
+    ze_fail_mock.zeInit = [](uint32_t) -> int { return 1; };   // Error
+    ze_fail_mock.zesInit = [](uint32_t) -> int { return 1; };  // Error
+
+    TelemetryCollector fallback_collector(intel_base, true);
+    fallback_collector.inject_mock_level_zero(ze_fail_mock);
+    fallback_collector.poll_once_sync();
+
+    bool fallback_ok = (fallback_collector.get_gpu_backend() == GpuBackendType::IntelSysfs);
+
+    fs::remove_all(intel_base, ec);
+
+    check_cond(ze_backend_ok && ze_clock_ok && ze_temp_ok && ze_vram_ok && ze_power_ok &&
+                   ze_load_ok && fallback_ok,
+               "PROFILE 9.5: Intel Level Zero Backend & Sysfs Fallback",
+               "Polled Level Zero metrics (2400MHz, 65C, 6GB VRAM, 190W, 85% load) and verified "
+               "DRM sysfs fallback");
   }
 
   fs::remove_all(base, ec);

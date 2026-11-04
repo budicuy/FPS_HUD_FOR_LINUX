@@ -16,6 +16,79 @@ namespace fpshud {
 
 enum class GpuBackendType { None = 0, NvidiaNvml, AmdSysfs, IntelSysfs, IntelLevelZero };
 
+namespace intel_ze {
+
+constexpr int ZE_RESULT_SUCCESS = 0;
+
+struct zes_device_properties_t {
+  uint32_t stype = 0;
+  void* pNext = nullptr;
+  uint32_t type = 0;
+  uint32_t flags = 0;
+  uint32_t deviceId = 0;
+  uint32_t vendorId = 0;
+  char name[256] = {0};
+  char serialNumber[32] = {0};
+  char boardNumber[32] = {0};
+  char brandName[256] = {0};
+  char modelName[256] = {0};
+  char vendorName[256] = {0};
+  char driverVersion[256] = {0};
+};
+
+struct zes_freq_state_t {
+  uint32_t stype = 0;
+  const void* pNext = nullptr;
+  double currentVal = 0.0;
+  double request = 0.0;
+  double tdp = 0.0;
+  double efficient = 0.0;
+  double actual = 0.0;
+  uint32_t throttleReasons = 0;
+};
+
+struct zes_mem_state_t {
+  uint32_t stype = 0;
+  const void* pNext = nullptr;
+  uint32_t health = 0;
+  uint64_t free = 0;
+  uint64_t size = 0;
+};
+
+struct zes_power_energy_counter_t {
+  uint64_t energy = 0;     // in microjoules
+  uint64_t timestamp = 0;  // in microseconds
+};
+
+struct zes_engine_stats_t {
+  uint64_t activeTime = 0;  // in microseconds
+  uint64_t timestamp = 0;   // in microseconds
+};
+
+}  // namespace intel_ze
+
+struct LevelZeroDispatch {
+  int (*zeInit)(uint32_t flags) = nullptr;
+  int (*zesInit)(uint32_t flags) = nullptr;
+  int (*zesDriverGet)(uint32_t* count, void** phDrivers) = nullptr;
+  int (*zesDeviceGet)(void* hDriver, uint32_t* count, void** phDevices) = nullptr;
+  int (*zesDeviceGetProperties)(void* hDevice,
+                                intel_ze::zes_device_properties_t* pProperties) = nullptr;
+  int (*zesDeviceEnumFrequencyDomains)(void* hDevice, uint32_t* count,
+                                       void** phFrequency) = nullptr;
+  int (*zesFrequencyGetState)(void* hFrequency, intel_ze::zes_freq_state_t* pState) = nullptr;
+  int (*zesDeviceEnumTemperatureSensors)(void* hDevice, uint32_t* count,
+                                         void** phTemperature) = nullptr;
+  int (*zesTemperatureGetState)(void* hTemperature, double* pTemperature) = nullptr;
+  int (*zesDeviceEnumPowerDomains)(void* hDevice, uint32_t* count, void** phPower) = nullptr;
+  int (*zesPowerGetEnergyCounter)(void* hPower,
+                                  intel_ze::zes_power_energy_counter_t* pEnergy) = nullptr;
+  int (*zesDeviceEnumMemoryModules)(void* hDevice, uint32_t* count, void** phMemory) = nullptr;
+  int (*zesMemoryGetState)(void* hMemory, intel_ze::zes_mem_state_t* pState) = nullptr;
+  int (*zesDeviceEnumEngineGroups)(void* hDevice, uint32_t* count, void** phEngine) = nullptr;
+  int (*zesEngineGetActivity)(void* hEngine, intel_ze::zes_engine_stats_t* pStats) = nullptr;
+};
+
 struct BenchmarkSummary {
   bool has_result = false;
   double duration_sec = 0.0;
@@ -121,11 +194,16 @@ public:
   static constexpr float kRollingWindowMaxMs = 3500.0f;  // 3.5-second real-time window
 
   TelemetryCollector();
-  explicit TelemetryCollector(std::string mock_root_prefix, bool disable_nvml = false);
+  explicit TelemetryCollector(std::string mock_root_prefix, bool disable_nvml = false,
+                              bool disable_level_zero = false);
   ~TelemetryCollector();
 
   TelemetryCollector(const TelemetryCollector&) = delete;
   TelemetryCollector& operator=(const TelemetryCollector&) = delete;
+
+  [[nodiscard]] GpuBackendType get_gpu_backend() const noexcept { return gpu_backend_; }
+
+  void inject_mock_level_zero(const LevelZeroDispatch& dispatch) noexcept;
 
   // Set active graphics API ("VULKAN" or "OPENGL") — lock-free pointer store
   void set_render_api(const char* api_name) noexcept {
@@ -167,6 +245,7 @@ private:
   void init_cpu_sensors();
   void init_gpu_sensors();
   void init_gpu_sensors_locked();
+  bool init_intel_level_zero();
   void init_battery_sensors();
   void init_ram_info();
   bool load_ram_info_file(const std::string& path);
@@ -184,6 +263,7 @@ private:
   void poll_gpu();
   void poll_battery();
   void poll_nvidia_gpu();
+  void poll_intel_level_zero_gpu();
   void poll_drm_sysfs_gpu();
   void poll_local_clock();
 
@@ -215,6 +295,24 @@ private:
   int (*pfn_nvmlDeviceGetClockInfo_)(void*, int, unsigned int*) = nullptr;
   int (*pfn_nvmlDeviceGetMemoryBusWidth_)(void*, unsigned int*) = nullptr;
   int (*pfn_nvmlDeviceGetPcieThroughput_)(void*, int, unsigned int*) = nullptr;
+
+  // Intel Level Zero / Sysman state & function pointers
+  bool disable_level_zero_ = false;
+  bool has_mock_ze_ = false;
+  LevelZeroDispatch mock_ze_dispatch_{};
+  void* ze_lib_ = nullptr;
+  void* ze_driver_ = nullptr;
+  void* ze_device_ = nullptr;
+  void* ze_freq_ = nullptr;
+  void* ze_temp_ = nullptr;
+  void* ze_pwr_ = nullptr;
+  void* ze_mem_ = nullptr;
+  void* ze_eng_ = nullptr;
+  LevelZeroDispatch ze_dispatch_{};
+  uint64_t prev_ze_eng_active_ = 0;
+  uint64_t prev_ze_eng_ts_ = 0;
+  uint64_t prev_ze_pwr_energy_ = 0;
+  uint64_t prev_ze_pwr_ts_ = 0;
 
   // Universal DRM / sysfs GPU paths (AMD amdgpu & Intel i915 / xe)
   std::string drm_gpu_busy_path_;
