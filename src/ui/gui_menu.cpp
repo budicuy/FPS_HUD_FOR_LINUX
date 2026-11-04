@@ -53,12 +53,18 @@ void draw_section_header(const char* title,
 
 // Helper to draw a metric checkbox with right-aligned live value inside the right panel
 void draw_metric_checkbox_row(HudConfig& cfg, MetricType type, const char* label,
-                              const char* live_val) {
+                              const char* live_val, bool is_available = true,
+                              const char* unavailable_hint = nullptr) {
+  if (!is_available) {
+    ImGui::BeginDisabled();
+  }
   bool active = cfg.has_metric(type);
   ImGui::PushID(static_cast<int>(type));
   if (ImGui::Checkbox(label, &active)) {
-    cfg.set_metric(type, active);
-    cfg.active_preset = "custom";
+    if (is_available) {
+      cfg.set_metric(type, active);
+      cfg.active_preset = "custom";
+    }
   }
   if (live_val && *live_val) {
     float avail = ImGui::GetContentRegionAvail().x;
@@ -73,6 +79,12 @@ void draw_metric_checkbox_row(HudConfig& cfg, MetricType type, const char* label
         live_val);
   }
   ImGui::PopID();
+  if (!is_available) {
+    ImGui::EndDisabled();
+    if (unavailable_hint && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", unavailable_hint);
+    }
+  }
 }
 
 }  // namespace
@@ -601,6 +613,19 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_rspd, sizeof(b_rspd), "N/A (run installer)");
     }
 
+    char b_bat[48] = {0};
+    if (data.battery_available) {
+      if (data.battery_power_w > 0.05f) {
+        std::snprintf(b_bat, sizeof(b_bat), "%.0f%% (%.1fW%s)", data.battery_pct,
+                      data.battery_power_w, data.battery_charging ? "+" : "");
+      } else {
+        std::snprintf(b_bat, sizeof(b_bat), "%.0f%%%s", data.battery_pct,
+                      data.battery_charging ? " (+)" : "");
+      }
+    } else {
+      std::snprintf(b_bat, sizeof(b_bat), "N/A (Desktop)");
+    }
+
     if (ImGui::BeginTable("##SensorsSplitGrid", 2,
                           ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
       ImGui::TableNextRow();
@@ -627,6 +652,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TextColored(ImVec4(0.75f, 0.82f, 0.90f, 1.0f), "System");
       draw_metric_checkbox_row(cfg, MetricType::EngineApi, "Render API", b_api);
       draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock", data.local_time_str);
+      draw_metric_checkbox_row(cfg, MetricType::Battery, "Battery & Power", b_bat,
+                               data.battery_available,
+                               "(Disabled - No Battery Detected / Desktop PC)");
 
       // Column 2: GPU + Memory (RAM)
       ImGui::TableSetColumnIndex(1);

@@ -2304,6 +2304,40 @@ void run_all_devices_and_features_suite() {
                "Bound to Intel card0 without waking suspended NVIDIA dGPU (card1)");
   }
 
+  // ------------------------------------------------------------------------
+  // PROFILE 9.3: Laptop/Handheld Battery Telemetry & Desktop PC Auto-Disable
+  // ------------------------------------------------------------------------
+  {
+    fs::path bat_root = base / "sys/class/power_supply/BAT0";
+    fs::create_directories(bat_root, ec);
+    write_mock_file(bat_root / "type", "Battery\n");
+    write_mock_file(bat_root / "capacity", "82\n");
+    write_mock_file(bat_root / "status", "Discharging\n");
+    write_mock_file(bat_root / "power_now", "16500000\n");
+
+    TelemetryCollector laptop_collector(base.string(), true);
+    laptop_collector.poll_once_sync();
+    auto laptop_snap = laptop_collector.get_snapshot();
+
+    bool laptop_ok =
+        (laptop_snap.battery_available && std::fabs(laptop_snap.battery_pct - 82.0f) < 0.1f &&
+         std::fabs(laptop_snap.battery_power_w - 16.5f) < 0.1f && !laptop_snap.battery_charging &&
+         std::strcmp(laptop_snap.battery_status, "Discharging") == 0);
+
+    // Desktop PC (no battery)
+    std::string desktop_base = "/tmp/fpshud_mock_desktop_" + std::to_string(::getpid());
+    fs::create_directories(desktop_base + "/sys/class/power_supply", ec);
+    TelemetryCollector desktop_collector(desktop_base, true);
+    desktop_collector.poll_once_sync();
+    auto desktop_snap = desktop_collector.get_snapshot();
+    fs::remove_all(desktop_base, ec);
+
+    bool desktop_ok = (!desktop_snap.battery_available);
+
+    check_cond(laptop_ok && desktop_ok, "PROFILE 9.3: Laptop Battery & Desktop PC Auto-Disable",
+               "Parsed BAT0 82% 16.5W discharging and confirmed desktop PC auto-disable");
+  }
+
   fs::remove_all(base, ec);
 
   // --------------------------------------------------------------------

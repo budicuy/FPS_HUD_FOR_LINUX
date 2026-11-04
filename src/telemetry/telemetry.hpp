@@ -166,6 +166,7 @@ private:
   void init_cpu_sensors();
   void init_gpu_sensors();
   void init_gpu_sensors_locked();
+  void init_battery_sensors();
   void init_ram_info();
   bool load_ram_info_file(const std::string& path);
   bool load_ram_info_dmi(const std::string& entries_dir);
@@ -180,6 +181,7 @@ private:
   void poll_game_ram();
   void poll_mem_pressure();
   void poll_gpu();
+  void poll_battery();
   void poll_nvidia_gpu();
   void poll_drm_sysfs_gpu();
   void poll_local_clock();
@@ -244,6 +246,14 @@ private:
   uint64_t rapl_max_range_uj_ = 0;
   std::string cpu_hwmon_power_uw_path_;   // Fallback direct microwatt sensor (AMD zenpower/k10temp)
   std::string cpu_hwmon_energy_uj_path_;  // Fallback microjoule counter (amd_energy)
+
+  // Battery paths
+  std::string battery_capacity_path_;
+  std::string battery_status_path_;
+  std::string battery_power_uw_path_;
+  std::string battery_current_ua_path_;
+  std::string battery_voltage_uv_path_;
+  bool battery_discovered_ = false;
 
   // Previous counters for delta calculation
   uint64_t prev_cpu_total_ = 0;

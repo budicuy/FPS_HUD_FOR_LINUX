@@ -220,10 +220,12 @@ void TelemetryCollector::init_sensors() {
   init_cpu_sensors();
   init_gpu_sensors();
   init_ram_info();
+  init_battery_sensors();
 
   // Prime initial counters for delta metrics
   poll_cpu_load();
   poll_cpu_power();
+  poll_battery();
   poll_local_clock();
 }
 
@@ -1339,6 +1341,7 @@ void TelemetryCollector::poll_once_sync() {
   poll_game_ram();
   poll_mem_pressure();
   poll_gpu();
+  poll_battery();
   poll_local_clock();
 }
 
@@ -1382,6 +1385,115 @@ void TelemetryCollector::poll_local_clock() {
   std::strftime(buf, sizeof(buf), "%H:%M", &tm_buf);
   std::lock_guard<std::mutex> lock(data_mutex_);
   std::memcpy(hw_data_.local_time_str, buf, sizeof(hw_data_.local_time_str));
+}
+
+void TelemetryCollector::init_battery_sensors() {
+  std::error_code ec;
+  battery_capacity_path_.clear();
+  battery_status_path_.clear();
+  battery_power_uw_path_.clear();
+  battery_current_ua_path_.clear();
+  battery_voltage_uv_path_.clear();
+  battery_discovered_ = false;
+
+  std::string power_dir = root_prefix_ + "/sys/class/power_supply";
+  if (!fs::exists(power_dir, ec)) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.battery_available = false;
+    return;
+  }
+
+  for (const auto& entry : fs::directory_iterator(power_dir, ec)) {
+    std::string fname = entry.path().filename().string();
+    char type_buf[32] = {0};
+    fs::path type_path = entry.path() / "type";
+    bool is_bat = false;
+
+    if (fname.rfind("BAT", 0) == 0) {
+      is_bat = true;
+    } else if (read_sysfs_buf(type_path.c_str(), type_buf, sizeof(type_buf))) {
+      while (type_buf[0] && (type_buf[std::strlen(type_buf) - 1] == '\n' ||
+                             type_buf[std::strlen(type_buf) - 1] == '\r')) {
+        type_buf[std::strlen(type_buf) - 1] = '\0';
+      }
+      if (std::strcmp(type_buf, "Battery") == 0) {
+        is_bat = true;
+      }
+    }
+
+    if (is_bat) {
+      fs::path cap_path = entry.path() / "capacity";
+      if (fs::exists(cap_path, ec)) {
+        battery_capacity_path_ = cap_path.string();
+        battery_status_path_ = (entry.path() / "status").string();
+
+        fs::path p_now = entry.path() / "power_now";
+        if (fs::exists(p_now, ec)) {
+          battery_power_uw_path_ = p_now.string();
+        }
+        fs::path c_now = entry.path() / "current_now";
+        if (fs::exists(c_now, ec)) {
+          battery_current_ua_path_ = c_now.string();
+        }
+        fs::path v_now = entry.path() / "voltage_now";
+        if (fs::exists(v_now, ec)) {
+          battery_voltage_uv_path_ = v_now.string();
+        }
+
+        battery_discovered_ = true;
+        break;
+      }
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  hw_data_.battery_available = battery_discovered_;
+}
+
+void TelemetryCollector::poll_battery() {
+  if (!battery_discovered_) return;
+
+  char buf[64];
+  float cap_pct = 0.0f;
+  float power_w = 0.0f;
+  char status_str[16] = "Discharging";
+  bool is_charging = false;
+
+  if (!battery_capacity_path_.empty() &&
+      read_sysfs_buf(battery_capacity_path_.c_str(), buf, sizeof(buf))) {
+    cap_pct = std::clamp(std::strtof(buf, nullptr), 0.0f, 100.0f);
+  }
+
+  if (!battery_status_path_.empty() &&
+      read_sysfs_buf(battery_status_path_.c_str(), buf, sizeof(buf))) {
+    while (buf[0] && (buf[std::strlen(buf) - 1] == '\n' || buf[std::strlen(buf) - 1] == '\r')) {
+      buf[std::strlen(buf) - 1] = '\0';
+    }
+    std::snprintf(status_str, sizeof(status_str), "%s", buf);
+    is_charging = (std::strcmp(status_str, "Charging") == 0);
+  }
+
+  if (!battery_power_uw_path_.empty() &&
+      read_sysfs_buf(battery_power_uw_path_.c_str(), buf, sizeof(buf))) {
+    uint64_t uw = std::strtoull(buf, nullptr, 10);
+    power_w = static_cast<float>(uw) / 1000000.0f;
+  } else if (!battery_current_ua_path_.empty() && !battery_voltage_uv_path_.empty()) {
+    char c_buf[64] = {0};
+    char v_buf[64] = {0};
+    if (read_sysfs_buf(battery_current_ua_path_.c_str(), c_buf, sizeof(c_buf)) &&
+        read_sysfs_buf(battery_voltage_uv_path_.c_str(), v_buf, sizeof(v_buf))) {
+      double ua = std::strtod(c_buf, nullptr);
+      double uv = std::strtod(v_buf, nullptr);
+      power_w = static_cast<float>((ua * uv) / 1e12);
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  hw_data_.battery_available = true;
+  hw_data_.battery_pct = cap_pct;
+  hw_data_.battery_power_w = power_w;
+  hw_data_.battery_charging = is_charging;
+  std::snprintf(hw_data_.battery_status, sizeof(hw_data_.battery_status), "%s", status_str);
 }
 
 void TelemetryCollector::poll_cpu_load() {
