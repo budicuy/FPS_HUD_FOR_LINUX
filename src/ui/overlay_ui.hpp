@@ -17,9 +17,7 @@ ImFont* get_hud_font(FontFamily family, float font_size_px, float& out_base_size
 
 // Renders the ImGui overlay window (and interactive GUI menu if enabled) for the current frame.
 // Must be called between ImGui::NewFrame() and ImGui::Render().
-void render_overlay_ui(HudConfig& cfg,
-                       const TelemetryData& data,
-                       float display_width,
+void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_width,
                        float display_height);
 
-} // namespace fpshud
+}  // namespace fpshud
