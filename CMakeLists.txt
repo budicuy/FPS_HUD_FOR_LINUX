@@ -48,9 +48,12 @@ else()
     set(USE_SANITIZERS OFF)
 endif()
 
+include(CheckSymbolExists)
+check_symbol_exists(__GLIBC__ "features.h" FPSHUD_IS_GLIBC)
+
 set(FPSHUD_GLIBC_COMPAT_SOURCES "")
 set(FPSHUD_GLIBC_COMPAT_LINK_OPTS "")
-if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
+if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
     set_source_files_properties(src/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
     set(FPSHUD_GLIBC_COMPAT_SOURCES src/glibc_compat.c)
     set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
@@ -154,7 +157,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(imgui)
 
 find_package(Vulkan REQUIRED)
-find_package(OpenGL REQUIRED COMPONENTS OpenGL GLX EGL)
+find_path(FPSHUD_GL_INCLUDE_DIR NAMES GL/gl.h REQUIRED)
+find_path(FPSHUD_EGL_INCLUDE_DIR NAMES EGL/egl.h REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter)
 
@@ -193,6 +197,8 @@ target_include_directories(fpshud PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${Vulkan_INCLUDE_DIRS}
+    ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_EGL_INCLUDE_DIR}
 )
 
 target_compile_definitions(fpshud PRIVATE
@@ -201,9 +207,6 @@ target_compile_definitions(fpshud PRIVATE
 
 target_link_libraries(fpshud PRIVATE
     Vulkan::Headers
-    OpenGL::GL
-    OpenGL::GLX
-    OpenGL::EGL
     Threads::Threads
     ${CMAKE_DL_LIBS}
 )

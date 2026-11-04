@@ -6,6 +6,9 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <elf.h>
+#include <link.h>
 
 #include <chrono>
 #include <cmath>
@@ -205,6 +208,168 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
         std::printf("  ℹ️  [INFO] Sebagian sensor dibatasi izin kernel Linux (RAPL CPU Watt / SMBIOS RAM).\n");
         std::printf("           Jalankan 'fpshud --setup' kapan saja untuk mengaktifkan izin sensor penuh.\n");
     }
+}
+
+struct ElfVerificationResult {
+    bool file_found = false;
+    bool elf_valid = false;
+    bool dlopen_ok = false;
+    std::string dlopen_error;
+    std::vector<std::string> needed_libs;
+    std::vector<std::string> banned_libs_found;
+};
+
+fs::path find_libfpshud_path() {
+    std::vector<fs::path> candidates;
+    char exe_buf[4096] = {0};
+    ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+        candidates.push_back(exe_dir / "libfpshud.so");
+        candidates.push_back(exe_dir / "build" / "libfpshud.so");
+    }
+    candidates.push_back(fs::path("./build/libfpshud.so"));
+    candidates.push_back(fs::path("./libfpshud.so"));
+    candidates.push_back(fs::path("../lib/fpshud/libfpshud.so"));
+
+    for (const auto& p : candidates) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            return fs::canonical(p, ec);
+        }
+    }
+    return {};
+}
+
+ElfVerificationResult inspect_libfpshud_elf(const fs::path& so_path) {
+    ElfVerificationResult res;
+    if (so_path.empty()) {
+        return res;
+    }
+    res.file_found = true;
+
+    // 1. Verify dlopen(..., RTLD_NOW | RTLD_LOCAL)
+    dlerror();
+    static void* s_loaded_fpshud_handle = nullptr;
+    s_loaded_fpshud_handle = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (s_loaded_fpshud_handle) {
+        res.dlopen_ok = true;
+    } else {
+        const char* err = dlerror();
+        res.dlopen_error = err ? err : "unknown dlopen failure";
+    }
+
+    // 2. Binary ELF parsing via <elf.h>
+    std::ifstream file(so_path, std::ios::binary);
+    if (!file) {
+        return res;
+    }
+
+    Elf64_Ehdr ehdr{};
+    if (!file.read(reinterpret_cast<char*>(&ehdr), sizeof(ehdr))) {
+        return res;
+    }
+
+    if (std::memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 || ehdr.e_ident[EI_CLASS] != ELFCLASS64) {
+        return res;
+    }
+
+    if (ehdr.e_shoff == 0 || ehdr.e_shnum == 0 || ehdr.e_shentsize != sizeof(Elf64_Shdr)) {
+        return res;
+    }
+
+    std::vector<Elf64_Shdr> shdrs(ehdr.e_shnum);
+    file.seekg(static_cast<std::streamoff>(ehdr.e_shoff));
+    if (!file.read(reinterpret_cast<char*>(shdrs.data()), static_cast<std::streamsize>(ehdr.e_shnum * sizeof(Elf64_Shdr)))) {
+        return res;
+    }
+
+    int dynamic_idx = -1;
+    for (size_t i = 0; i < shdrs.size(); ++i) {
+        if (shdrs[i].sh_type == SHT_DYNAMIC) {
+            dynamic_idx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (dynamic_idx < 0) {
+        return res;
+    }
+
+    const auto& dyn_shdr = shdrs[static_cast<size_t>(dynamic_idx)];
+    uint32_t strtab_idx = dyn_shdr.sh_link;
+    if (strtab_idx >= shdrs.size()) {
+        return res;
+    }
+
+    const auto& str_shdr = shdrs[strtab_idx];
+    if (str_shdr.sh_size == 0) {
+        return res;
+    }
+
+    std::vector<char> strtab(str_shdr.sh_size);
+    file.seekg(static_cast<std::streamoff>(str_shdr.sh_offset));
+    if (!file.read(strtab.data(), static_cast<std::streamsize>(str_shdr.sh_size))) {
+        return res;
+    }
+
+    size_t dyn_count = dyn_shdr.sh_size / sizeof(Elf64_Dyn);
+    std::vector<Elf64_Dyn> dyns(dyn_count);
+    file.seekg(static_cast<std::streamoff>(dyn_shdr.sh_offset));
+    if (!file.read(reinterpret_cast<char*>(dyns.data()), static_cast<std::streamsize>(dyn_shdr.sh_size))) {
+        return res;
+    }
+
+    res.elf_valid = true;
+
+    for (const auto& d : dyns) {
+        if (d.d_tag == DT_NEEDED) {
+            uint64_t str_off = d.d_un.d_val;
+            if (str_off < strtab.size()) {
+                const char* name = &strtab[str_off];
+                res.needed_libs.emplace_back(name);
+                if (std::strstr(name, "libGLX") ||
+                    std::strstr(name, "libEGL") ||
+                    std::strstr(name, "libOpenGL") ||
+                    std::strstr(name, "libGL")) {
+                    res.banned_libs_found.emplace_back(name);
+                }
+            }
+        } else if (d.d_tag == DT_NULL) {
+            break;
+        }
+    }
+
+    return res;
+}
+
+void run_elf_and_layer_abi_suite() {
+    std::printf("\n--------------------------------------------------------------------\n");
+    std::printf(" SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load\n");
+    std::printf("--------------------------------------------------------------------\n");
+
+    fs::path so_path = find_libfpshud_path();
+    ElfVerificationResult res = inspect_libfpshud_elf(so_path);
+
+    bool check_ok = res.file_found && res.elf_valid && res.dlopen_ok && res.banned_libs_found.empty();
+    std::string detail;
+    if (!res.file_found) {
+        detail = "libfpshud.so not found on disk";
+    } else if (!res.elf_valid) {
+        detail = "Invalid ELF binary or SHT_DYNAMIC section missing";
+    } else if (!res.dlopen_ok) {
+        detail = "dlopen(RTLD_NOW|RTLD_LOCAL) failed: " + res.dlopen_error;
+    } else if (!res.banned_libs_found.empty()) {
+        detail = "Banned DT_NEEDED found: ";
+        for (size_t i = 0; i < res.banned_libs_found.size(); ++i) {
+            if (i > 0) detail += ", ";
+            detail += res.banned_libs_found[i];
+        }
+    } else {
+        detail = "Decoupled DT_NEEDED verified (0 GL/EGL/OpenGL dependencies) & dlopen(RTLD_NOW) clean";
+    }
+
+    check_cond(check_ok, "1. ELF Dynamic Linkage & DT_NEEDED Decoupling", detail.c_str());
 }
 
 void run_all_devices_and_features_suite() {
@@ -728,6 +893,11 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(stress_ok, "5. Dynamic Allocator Stress & Leak-Free Run",
                "500 rapid cycles of config alloc & telemetry snapshot verified clean");
+
+    // --------------------------------------------------------------------
+    // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
+    // --------------------------------------------------------------------
+    run_elf_and_layer_abi_suite();
 
     std::printf("\n====================================================================\n");
     std::printf("  VERIFICATION RESULT: %d / %d CHECKS PASSED (ALL PLATFORMS + MEMORY SAFETY)!\n",
