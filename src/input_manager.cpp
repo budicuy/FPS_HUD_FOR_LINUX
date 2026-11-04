@@ -253,14 +253,6 @@ void InputManager::init_x11_fallback() {
     }
 }
 
-bool InputManager::is_wayland_hotkey_restricted() const noexcept {
-    const char* wayland = std::getenv("WAYLAND_DISPLAY");
-    if (!wayland || wayland[0] == '\0') {
-        return false;
-    }
-    return evdev_scanned_ && evdev_devices_.empty() && x11_attempted_ && (x11_display_ == nullptr);
-}
-
 void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_width, float display_height) {
     init_x11_fallback();
     if (!x11_display_ || !x11_lib_) return;

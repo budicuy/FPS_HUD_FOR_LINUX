@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include <cstdlib>
 #include <vector>
 
 struct ImGuiIO;
@@ -25,7 +26,13 @@ public:
     void sync_grab_state(ImGuiIO& io, const HudConfig& cfg);
 
     bool has_evdev_access() const { return !evdev_devices_.empty(); }
-    bool is_wayland_hotkey_restricted() const noexcept;
+    bool is_wayland_hotkey_restricted() const noexcept {
+        const char* wayland = std::getenv("WAYLAND_DISPLAY");
+        if (!wayland || wayland[0] == '\0') {
+            return false;
+        }
+        return evdev_scanned_ && evdev_devices_.empty() && x11_attempted_ && (x11_display_ == nullptr);
+    }
     void set_wayland_restricted_state_for_test(bool evdev_scanned, bool evdev_empty, bool x11_attempted, void* x11_display) noexcept {
         evdev_scanned_ = evdev_scanned;
         if (evdev_empty) {

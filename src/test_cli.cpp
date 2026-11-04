@@ -7,13 +7,6 @@
 
 namespace fpshud {
 InputManager::~InputManager() = default;
-bool InputManager::is_wayland_hotkey_restricted() const noexcept {
-    const char* wayland = std::getenv("WAYLAND_DISPLAY");
-    if (!wayland || wayland[0] == '\0') {
-        return false;
-    }
-    return evdev_scanned_ && evdev_devices_.empty() && x11_attempted_ && (x11_display_ == nullptr);
-}
 }
 
 #include <vulkan/vulkan.h>
