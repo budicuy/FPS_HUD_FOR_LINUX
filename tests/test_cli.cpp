@@ -1,5 +1,5 @@
 #include "config.hpp"
-#include "inplace_vec.hpp"
+#include <inplace_vector>
 #include "telemetry.hpp"
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"

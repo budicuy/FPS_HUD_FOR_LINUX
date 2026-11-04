@@ -381,7 +381,6 @@ if(CLANG_FORMAT_EXE)
     set(FORMAT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/inplace_vec.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp

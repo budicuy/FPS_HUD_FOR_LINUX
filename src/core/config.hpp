@@ -1,8 +1,8 @@
 #pragma once
 
-#include "inplace_vec.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <inplace_vector>
 #include <mutex>
 #include <string>
 

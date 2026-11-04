@@ -1,6 +1,6 @@
 #pragma once
 
-#include "inplace_vec.hpp"
+#include <inplace_vector>
 
 #include <array>
 #include <atomic>
