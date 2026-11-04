@@ -803,7 +803,7 @@ void run_elf_and_layer_abi_suite() {
 
         // 2.1 OpenGL Read Framebuffer & Pack Alignment Preservation (I5)
         fs::path rroot = find_repo_root();
-        std::string gl_src = read_text_file(rroot / "src" / "opengl_hook.cpp");
+        std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
         bool gl_state_preserved = (gl_src.find("GL_READ_FRAMEBUFFER_BINDING") != std::string::npos &&
                                    gl_src.find("GL_PACK_ALIGNMENT") != std::string::npos &&
                                    gl_src.find("GL_PACK_ROW_LENGTH") != std::string::npos);
@@ -829,8 +829,8 @@ void run_elf_and_layer_abi_suite() {
         // Verify Host Process Signal Safety & Fence Deadlock Invariant (C2, I7)
         bool sigpipe_clean = false;
         fs::path rroot = find_repo_root();
-        std::string ipc_src = read_text_file(rroot / "src" / "recorder_ipc.cpp");
-        std::string vk_src = read_text_file(rroot / "src" / "vulkan_layer.cpp");
+        std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
+        std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
         if (ipc_src.find("signal(SIGPIPE") == std::string::npos &&
             vk_src.find("UINT64_MAX") == std::string::npos &&
             vk_src.find("2000000000ULL") != std::string::npos) {
@@ -1183,7 +1183,7 @@ void run_elf_and_layer_abi_suite() {
 
             // Verify A/V Timestamp Synchronization & SHM Bounds Guard (I1, I4)
             fs::path rroot = find_repo_root();
-            std::string rec_src = read_text_file(rroot / "src" / "recorder_main.cpp");
+            std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
             bool av_sync_guarded = (rec_src.find("g_has_received_game_frame") != std::string::npos);
             bool shm_bounds_guarded = (rec_src.find("shm_size -") != std::string::npos ||
                                        rec_src.find("<= shm_size") != std::string::npos);
@@ -1201,7 +1201,7 @@ void run_elf_and_layer_abi_suite() {
 
         // 5.0 Standalone Recorder sws_ctx Null Validation
         fs::path rroot = find_repo_root();
-        std::string rec_src = read_text_file(rroot / "src" / "recorder_main.cpp");
+        std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
         bool sws_ctx_null_guarded = (rec_src.find("if (!sws_ctx)") != std::string::npos &&
                                      rec_src.find("Failed to allocate") != std::string::npos);
         check_cond(sws_ctx_null_guarded, "5.0 Recorder sws_ctx Null Validation",
@@ -1230,7 +1230,7 @@ void run_elf_and_layer_abi_suite() {
         }
 
         fs::path rroot = find_repo_root();
-        std::string ipc_src = read_text_file(rroot / "src" / "recorder_ipc.cpp");
+        std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
         bool lstat_guarded = (ipc_src.find("lstat") != std::string::npos &&
                               ipc_src.find("mkdtemp") != std::string::npos);
 
@@ -1419,7 +1419,7 @@ void run_elf_and_layer_abi_suite() {
         }
 
         bool inplace_polyfill_ok = false;
-        std::string inplace_hdr = read_text_file(repo_root / "src" / "inplace_vec.hpp");
+        std::string inplace_hdr = read_text_file(repo_root / "src" / "core" / "inplace_vec.hpp");
         if (inplace_hdr.find("class inplace_vector") != std::string::npos ||
             inplace_hdr.find("inplace_vector polyfill") != std::string::npos) {
             inplace_polyfill_ok = true;
