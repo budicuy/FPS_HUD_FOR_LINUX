@@ -92,6 +92,20 @@ run_setup() {
     echo "Mengonfigurasi aturan udev standar Linux & cache SMBIOS agar sensor"
     echo "dapat dibaca oleh user biasa tanpa hak root saat bermain game."
     echo ""
+    echo "Perhatian Keamanan / Security Notice (I6):"
+    echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
+    echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
+    echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat input"
+    echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
+    echo "--------------------------------------------------------------------"
+
+    if [ -t 0 ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
+        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm
+        case "$confirm" in
+            [yY][eE][sS]|[yY]) ;;
+            *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
+        esac
+    fi
 
     local SUDO_CMD="sudo"
     if [ "$EUID" -eq 0 ]; then

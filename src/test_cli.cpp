@@ -1346,14 +1346,41 @@ void run_elf_and_layer_abi_suite() {
         std::error_code ec;
         fs::remove(mock_elf32_path, ec);
 
+        // E. Release Package Script & Setup Security Hardening (I6, I8, M1)
+        bool pkg_decoupled_ok = false;
+        std::string pkg_script_content = read_text_file(repo_root / "scripts" / "package_release.sh");
+        if (pkg_script_content.find("install.sh") != std::string::npos &&
+            (pkg_script_content.find("--install") != std::string::npos ||
+             pkg_script_content.find("FPSHUD_INSTALL_AFTER_PACKAGE") != std::string::npos)) {
+            pkg_decoupled_ok = true;
+        }
+
+        bool setup_security_notice_ok = false;
+        std::string fpshud_in_content = read_text_file(repo_root / "scripts" / "fpshud.in");
+        if (fpshud_in_content.find("CVE-2020-8694") != std::string::npos &&
+            fpshud_in_content.find("Platypus") != std::string::npos) {
+            setup_security_notice_ok = true;
+        }
+
+        bool inplace_polyfill_ok = false;
+        std::string inplace_hdr = read_text_file(repo_root / "src" / "inplace_vec.hpp");
+        if (inplace_hdr.find("class inplace_vector") != std::string::npos ||
+            inplace_hdr.find("inplace_vector polyfill") != std::string::npos) {
+            inplace_polyfill_ok = true;
+        }
+
         bool test_passed = (wayland_test_ok && scripts_install_ok && uninstall_ok &&
-                            wrapper_found && elf64_runs_ok && elf32_detected_ok && elf32_no_ldso_error);
+                            wrapper_found && elf64_runs_ok && elf32_detected_ok && elf32_no_ldso_error &&
+                            pkg_decoupled_ok && setup_security_notice_ok && inplace_polyfill_ok);
         std::string detail = "wayland_ok=" + std::to_string(wayland_test_ok) +
                              ", scripts_install_ok=" + std::to_string(scripts_install_ok) +
                              ", uninstall_ok=" + std::to_string(uninstall_ok) +
                              ", elf64_ok=" + std::to_string(elf64_runs_ok) +
                              ", elf32_detected=" + std::to_string(elf32_detected_ok) +
-                             ", elf32_no_ldso_err=" + std::to_string(elf32_no_ldso_error);
+                             ", elf32_no_ldso_err=" + std::to_string(elf32_no_ldso_error) +
+                             ", pkg_decoupled=" + std::to_string(pkg_decoupled_ok) +
+                             ", setup_notice=" + std::to_string(setup_security_notice_ok) +
+                             ", polyfill=" + std::to_string(inplace_polyfill_ok);
 
         check_cond(test_passed, "7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance", detail.c_str());
     }

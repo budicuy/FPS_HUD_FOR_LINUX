@@ -25,10 +25,8 @@ int main() {
 }
 " FPSHUD_HAS_CXX26_INPLACE_VECTOR)
 if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
-    message(FATAL_ERROR
-        "FPSHUD requires an ISO C++26 compiler and standard library providing <inplace_vector> "
-        "(GCC 16+ or Clang 20+ with libstdc++ 16+).\n"
-        "On Ubuntu/Debian: install g++-16 (Ubuntu 26.04 universe, or ppa:ubuntu-toolchain-r/test) and pass -DCMAKE_CXX_COMPILER=g++-16.")
+    message(STATUS
+        "Toolchain does not provide native <inplace_vector>; enabling high-performance zero-heap polyfill in src/inplace_vec.hpp.")
 endif()
 
 option(FPSHUD_NATIVE_ARCH "Optimize for host CPU microarchitecture (-march=native)" OFF)

@@ -67,4 +67,8 @@ tar -czf "$DIST_DIR/fpshud-linux-x86_64.tar.gz" -C "$BUILD_DIR" "${TAR_FILES[@]}
 echo "[✓] Packaged portable release archive: $DIST_DIR/fpshud-linux-x86_64.tar.gz"
 
 cd "$PROJECT_DIR"
-bash "$PROJECT_DIR/install.sh"
+if [ "${1:-}" = "--install" ] || [ "${FPSHUD_INSTALL_AFTER_PACKAGE:-0}" = "1" ]; then
+    bash "$PROJECT_DIR/install.sh"
+else
+    echo "[i] Skipped automatic developer installation. Run with --install or FPSHUD_INSTALL_AFTER_PACKAGE=1 to install to ~/.local."
+fi
