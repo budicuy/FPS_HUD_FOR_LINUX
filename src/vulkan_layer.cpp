@@ -33,8 +33,12 @@ struct InstanceData {
     VkInstance instance = VK_NULL_HANDLE;
     PFN_vkGetInstanceProcAddr GetInstanceProcAddr = nullptr;
     PFN_vkDestroyInstance DestroyInstance = nullptr;
-    PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties = nullptr;
+    PFN_vkEnumeratePhysicalDevices EnumeratePhysicalDevices = nullptr;
+    PFN_vkGetPhysicalDeviceProperties GetPhysicalDeviceProperties = nullptr;
     PFN_vkGetPhysicalDeviceMemoryProperties GetPhysicalDeviceMemoryProperties = nullptr;
+    PFN_vkGetPhysicalDeviceMemoryProperties2 GetPhysicalDeviceMemoryProperties2 = nullptr;
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties = nullptr;
+    PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties = nullptr;
 };
 
 struct FrameResources {
@@ -64,6 +68,7 @@ struct DeviceData {
     PFN_vkGetDeviceProcAddr GetDeviceProcAddr = nullptr;
     PFN_vkDestroyDevice DestroyDevice = nullptr;
     PFN_vkGetDeviceQueue GetDeviceQueue = nullptr;
+    PFN_vkGetDeviceQueue2 GetDeviceQueue2 = nullptr;
     PFN_vkCreateSwapchainKHR CreateSwapchainKHR = nullptr;
     PFN_vkDestroySwapchainKHR DestroySwapchainKHR = nullptr;
     PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR = nullptr;
@@ -108,6 +113,10 @@ struct DeviceData {
     // Zero-Copy DMA-BUF export support (VK_KHR_external_memory_fd)
     bool has_dma_buf_support = false;
     PFN_vkGetMemoryFdKHR GetMemoryFdKHR = nullptr;
+
+    // VRAM memory budget extension support (VK_EXT_memory_budget) & throttling
+    bool has_memory_budget_ext = false;
+    std::chrono::steady_clock::time_point last_vram_update{};
 };
 
 struct SwapchainData {
@@ -246,6 +255,12 @@ void destroy_swapchain_data(SwapchainData* sd) {
 bool init_swapchain_overlay(SwapchainData* sd) {
     DeviceData* dd = sd->device_data;
     if (!dd || !dd->graphics_queue) return false;
+
+    // Handle zero-extent swapchains cleanly (e.g., minimized window) without registration failure
+    if (sd->extent.width == 0 || sd->extent.height == 0) {
+        sd->imgui_initialized = false;
+        return true;
+    }
 
     uint32_t img_count = 0;
     if (dd->GetSwapchainImagesKHR(dd->device, sd->swapchain, &img_count, nullptr) != VK_SUCCESS || img_count == 0) {
@@ -574,10 +589,22 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(
     id->GetInstanceProcAddr = fpGetInstanceProcAddr;
     id->DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
         fpGetInstanceProcAddr(*pInstance, "vkDestroyInstance"));
+    id->EnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDevices"));
+    id->GetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceProperties"));
     id->GetPhysicalDeviceQueueFamilyProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
         fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
     id->GetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
         fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
+    id->GetPhysicalDeviceMemoryProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+        fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2"));
+    if (!id->GetPhysicalDeviceMemoryProperties2) {
+        id->GetPhysicalDeviceMemoryProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+            fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
+    }
+    id->EnumerateDeviceExtensionProperties = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+        fpGetInstanceProcAddr(*pInstance, "vkEnumerateDeviceExtensionProperties"));
 
     std::lock_guard<std::mutex> lock(g_map_mutex);
     g_instance_map[get_dispatch_key(*pInstance)] = id;
@@ -594,7 +621,23 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(
         auto it = g_instance_map.find(get_dispatch_key(instance));
         if (it != g_instance_map.end()) {
             id = it->second;
-            g_instance_map.erase(it);
+        } else {
+            for (auto& kv : g_instance_map) {
+                if (kv.second && kv.second->instance == instance) {
+                    id = kv.second;
+                    break;
+                }
+            }
+        }
+
+        if (id) {
+            for (auto iter = g_instance_map.begin(); iter != g_instance_map.end(); ) {
+                if (iter->second == id) {
+                    iter = g_instance_map.erase(iter);
+                } else {
+                    ++iter;
+                }
+            }
         }
     }
 
@@ -604,6 +647,28 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(
         }
         delete id;
     }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDevices(
+    VkInstance instance,
+    uint32_t* pPhysicalDeviceCount,
+    VkPhysicalDevice* pPhysicalDevices) {
+
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->EnumeratePhysicalDevices) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    VkResult res = id->EnumeratePhysicalDevices(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    if (res == VK_SUCCESS && pPhysicalDevices && pPhysicalDeviceCount && *pPhysicalDeviceCount > 0) {
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        for (uint32_t i = 0; i < *pPhysicalDeviceCount; ++i) {
+            if (pPhysicalDevices[i] != VK_NULL_HANDLE) {
+                g_instance_map[get_dispatch_key(pPhysicalDevices[i])] = id;
+            }
+        }
+    }
+    return res;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
@@ -645,10 +710,17 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     dd->physical_device = physicalDevice;
     dd->GetDeviceProcAddr = fpGetDeviceProcAddr;
     dd->instance_data = find_instance_data(get_dispatch_key(physicalDevice));
+    if (!dd->instance_data) {
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        if (!g_instance_map.empty()) {
+            dd->instance_data = g_instance_map.begin()->second;
+        }
+    }
 
     #define LOAD_DEV_FN(name) dd->name = reinterpret_cast<PFN_vk##name>(fpGetDeviceProcAddr(*pDevice, "vk" #name))
     LOAD_DEV_FN(DestroyDevice);
     LOAD_DEV_FN(GetDeviceQueue);
+    LOAD_DEV_FN(GetDeviceQueue2);
     LOAD_DEV_FN(CreateSwapchainKHR);
     LOAD_DEV_FN(DestroySwapchainKHR);
     LOAD_DEV_FN(GetSwapchainImagesKHR);
@@ -693,7 +765,33 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
         dd->has_dma_buf_support = true;
     }
 
+    // Check VK_EXT_memory_budget extension presence
+    if (pCreateInfo && pCreateInfo->ppEnabledExtensionNames) {
+        for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i) {
+            if (pCreateInfo->ppEnabledExtensionNames[i] &&
+                std::strcmp(pCreateInfo->ppEnabledExtensionNames[i], "VK_EXT_memory_budget") == 0) {
+                dd->has_memory_budget_ext = true;
+                break;
+            }
+        }
+    }
+    if (!dd->has_memory_budget_ext && dd->instance_data && dd->instance_data->EnumerateDeviceExtensionProperties) {
+        uint32_t ext_count = 0;
+        if (dd->instance_data->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &ext_count, nullptr) == VK_SUCCESS && ext_count > 0) {
+            std::vector<VkExtensionProperties> exts(ext_count);
+            if (dd->instance_data->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &ext_count, exts.data()) == VK_SUCCESS) {
+                for (const auto& ext : exts) {
+                    if (std::strcmp(ext.extensionName, "VK_EXT_memory_budget") == 0) {
+                        dd->has_memory_budget_ext = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     uint32_t chosen_family = 0;
+    VkDeviceQueueCreateFlags queue_flags = 0;
     if (dd->instance_data && dd->instance_data->GetPhysicalDeviceQueueFamilyProperties) {
         uint32_t qf_count = 0;
         dd->instance_data->GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qf_count, nullptr);
@@ -704,18 +802,77 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
             uint32_t fam = pCreateInfo->pQueueCreateInfos[i].queueFamilyIndex;
             if (fam < qf_count && (qf_props[fam].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
                 chosen_family = fam;
+                queue_flags = pCreateInfo->pQueueCreateInfos[i].flags;
                 break;
             }
         }
     } else if (pCreateInfo->queueCreateInfoCount > 0) {
         chosen_family = pCreateInfo->pQueueCreateInfos[0].queueFamilyIndex;
+        queue_flags = pCreateInfo->pQueueCreateInfos[0].flags;
     }
 
     dd->graphics_queue_family = chosen_family;
-    if (dd->GetDeviceQueue) {
+    if (queue_flags != 0 && dd->GetDeviceQueue2) {
+        VkDeviceQueueInfo2 qinfo{};
+        qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+        qinfo.flags = queue_flags;
+        qinfo.queueFamilyIndex = dd->graphics_queue_family;
+        qinfo.queueIndex = 0;
+        dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
+    } else if (dd->GetDeviceQueue) {
         dd->GetDeviceQueue(*pDevice, dd->graphics_queue_family, 0, &dd->graphics_queue);
+    }
+
+    if (!dd->graphics_queue && dd->GetDeviceQueue2) {
+        VkDeviceQueueInfo2 qinfo{};
+        qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+        qinfo.flags = queue_flags;
+        qinfo.queueFamilyIndex = dd->graphics_queue_family;
+        qinfo.queueIndex = 0;
+        dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
+    }
+
+    if (dd->graphics_queue) {
         copy_dispatch_key(dd->graphics_queue, *pDevice);
     }
+
+    // Bind Active GPU to Telemetry
+    if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
+        VkPhysicalDeviceProperties props{};
+        dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
+        fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
+    }
+
+    // Query initial VRAM budget
+    uint64_t total_vram = 0;
+    uint64_t used_vram = 0;
+    if (dd->has_memory_budget_ext && dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties2) {
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget_props{};
+        budget_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+        VkPhysicalDeviceMemoryProperties2 mem_props2{};
+        mem_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        mem_props2.pNext = &budget_props;
+
+        dd->instance_data->GetPhysicalDeviceMemoryProperties2(physicalDevice, &mem_props2);
+        for (uint32_t i = 0; i < mem_props2.memoryProperties.memoryHeapCount; ++i) {
+            if (mem_props2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                total_vram += mem_props2.memoryProperties.memoryHeaps[i].size;
+                used_vram += budget_props.heapUsage[i];
+            }
+        }
+    } else if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
+        VkPhysicalDeviceMemoryProperties mem_props{};
+        dd->instance_data->GetPhysicalDeviceMemoryProperties(physicalDevice, &mem_props);
+        for (uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
+            if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                total_vram += mem_props.memoryHeaps[i].size;
+            }
+        }
+    }
+    if (total_vram > 0) {
+        fpshud::get_telemetry().update_api_vram_info(used_vram, total_vram);
+    }
+    dd->last_vram_update = std::chrono::steady_clock::now();
 
     {
         std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -733,15 +890,50 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(
     const VkAllocationCallbacks* pAllocator) {
 
     DeviceData* dd = nullptr;
+    std::vector<SwapchainData*> swapchains_to_destroy;
+
     {
         std::lock_guard<std::mutex> lock(g_map_mutex);
         auto it = g_device_map.find(get_dispatch_key(device));
         if (it != g_device_map.end()) {
             dd = it->second;
-            g_device_map.erase(it);
+        } else {
+            for (auto& kv : g_device_map) {
+                if (kv.second && kv.second->device == device) {
+                    dd = kv.second;
+                    break;
+                }
+            }
+        }
+
+        if (dd) {
+            // 1. Gather all swapchains for this device and remove from map
+            for (auto sit = g_swapchain_map.begin(); sit != g_swapchain_map.end(); ) {
+                if (sit->second && sit->second->device_data == dd) {
+                    swapchains_to_destroy.push_back(sit->second);
+                    sit = g_swapchain_map.erase(sit);
+                } else {
+                    ++sit;
+                }
+            }
+
+            // 2. Erase ALL device map entries pointing to dd (device handle AND all queue handles)
+            for (auto dit = g_device_map.begin(); dit != g_device_map.end(); ) {
+                if (dit->second == dd) {
+                    dit = g_device_map.erase(dit);
+                } else {
+                    ++dit;
+                }
+            }
         }
     }
 
+    // 3. Destroy swapchains OUTSIDE g_map_mutex to avoid deadlocks
+    for (auto* sd : swapchains_to_destroy) {
+        destroy_swapchain_data(sd);
+    }
+
+    // 4. Destroy underlying device and free dd
     if (dd) {
         if (dd->DestroyDevice) {
             dd->DestroyDevice(device, pAllocator);
@@ -759,6 +951,29 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue(
     DeviceData* dd = find_device_data(get_dispatch_key(device));
     if (dd && dd->GetDeviceQueue) {
         dd->GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
+        if (pQueue && *pQueue) {
+            copy_dispatch_key(*pQueue, device);
+            std::lock_guard<std::mutex> lock(g_map_mutex);
+            g_device_map[get_dispatch_key(*pQueue)] = dd;
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(
+    VkDevice device,
+    const VkDeviceQueueInfo2* pQueueInfo,
+    VkQueue* pQueue) {
+
+    DeviceData* dd = find_device_data(get_dispatch_key(device));
+    if (dd && dd->GetDeviceQueue2) {
+        dd->GetDeviceQueue2(device, pQueueInfo, pQueue);
+        if (pQueue && *pQueue) {
+            copy_dispatch_key(*pQueue, device);
+            std::lock_guard<std::mutex> lock(g_map_mutex);
+            g_device_map[get_dispatch_key(*pQueue)] = dd;
+        }
+    } else if (dd && dd->GetDeviceQueue && pQueueInfo) {
+        dd->GetDeviceQueue(device, pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex, pQueue);
         if (pQueue && *pQueue) {
             copy_dispatch_key(*pQueue, device);
             std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -859,6 +1074,15 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     const VkPresentInfoKHR* pPresentInfo) {
 
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
+    if (!dd && pPresentInfo && pPresentInfo->swapchainCount > 0 && pPresentInfo->pSwapchains) {
+        VkSwapchainKHR sc0 = pPresentInfo->pSwapchains[0];
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        auto it = g_swapchain_map.find(sc0);
+        if (it != g_swapchain_map.end() && it->second && it->second->device_data) {
+            dd = it->second->device_data;
+            g_device_map[get_dispatch_key(queue)] = dd;
+        }
+    }
     if (!dd || !dd->QueuePresentKHR) {
         return VK_ERROR_DEVICE_LOST;
     }
@@ -871,6 +1095,40 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     auto& telemetry = fpshud::get_telemetry();
     telemetry.set_render_api("VULKAN");
     telemetry.on_frame();
+
+    // Periodic ~500 ms VRAM usage query (zero runtime heap allocation)
+    auto now_vram = std::chrono::steady_clock::now();
+    if (now_vram - dd->last_vram_update >= std::chrono::milliseconds(500)) {
+        dd->last_vram_update = now_vram;
+        uint64_t total_vram = 0;
+        uint64_t used_vram = 0;
+        if (dd->has_memory_budget_ext && dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties2) {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget_props{};
+            budget_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+            VkPhysicalDeviceMemoryProperties2 mem_props2{};
+            mem_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+            mem_props2.pNext = &budget_props;
+
+            dd->instance_data->GetPhysicalDeviceMemoryProperties2(dd->physical_device, &mem_props2);
+            for (uint32_t i = 0; i < mem_props2.memoryProperties.memoryHeapCount; ++i) {
+                if (mem_props2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                    total_vram += mem_props2.memoryProperties.memoryHeaps[i].size;
+                    used_vram += budget_props.heapUsage[i];
+                }
+            }
+        } else if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
+            VkPhysicalDeviceMemoryProperties mem_props{};
+            dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
+            for (uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
+                if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                    total_vram += mem_props.memoryHeaps[i].size;
+                }
+            }
+        }
+        if (total_vram > 0) {
+            telemetry.update_api_vram_info(used_vram, total_vram);
+        }
+    }
 
     VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[0];
     uint32_t image_idx = pPresentInfo->pImageIndices[0];
@@ -1092,12 +1350,10 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, co
     if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
     if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
     if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
-
-    if (fpshud::get_global_config().enabled) {
-        if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
-        if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
-        if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
-    }
+    if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
+    if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
+    if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+    if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 
     if (!device) return nullptr;
 
@@ -1114,14 +1370,15 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instan
     if (std::strcmp(pName, "vkGetInstanceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetInstanceProcAddr);
     if (std::strcmp(pName, "vkCreateInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateInstance);
     if (std::strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyInstance);
+    if (std::strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDevices);
     if (std::strcmp(pName, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateDevice);
     if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
-
-    if (fpshud::get_global_config().enabled) {
-        if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
-        if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
-        if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
-    }
+    if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
+    if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
+    if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
+    if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
+    if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+    if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 
     if (!instance) return nullptr;
 

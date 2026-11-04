@@ -4,6 +4,9 @@
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
 
+#include <vulkan/vulkan.h>
+#include <vulkan/vk_layer.h>
+
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dlfcn.h>
@@ -343,6 +346,302 @@ ElfVerificationResult inspect_libfpshud_elf(const fs::path& so_path) {
     return res;
 }
 
+// ============================================================================
+// Mock Vulkan Dispatch Harness for Multi-Device Lifecycle & Safety Validation
+// ============================================================================
+
+struct MockDispatchObject {
+    void* dispatch_table;
+};
+
+static void* const kFakeInstDT   = reinterpret_cast<void*>(0x11110000ULL);
+static void* const kFakePhysDT   = reinterpret_cast<void*>(0x22220000ULL);
+static void* const kFakeDevADT   = reinterpret_cast<void*>(0xAAAA0000ULL);
+static void* const kFakeDevBDT   = reinterpret_cast<void*>(0xBBBB0000ULL);
+static void* const kFakeQueueADT = reinterpret_cast<void*>(0xAA010000ULL);
+static void* const kFakeQueueBDT = reinterpret_cast<void*>(0xBB010000ULL);
+
+static MockDispatchObject s_fake_instance{ kFakeInstDT };
+static MockDispatchObject s_fake_phys_dev{ kFakePhysDT };
+static MockDispatchObject s_fake_devA{ kFakeDevADT };
+static MockDispatchObject s_fake_devB{ kFakeDevBDT };
+static MockDispatchObject s_fake_queueA{ kFakeQueueADT };
+static MockDispatchObject s_fake_queueB{ kFakeQueueBDT };
+
+static VkDevice s_next_mock_device = nullptr;
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateInstance(
+    const VkInstanceCreateInfo*, const VkAllocationCallbacks*, VkInstance* pInstance) {
+    if (pInstance) *pInstance = reinterpret_cast<VkInstance>(&s_fake_instance);
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyInstance(VkInstance, const VkAllocationCallbacks*) {}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_EnumeratePhysicalDevices(
+    VkInstance, uint32_t* pPhysicalDeviceCount, VkPhysicalDevice* pPhysicalDevices) {
+    if (!pPhysicalDevices) {
+        if (pPhysicalDeviceCount) *pPhysicalDeviceCount = 1;
+        return VK_SUCCESS;
+    }
+    if (pPhysicalDeviceCount && *pPhysicalDeviceCount > 0) {
+        pPhysicalDevices[0] = reinterpret_cast<VkPhysicalDevice>(&s_fake_phys_dev);
+        *pPhysicalDeviceCount = 1;
+    }
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetPhysicalDeviceProperties(
+    VkPhysicalDevice, VkPhysicalDeviceProperties* pProperties) {
+    if (pProperties) {
+        std::memset(pProperties, 0, sizeof(*pProperties));
+        pProperties->vendorID = 0x10DE;
+        pProperties->deviceID = 0x2184;
+        std::strncpy(pProperties->deviceName, "Mock NVIDIA GeForce GTX 1660 SUPER", sizeof(pProperties->deviceName) - 1);
+    }
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetPhysicalDeviceMemoryProperties(
+    VkPhysicalDevice, VkPhysicalDeviceMemoryProperties* pMemoryProperties) {
+    if (pMemoryProperties) {
+        std::memset(pMemoryProperties, 0, sizeof(*pMemoryProperties));
+        pMemoryProperties->memoryHeapCount = 1;
+        pMemoryProperties->memoryHeaps[0].size = 6ULL * 1024 * 1024 * 1024;
+        pMemoryProperties->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+    }
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetPhysicalDeviceMemoryProperties2(
+    VkPhysicalDevice, VkPhysicalDeviceMemoryProperties2* pMemoryProperties) {
+    if (pMemoryProperties) {
+        pMemoryProperties->memoryProperties.memoryHeapCount = 1;
+        pMemoryProperties->memoryProperties.memoryHeaps[0].size = 6ULL * 1024 * 1024 * 1024;
+        pMemoryProperties->memoryProperties.memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+        void* next = pMemoryProperties->pNext;
+        while (next) {
+            auto* base = reinterpret_cast<VkBaseOutStructure*>(next);
+            if (base->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT) {
+                auto* budget = reinterpret_cast<VkPhysicalDeviceMemoryBudgetPropertiesEXT*>(next);
+                budget->heapBudget[0] = 6ULL * 1024 * 1024 * 1024;
+                budget->heapUsage[0] = 2ULL * 1024 * 1024 * 1024;
+            }
+            next = base->pNext;
+        }
+    }
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetPhysicalDeviceQueueFamilyProperties(
+    VkPhysicalDevice, uint32_t* pQueueFamilyPropertyCount, VkQueueFamilyProperties* pQueueFamilyProperties) {
+    if (!pQueueFamilyProperties) {
+        if (pQueueFamilyPropertyCount) *pQueueFamilyPropertyCount = 1;
+        return;
+    }
+    if (pQueueFamilyPropertyCount && *pQueueFamilyPropertyCount > 0) {
+        pQueueFamilyProperties[0].queueFlags = VK_QUEUE_GRAPHICS_BIT;
+        pQueueFamilyProperties[0].queueCount = 1;
+        *pQueueFamilyPropertyCount = 1;
+    }
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_EnumerateDeviceExtensionProperties(
+    VkPhysicalDevice, const char*, uint32_t* pPropertyCount, VkExtensionProperties* pProperties) {
+    if (!pProperties) {
+        if (pPropertyCount) *pPropertyCount = 1;
+        return VK_SUCCESS;
+    }
+    if (pPropertyCount && *pPropertyCount > 0) {
+        std::memset(&pProperties[0], 0, sizeof(pProperties[0]));
+        std::strncpy(pProperties[0].extensionName, "VK_EXT_memory_budget", VK_MAX_EXTENSION_NAME_SIZE - 1);
+        pProperties[0].specVersion = 1;
+        *pPropertyCount = 1;
+    }
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateDevice(
+    VkPhysicalDevice, const VkDeviceCreateInfo*, const VkAllocationCallbacks*, VkDevice* pDevice) {
+    if (pDevice) *pDevice = s_next_mock_device;
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyDevice(VkDevice, const VkAllocationCallbacks*) {}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetDeviceQueue(VkDevice, uint32_t, uint32_t, VkQueue* pQueue) {
+    if (pQueue) *pQueue = VK_NULL_HANDLE;
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_GetDeviceQueue2(
+    VkDevice dev, const VkDeviceQueueInfo2*, VkQueue* pQueue) {
+    if (pQueue) {
+        if (dev == reinterpret_cast<VkDevice>(&s_fake_devA)) {
+            *pQueue = reinterpret_cast<VkQueue>(&s_fake_queueA);
+        } else {
+            *pQueue = reinterpret_cast<VkQueue>(&s_fake_queueB);
+        }
+    }
+}
+
+static uint64_t s_mock_sc_counter = 0x5000;
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateSwapchainKHR(
+    VkDevice, const VkSwapchainCreateInfoKHR*, const VkAllocationCallbacks*, VkSwapchainKHR* pSwapchain) {
+    if (pSwapchain) {
+        *pSwapchain = reinterpret_cast<VkSwapchainKHR>(++s_mock_sc_counter);
+    }
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR void VKAPI_CALL mock_DestroySwapchainKHR(
+    VkDevice, VkSwapchainKHR, const VkAllocationCallbacks*) {}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_GetSwapchainImagesKHR(
+    VkDevice, VkSwapchainKHR, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) {
+    if (!pSwapchainImages) {
+        if (pSwapchainImageCount) *pSwapchainImageCount = 2;
+        return VK_SUCCESS;
+    }
+    if (pSwapchainImageCount && *pSwapchainImageCount >= 2) {
+        pSwapchainImages[0] = reinterpret_cast<VkImage>(0x6001);
+        pSwapchainImages[1] = reinterpret_cast<VkImage>(0x6002);
+    }
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_QueuePresentKHR(VkQueue, const VkPresentInfoKHR*) {
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL mock_DeviceWaitIdle(VkDevice) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_QueueSubmit(VkQueue, uint32_t, const VkSubmitInfo*, VkFence) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateRenderPass(VkDevice, const VkRenderPassCreateInfo*, const VkAllocationCallbacks*, VkRenderPass* pRP) {
+    if (pRP) *pRP = reinterpret_cast<VkRenderPass>(0x7001);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyRenderPass(VkDevice, VkRenderPass, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateImageView(VkDevice, const VkImageViewCreateInfo*, const VkAllocationCallbacks*, VkImageView* pView) {
+    if (pView) *pView = reinterpret_cast<VkImageView>(0x7002);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyImageView(VkDevice, VkImageView, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateFramebuffer(VkDevice, const VkFramebufferCreateInfo*, const VkAllocationCallbacks*, VkFramebuffer* pFB) {
+    if (pFB) *pFB = reinterpret_cast<VkFramebuffer>(0x7003);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyFramebuffer(VkDevice, VkFramebuffer, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateCommandPool(VkDevice, const VkCommandPoolCreateInfo*, const VkAllocationCallbacks*, VkCommandPool* pPool) {
+    if (pPool) *pPool = reinterpret_cast<VkCommandPool>(0x7004);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyCommandPool(VkDevice, VkCommandPool, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_AllocateCommandBuffers(VkDevice, const VkCommandBufferAllocateInfo* pInfo, VkCommandBuffer* pCmds) {
+    if (pInfo && pCmds) {
+        static MockDispatchObject s_fake_cb{ reinterpret_cast<void*>(0x7005ULL) };
+        for (uint32_t i = 0; i < pInfo->commandBufferCount; ++i) {
+            pCmds[i] = reinterpret_cast<VkCommandBuffer>(&s_fake_cb);
+        }
+    }
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_ResetCommandBuffer(VkCommandBuffer, VkCommandBufferResetFlags) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_BeginCommandBuffer(VkCommandBuffer, const VkCommandBufferBeginInfo*) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_EndCommandBuffer(VkCommandBuffer) { return VK_SUCCESS; }
+static VKAPI_ATTR void VKAPI_CALL mock_CmdBeginRenderPass(VkCommandBuffer, const VkRenderPassBeginInfo*, VkSubpassContents) {}
+static VKAPI_ATTR void VKAPI_CALL mock_CmdEndRenderPass(VkCommandBuffer) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateFence(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence* pF) {
+    if (pF) *pF = reinterpret_cast<VkFence>(0x7006);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyFence(VkDevice, VkFence, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_WaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_ResetFences(VkDevice, uint32_t, const VkFence*) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateSemaphore(VkDevice, const VkSemaphoreCreateInfo*, const VkAllocationCallbacks*, VkSemaphore* pS) {
+    if (pS) *pS = reinterpret_cast<VkSemaphore>(0x7007);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroySemaphore(VkDevice, VkSemaphore, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_CreateBuffer(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer* pB) {
+    if (pB) *pB = reinterpret_cast<VkBuffer>(0x7008);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_DestroyBuffer(VkDevice, VkBuffer, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR void VKAPI_CALL mock_GetBufferMemoryRequirements(VkDevice, VkBuffer, VkMemoryRequirements* pR) {
+    if (pR) std::memset(pR, 0, sizeof(*pR));
+}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_AllocateMemory(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* pM) {
+    if (pM) *pM = reinterpret_cast<VkDeviceMemory>(0x7009);
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_FreeMemory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_BindBufferMemory(VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize) { return VK_SUCCESS; }
+static VKAPI_ATTR VkResult VKAPI_CALL mock_MapMemory(VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags, void** ppData) {
+    static char s_dummy_mem[4096];
+    if (ppData) *ppData = s_dummy_mem;
+    return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL mock_UnmapMemory(VkDevice, VkDeviceMemory) {}
+static VKAPI_ATTR void VKAPI_CALL mock_CmdCopyImageToBuffer(VkCommandBuffer, VkImage, VkImageLayout, VkBuffer, uint32_t, const VkBufferImageCopy*) {}
+static VKAPI_ATTR void VKAPI_CALL mock_CmdPipelineBarrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags, uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {}
+static VKAPI_ATTR VkResult VKAPI_CALL mock_InvalidateMappedMemoryRanges(VkDevice, uint32_t, const VkMappedMemoryRange*) { return VK_SUCCESS; }
+
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mock_GetInstanceProcAddr(VkInstance, const char* name) {
+    if (!name) return nullptr;
+    if (std::strcmp(name, "vkCreateInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateInstance);
+    if (std::strcmp(name, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyInstance);
+    if (std::strcmp(name, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_EnumeratePhysicalDevices);
+    if (std::strcmp(name, "vkGetPhysicalDeviceProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetPhysicalDeviceProperties);
+    if (std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetPhysicalDeviceMemoryProperties);
+    if (std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties2") == 0 ||
+        std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties2KHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetPhysicalDeviceMemoryProperties2);
+    if (std::strcmp(name, "vkGetPhysicalDeviceQueueFamilyProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetPhysicalDeviceQueueFamilyProperties);
+    if (std::strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_EnumerateDeviceExtensionProperties);
+    if (std::strcmp(name, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateDevice);
+    return nullptr;
+}
+
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mock_GetDeviceProcAddr(VkDevice, const char* name) {
+    if (!name) return nullptr;
+    if (std::strcmp(name, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyDevice);
+    if (std::strcmp(name, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetDeviceQueue);
+    if (std::strcmp(name, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetDeviceQueue2);
+    if (std::strcmp(name, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateSwapchainKHR);
+    if (std::strcmp(name, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroySwapchainKHR);
+    if (std::strcmp(name, "vkGetSwapchainImagesKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetSwapchainImagesKHR);
+    if (std::strcmp(name, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_QueuePresentKHR);
+    if (std::strcmp(name, "vkDeviceWaitIdle") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DeviceWaitIdle);
+    if (std::strcmp(name, "vkQueueSubmit") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_QueueSubmit);
+    if (std::strcmp(name, "vkCreateRenderPass") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateRenderPass);
+    if (std::strcmp(name, "vkDestroyRenderPass") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyRenderPass);
+    if (std::strcmp(name, "vkCreateImageView") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateImageView);
+    if (std::strcmp(name, "vkDestroyImageView") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyImageView);
+    if (std::strcmp(name, "vkCreateFramebuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateFramebuffer);
+    if (std::strcmp(name, "vkDestroyFramebuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyFramebuffer);
+    if (std::strcmp(name, "vkCreateCommandPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateCommandPool);
+    if (std::strcmp(name, "vkDestroyCommandPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyCommandPool);
+    if (std::strcmp(name, "vkAllocateCommandBuffers") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_AllocateCommandBuffers);
+    if (std::strcmp(name, "vkResetCommandBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_ResetCommandBuffer);
+    if (std::strcmp(name, "vkBeginCommandBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_BeginCommandBuffer);
+    if (std::strcmp(name, "vkEndCommandBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_EndCommandBuffer);
+    if (std::strcmp(name, "vkCmdBeginRenderPass") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CmdBeginRenderPass);
+    if (std::strcmp(name, "vkCmdEndRenderPass") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CmdEndRenderPass);
+    if (std::strcmp(name, "vkCreateFence") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateFence);
+    if (std::strcmp(name, "vkDestroyFence") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyFence);
+    if (std::strcmp(name, "vkWaitForFences") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_WaitForFences);
+    if (std::strcmp(name, "vkResetFences") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_ResetFences);
+    if (std::strcmp(name, "vkCreateSemaphore") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateSemaphore);
+    if (std::strcmp(name, "vkDestroySemaphore") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroySemaphore);
+    if (std::strcmp(name, "vkCreateBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CreateBuffer);
+    if (std::strcmp(name, "vkDestroyBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_DestroyBuffer);
+    if (std::strcmp(name, "vkGetBufferMemoryRequirements") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_GetBufferMemoryRequirements);
+    if (std::strcmp(name, "vkAllocateMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_AllocateMemory);
+    if (std::strcmp(name, "vkFreeMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_FreeMemory);
+    if (std::strcmp(name, "vkBindBufferMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_BindBufferMemory);
+    if (std::strcmp(name, "vkMapMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_MapMemory);
+    if (std::strcmp(name, "vkUnmapMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_UnmapMemory);
+    if (std::strcmp(name, "vkCmdCopyImageToBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CmdCopyImageToBuffer);
+    if (std::strcmp(name, "vkCmdPipelineBarrier") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_CmdPipelineBarrier);
+    if (std::strcmp(name, "vkInvalidateMappedMemoryRanges") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&mock_InvalidateMappedMemoryRanges);
+    return nullptr;
+}
+
 void run_elf_and_layer_abi_suite() {
     std::printf("\n--------------------------------------------------------------------\n");
     std::printf(" SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load\n");
@@ -411,6 +710,174 @@ void run_elf_and_layer_abi_suite() {
 
         check_cond(!collision_detected, "2. Async Dual-PBO Ring Stop-Resume Invariant",
                    "Verified 2-slot PBO read/write indices never collide across session stop/resume");
+    }
+
+    // 3. Vulkan Layer vkGetDeviceQueue2 Export & Resolution Check
+    {
+        void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        auto pfn_gpa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(h, "vkGetInstanceProcAddr"));
+        auto pfn_gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(dlsym(h, "vkGetDeviceProcAddr"));
+
+        PFN_vkVoidFunction q2_dev = pfn_gdpa ? pfn_gdpa(VK_NULL_HANDLE, "vkGetDeviceQueue2") : nullptr;
+        PFN_vkVoidFunction q2_inst = pfn_gpa ? pfn_gpa(VK_NULL_HANDLE, "vkGetDeviceQueue2") : nullptr;
+
+        bool q2_export_ok = (q2_dev != nullptr && q2_inst != nullptr);
+        check_cond(q2_export_ok, "3. Vulkan vkGetDeviceQueue2 Export",
+                   q2_export_ok ? "vkGetDeviceQueue2 resolved via vkGetDeviceProcAddr & vkGetInstanceProcAddr"
+                                : "vkGetDeviceQueue2 returned nullptr on VK_NULL_HANDLE");
+
+        // 4. Vulkan Multi-Device Lifecycle, Zero-Extent Swapchain & UAF-Free DestroyDevice
+        bool lifecycle_ok = false;
+        std::string lifecycle_detail;
+
+        if (!pfn_gpa || !pfn_gdpa || !q2_dev) {
+            lifecycle_detail = "Skipped lifecycle simulation due to missing vkGetDeviceQueue2 or loader procs";
+        } else {
+            auto pfn_create_instance = reinterpret_cast<PFN_vkCreateInstance>(pfn_gpa(VK_NULL_HANDLE, "vkCreateInstance"));
+            auto pfn_destroy_instance = reinterpret_cast<PFN_vkDestroyInstance>(pfn_gpa(VK_NULL_HANDLE, "vkDestroyInstance"));
+            auto pfn_enum_phys = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(pfn_gpa(VK_NULL_HANDLE, "vkEnumeratePhysicalDevices"));
+            auto pfn_create_device = reinterpret_cast<PFN_vkCreateDevice>(pfn_gpa(VK_NULL_HANDLE, "vkCreateDevice"));
+            auto pfn_destroy_device = reinterpret_cast<PFN_vkDestroyDevice>(pfn_gdpa(VK_NULL_HANDLE, "vkDestroyDevice"));
+            auto pfn_create_swapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(pfn_gdpa(VK_NULL_HANDLE, "vkCreateSwapchainKHR"));
+            auto pfn_destroy_swapchain = reinterpret_cast<PFN_vkDestroySwapchainKHR>(pfn_gdpa(VK_NULL_HANDLE, "vkDestroySwapchainKHR"));
+            auto pfn_queue_present = reinterpret_cast<PFN_vkQueuePresentKHR>(pfn_gdpa(VK_NULL_HANDLE, "vkQueuePresentKHR"));
+            auto pfn_get_queue2 = reinterpret_cast<PFN_vkGetDeviceQueue2>(q2_dev);
+
+            // Reset mock dispatch objects before test run
+            s_fake_instance.dispatch_table = kFakeInstDT;
+            s_fake_phys_dev.dispatch_table = kFakePhysDT;
+            s_fake_devA.dispatch_table = kFakeDevADT;
+            s_fake_devB.dispatch_table = kFakeDevBDT;
+            s_fake_queueA.dispatch_table = kFakeQueueADT;
+            s_fake_queueB.dispatch_table = kFakeQueueBDT;
+
+            // Step A: Create Fake Instance
+            VkLayerInstanceLink link_inst{};
+            link_inst.pfnNextGetInstanceProcAddr = &mock_GetInstanceProcAddr;
+
+            VkLayerInstanceCreateInfo layer_inst_info{};
+            layer_inst_info.sType = VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO;
+            layer_inst_info.function = VK_LAYER_LINK_INFO;
+            layer_inst_info.u.pLayerInfo = &link_inst;
+
+            VkInstanceCreateInfo inst_info{};
+            inst_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+            inst_info.pNext = &layer_inst_info;
+
+            VkInstance fake_instance = VK_NULL_HANDLE;
+            VkResult inst_res = pfn_create_instance(&inst_info, nullptr, &fake_instance);
+
+            // Step B: Enumerate Physical Devices (registers physical device in g_instance_map)
+            uint32_t phys_count = 1;
+            VkPhysicalDevice fake_phys = VK_NULL_HANDLE;
+            if (pfn_enum_phys) {
+                pfn_enum_phys(fake_instance, &phys_count, &fake_phys);
+            } else {
+                fake_phys = reinterpret_cast<VkPhysicalDevice>(&s_fake_phys_dev);
+            }
+
+            // Step C: Create Device A
+            VkLayerDeviceLink link_devA{};
+            link_devA.pfnNextGetInstanceProcAddr = &mock_GetInstanceProcAddr;
+            link_devA.pfnNextGetDeviceProcAddr = &mock_GetDeviceProcAddr;
+
+            VkLayerDeviceCreateInfo layer_devA_info{};
+            layer_devA_info.sType = VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO;
+            layer_devA_info.function = VK_LAYER_LINK_INFO;
+            layer_devA_info.u.pLayerInfo = &link_devA;
+
+            const char* ext_mem_budget = "VK_EXT_memory_budget";
+            VkDeviceCreateInfo devA_info{};
+            devA_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            devA_info.pNext = &layer_devA_info;
+            devA_info.enabledExtensionCount = 1;
+            devA_info.ppEnabledExtensionNames = &ext_mem_budget;
+
+            VkDevice devA = VK_NULL_HANDLE;
+            s_next_mock_device = reinterpret_cast<VkDevice>(&s_fake_devA);
+            VkResult devA_res = pfn_create_device(fake_phys, &devA_info, nullptr, &devA);
+
+            // Step D: Create Device B (distinct dispatch table pointer)
+            VkLayerDeviceLink link_devB{};
+            link_devB.pfnNextGetInstanceProcAddr = &mock_GetInstanceProcAddr;
+            link_devB.pfnNextGetDeviceProcAddr = &mock_GetDeviceProcAddr;
+
+            VkLayerDeviceCreateInfo layer_devB_info{};
+            layer_devB_info.sType = VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO;
+            layer_devB_info.function = VK_LAYER_LINK_INFO;
+            layer_devB_info.u.pLayerInfo = &link_devB;
+
+            VkDeviceCreateInfo devB_info{};
+            devB_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            devB_info.pNext = &layer_devB_info;
+            devB_info.enabledExtensionCount = 1;
+            devB_info.ppEnabledExtensionNames = &ext_mem_budget;
+
+            VkDevice devB = VK_NULL_HANDLE;
+            s_next_mock_device = reinterpret_cast<VkDevice>(&s_fake_devB);
+            VkResult devB_res = pfn_create_device(fake_phys, &devB_info, nullptr, &devB);
+
+            // Step E: Get Queues via vkGetDeviceQueue2 for devA and devB
+            VkDeviceQueueInfo2 qinfoA{};
+            qinfoA.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+            qinfoA.queueFamilyIndex = 0;
+            qinfoA.queueIndex = 0;
+            VkQueue queueA = VK_NULL_HANDLE;
+            pfn_get_queue2(devA, &qinfoA, &queueA);
+
+            VkDeviceQueueInfo2 qinfoB{};
+            qinfoB.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+            qinfoB.queueFamilyIndex = 0;
+            qinfoB.queueIndex = 0;
+            VkQueue queueB = VK_NULL_HANDLE;
+            pfn_get_queue2(devB, &qinfoB, &queueB);
+
+            // Step F: Create Swapchain on devB with (0, 0) extent
+            VkSwapchainCreateInfoKHR sc_info{};
+            sc_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+            sc_info.imageExtent = {0, 0};
+            sc_info.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+            VkSwapchainKHR swapchainB = VK_NULL_HANDLE;
+            VkResult sc_res = pfn_create_swapchain(devB, &sc_info, nullptr, &swapchainB);
+
+            // Step G: Destroy Device A (must remove devA and all queues/swapchains from maps, leaving devB intact)
+            pfn_destroy_device(devA, nullptr);
+
+            // Step H: Call vkQueuePresentKHR on devB queue with swapchainB -> must return VK_SUCCESS
+            uint32_t img_idx = 0;
+            VkPresentInfoKHR pres_info{};
+            pres_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            pres_info.swapchainCount = 1;
+            pres_info.pSwapchains = &swapchainB;
+            pres_info.pImageIndices = &img_idx;
+            VkResult pres_res = pfn_queue_present(queueB, &pres_info);
+
+            // Step I: Test failsafe recovery on unregistered queue
+            MockDispatchObject unreg_queue_obj{ reinterpret_cast<void*>(0xBB990000ULL) };
+            VkQueue unreg_queue = reinterpret_cast<VkQueue>(&unreg_queue_obj);
+            VkResult unreg_pres_res = pfn_queue_present(unreg_queue, &pres_info);
+
+            // Step J: Clean up devB swapchain, devB, and instance
+            pfn_destroy_swapchain(devB, swapchainB, nullptr);
+            pfn_destroy_device(devB, nullptr);
+            if (pfn_destroy_instance) {
+                pfn_destroy_instance(fake_instance, nullptr);
+            }
+
+            bool ops_ok = (inst_res == VK_SUCCESS && devA_res == VK_SUCCESS && devB_res == VK_SUCCESS &&
+                           queueA != VK_NULL_HANDLE && queueB != VK_NULL_HANDLE &&
+                           sc_res == VK_SUCCESS && pres_res == VK_SUCCESS && unreg_pres_res == VK_SUCCESS);
+            if (ops_ok) {
+                lifecycle_ok = true;
+                lifecycle_detail = "2 Devices created, vkGetDeviceQueue2 intercepted, (0, 0) swapchain accepted, devA DestroyDevice UAF-free & devB presented VK_SUCCESS";
+            } else {
+                lifecycle_detail = "Failed: inst=" + std::to_string(inst_res) + " devA=" + std::to_string(devA_res) +
+                                   " devB=" + std::to_string(devB_res) + " sc=" + std::to_string(sc_res) +
+                                   " pres=" + std::to_string(pres_res) + " unreg_pres=" + std::to_string(unreg_pres_res);
+            }
+        }
+
+        check_cond(lifecycle_ok, "4. Vulkan Multi-Device Lifecycle & UAF-Free", lifecycle_detail.c_str());
     }
 }
 
@@ -1110,6 +1577,7 @@ int main(int argc, char** argv) {
     } else if (argc > 1) {
         env_input = argv[1];
     }
+    ::setenv("FPS_HUD", env_input, 1);
 
     HudConfig cfg = init_config_from_env(env_input);
 
