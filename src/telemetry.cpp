@@ -1666,7 +1666,13 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     // Intel i915 / xe fallback utilization
     if (load_pct < 0.0f) {
         // Fallback 1: Parse /proc/self/fdinfo for drm-engine-render or drm-cycles-rcs (zero runtime heap)
-        int dfd = open("/proc/self/fdinfo", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        char fdinfo_dir[256];
+        if (root_prefix_.empty()) {
+            std::snprintf(fdinfo_dir, sizeof(fdinfo_dir), "/proc/self/fdinfo");
+        } else {
+            std::snprintf(fdinfo_dir, sizeof(fdinfo_dir), "%s/proc/self/fdinfo", root_prefix_.c_str());
+        }
+        int dfd = open(fdinfo_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (dfd >= 0) {
             uint64_t total_render_ns = 0;
             bool found_drm_fd = false;
@@ -1676,8 +1682,8 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
                 for (long bpos = 0; bpos < nread; ) {
                     auto* d = reinterpret_cast<const LinuxDirent64*>(d_buf + bpos);
                     if (d->d_name[0] != '.') {
-                        char fd_path[64];
-                        std::snprintf(fd_path, sizeof(fd_path), "/proc/self/fdinfo/%s", d->d_name);
+                        char fd_path[256];
+                        std::snprintf(fd_path, sizeof(fd_path), "%s/%s", fdinfo_dir, d->d_name);
                         int fd = open(fd_path, O_RDONLY | O_CLOEXEC);
                         if (fd >= 0) {
                             char fdbuf[512];
@@ -1766,17 +1772,26 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
                 sys_game_ram = hw_data_.game_ram_gb;
             }
             if (sys_ram_total <= 0.0f) {
-                std::string meminfo_path = root_prefix_ + "/proc/meminfo";
-                if (FILE* f = std::fopen(meminfo_path.c_str(), "r")) {
-                    char mbuf[128];
-                    while (std::fgets(mbuf, sizeof(mbuf), f)) {
-                        unsigned long long kb = 0;
-                        if (std::sscanf(mbuf, "MemTotal: %llu kB", &kb) == 1) {
-                            sys_ram_total = static_cast<float>(kb) / (1024.0f * 1024.0f);
-                            break;
+                char meminfo_path[256];
+                if (root_prefix_.empty()) {
+                    std::snprintf(meminfo_path, sizeof(meminfo_path), "/proc/meminfo");
+                } else {
+                    std::snprintf(meminfo_path, sizeof(meminfo_path), "%s/proc/meminfo", root_prefix_.c_str());
+                }
+                int mfd = open(meminfo_path, O_RDONLY | O_CLOEXEC);
+                if (mfd >= 0) {
+                    char mbuf[1024];
+                    ssize_t mn = read(mfd, mbuf, sizeof(mbuf) - 1);
+                    close(mfd);
+                    if (mn > 0) {
+                        mbuf[mn] = '\0';
+                        if (const char* p = std::strstr(mbuf, "MemTotal:")) {
+                            unsigned long long kb = std::strtoull(p + 9, nullptr, 10);
+                            if (kb > 0) {
+                                sys_ram_total = static_cast<float>(kb) / (1024.0f * 1024.0f);
+                            }
                         }
                     }
-                    std::fclose(f);
                 }
             }
             if (sys_ram_total > 0.0f) {
