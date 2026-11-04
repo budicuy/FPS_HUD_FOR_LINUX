@@ -27,8 +27,8 @@ int main() {
 if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
     message(FATAL_ERROR
         "FPSHUD requires an ISO C++26 compiler and standard library providing <inplace_vector> "
-        "(GCC 15+ or Clang 20+ with libstdc++ 15+).\n"
-        "On Ubuntu/Debian: install g++-15 (from ppa:ubuntu-toolchain-r/test) and pass -DCMAKE_CXX_COMPILER=g++-15.")
+        "(GCC 16+ or Clang 20+ with libstdc++ 16+).\n"
+        "On Ubuntu/Debian: install g++-16 (Ubuntu 26.04 universe, or ppa:ubuntu-toolchain-r/test) and pass -DCMAKE_CXX_COMPILER=g++-16.")
 endif()
 
 option(FPSHUD_NATIVE_ARCH "Optimize for host CPU microarchitecture (-march=native)" OFF)
@@ -64,6 +64,7 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
         -Wl,--wrap=__isoc23_strtol
         -Wl,--wrap=__isoc23_strtoul
         -Wl,--wrap=__isoc23_strtoull
+        -Wl,--wrap=arc4random
     )
 endif()
 

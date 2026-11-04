@@ -28,8 +28,6 @@ select_cpp_toolchain() {
     CC_BIN=""
     if command -v g++-16 >/dev/null 2>&1; then
         CXX_BIN="g++-16"; CC_BIN="gcc-16"
-    elif command -v g++-15 >/dev/null 2>&1; then
-        CXX_BIN="g++-15"; CC_BIN="gcc-15"
     elif command -v clang++ >/dev/null 2>&1; then
         CXX_BIN="clang++"; CC_BIN="clang"
     elif command -v g++ >/dev/null 2>&1; then
@@ -40,7 +38,7 @@ select_cpp_toolchain() {
 build_and_install_from_source() {
     select_cpp_toolchain
     if ! command -v cmake >/dev/null 2>&1 || [ -z "$CXX_BIN" ]; then
-        echo "[!] Cannot build from source: cmake or C++26 compiler (g++-15+ / clang++) not installed."
+        echo "[!] Cannot build from source: cmake or C++26 compiler (g++-16+ / clang++) not installed."
         return 1
     fi
     local src_dir="$TMP_DIR/src"
@@ -153,7 +151,7 @@ if [ "$INSTALLED_FROM_SOURCE" -eq 0 ]; then
     fi
     if [ "$NEED_REBUILD" -eq 1 ]; then
         echo "    Rebuilding native FPSHUD binaries from source for this host..."
-        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & g++-15/clang++ to build locally)."
+        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & g++-16/clang++ to build locally)."
         chmod +x "$LIB_DIR/libfpshud.so"
         [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
     fi
