@@ -5,8 +5,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-export CC="${CC:-clang}"
-export CXX="${CXX:-clang++}"
+if [ -z "${CXX:-}" ]; then
+    if command -v clang++ >/dev/null 2>&1; then
+        export CXX="clang++"
+        export CC="clang"
+    elif command -v g++-16 >/dev/null 2>&1; then
+        export CXX="g++-16"
+        export CC="gcc-16"
+    else
+        export CXX="g++"
+        export CC="gcc"
+    fi
+else
+    export CC="${CC:-gcc}"
+    export CXX="${CXX}"
+fi
 
 BUILD_DIR="${ROOT_DIR}/build_asan"
 

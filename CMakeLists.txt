@@ -103,45 +103,57 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -Wextra
         )
     endif()
-
-    if(ENABLE_ASAN)
-        message(STATUS "  -> AddressSanitizer + LeakSanitizer: ENABLED")
-        add_compile_options(-fsanitize=address,leak)
-        add_link_options(-fsanitize=address,leak)
-    endif()
-
-    if(ENABLE_UBSAN)
-        message(STATUS "  -> UndefinedBehaviorSanitizer: ENABLED")
-        add_compile_options(-fsanitize=undefined -fno-sanitize-recover=all)
-        add_link_options(-fsanitize=undefined)
-    endif()
-
-    if(ENABLE_TSAN)
-        message(STATUS "  -> ThreadSanitizer: ENABLED")
-        add_compile_options(-fsanitize=thread)
-        add_link_options(-fsanitize=thread)
-    endif()
 else()
-    message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-    add_compile_options(
-        -O3
-        -DNDEBUG
-        -ffunction-sections
-        -fdata-sections
-        -fstack-protector-strong
-        -fno-math-errno
-        -fno-trapping-math
-        -Wall
-        -Wextra
-    )
-    add_link_options(
-        -Wl,--gc-sections
-        -Wl,-O2
-        -Wl,--as-needed
-        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
-        -static-libgcc
-    )
+    if(NOT USE_SANITIZERS)
+        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        add_compile_options(
+            -O3
+            -DNDEBUG
+            -ffunction-sections
+            -fdata-sections
+            -fstack-protector-strong
+            -fno-math-errno
+            -fno-trapping-math
+            -Wall
+            -Wextra
+        )
+        add_link_options(
+            -Wl,--gc-sections
+            -Wl,-O2
+            -Wl,--as-needed
+            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+            -static-libgcc
+        )
+    else()
+        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
+        add_compile_options(
+            -O1
+            -g
+            -fno-omit-frame-pointer
+            -fno-optimize-sibling-calls
+            -Wall
+            -Wextra
+        )
+    endif()
+endif()
+
+if(ENABLE_ASAN)
+    message(STATUS "  -> AddressSanitizer + LeakSanitizer: ENABLED")
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+endif()
+
+if(ENABLE_UBSAN)
+    message(STATUS "  -> UndefinedBehaviorSanitizer: ENABLED")
+    add_compile_options(-fsanitize=undefined -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=undefined)
+endif()
+
+if(ENABLE_TSAN)
+    message(STATUS "  -> ThreadSanitizer: ENABLED")
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
 endif()
 
 include(FetchContent)
