@@ -85,12 +85,15 @@ jobs:
           mkdir -p release_pkg
           chmod 755 build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
           tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud_test fpshud_recorder fpshud_recorder_bin
+          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: fpshud-linux-x86_64
-          path: release_pkg/fpshud-linux-x86_64.tar.gz
+          path: |
+            release_pkg/fpshud-linux-x86_64.tar.gz
+            release_pkg/fpshud-linux-x86_64.tar.gz.sha256
 
   distro-compatibility-matrix:
     needs: build-test-release
@@ -191,5 +194,7 @@ jobs:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
             ```
-          files: release_pkg/fpshud-linux-x86_64.tar.gz
+          files: |
+            release_pkg/fpshud-linux-x86_64.tar.gz
+            release_pkg/fpshud-linux-x86_64.tar.gz.sha256
           prerelease: false

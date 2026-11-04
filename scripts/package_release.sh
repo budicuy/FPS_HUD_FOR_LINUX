@@ -65,7 +65,9 @@ fi
 mkdir -p "$DIST_DIR"
 chmod 755 "${STRIP_TARGETS[@]}"
 tar -czf "$DIST_DIR/fpshud-linux-x86_64.tar.gz" -C "$BUILD_DIR" "${TAR_FILES[@]}"
+(cd "$DIST_DIR" && sha256sum "fpshud-linux-x86_64.tar.gz" > "fpshud-linux-x86_64.tar.gz.sha256")
 echo "[✓] Packaged portable release archive: $DIST_DIR/fpshud-linux-x86_64.tar.gz"
+echo "[✓] Generated cryptographic checksum: $DIST_DIR/fpshud-linux-x86_64.tar.gz.sha256"
 
 cd "$PROJECT_DIR"
 if [ "${1:-}" = "--install" ] || [ "${FPSHUD_INSTALL_AFTER_PACKAGE:-0}" = "1" ]; then

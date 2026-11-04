@@ -98,9 +98,25 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 
 ## 2. Installation & Sensor Permissions
 
-### 1-Command Installation (Recommended for All Users)
+### 1-Command Installation (Recommended for Fast Setup)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
+```
+
+### Option B: Manual Installation with SHA256 Checksum Verification
+If you prefer not to pipe scripts to `bash`, you can inspect and install the release archive manually with cryptographic integrity verification:
+```bash
+# 1. Download release archive and SHA256 checksum from GitHub Releases:
+curl -LO https://github.com/budicuy/FPS_HUD_FOR_LINUX/releases/latest/download/fpshud-linux-x86_64.tar.gz
+curl -LO https://github.com/budicuy/FPS_HUD_FOR_LINUX/releases/latest/download/fpshud-linux-x86_64.tar.gz.sha256
+
+# 2. Verify archive integrity:
+sha256sum -c fpshud-linux-x86_64.tar.gz.sha256
+
+# 3. Extract libraries and binaries into your user folder (~/.local):
+mkdir -p ~/.local/lib/fpshud ~/.local/bin ~/.local/share/vulkan/implicit_layer.d
+tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
+ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
 ### Hardware Permissions, Security Model & Trade-offs

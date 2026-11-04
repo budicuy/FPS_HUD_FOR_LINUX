@@ -96,9 +96,25 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 
 ## 2. Instalasi & Izin Akses Sensor
 
-### Instalasi 1 Perintah (Direkomendasikan untuk Semua Pengguna)
+### Instalasi 1 Perintah (Instalasi Cepat Otomatis)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
+```
+
+### Opsi B: Instalasi Manual dengan Verifikasi Checksum SHA256
+Bagi Anda yang memilih tidak menggunakan perintah pipe remote script ke `bash`, Anda dapat mengunduh dan memverifikasi arsip biner rilis secara manual:
+```bash
+# 1. Unduh arsip rilis portabel dan berkas hash checksum dari GitHub Releases:
+curl -LO https://github.com/budicuy/FPS_HUD_FOR_LINUX/releases/latest/download/fpshud-linux-x86_64.tar.gz
+curl -LO https://github.com/budicuy/FPS_HUD_FOR_LINUX/releases/latest/download/fpshud-linux-x86_64.tar.gz.sha256
+
+# 2. Verifikasi integritas arsip secara kriptografis:
+sha256sum -c fpshud-linux-x86_64.tar.gz.sha256
+
+# 3. Ekstrak pustaka dan biner ke folder pengguna (~/.local):
+mkdir -p ~/.local/lib/fpshud ~/.local/bin ~/.local/share/vulkan/implicit_layer.d
+tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
+ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
 ### Izin Akses Perangkat Keras, Model Keamanan & Trade-off
