@@ -29,15 +29,16 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libavutil/time.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
-// PulseAudio Simple API for lightweight desktop/game audio recording
+// PulseAudio Asynchronous API for lightweight desktop/game audio recording
 #include <pulse/error.h>
-#include <pulse/simple.h>
+#include <pulse/pulseaudio.h>
 
 namespace fs = std::filesystem;
 
@@ -78,6 +79,132 @@ std::string get_default_monitor_source() {
     return "@DEFAULT_MONITOR@";
 }
 
+AVBufferRef* create_vaapi_device() {
+    for (int node_id = 128; node_id <= 135; ++node_id) {
+        std::string dev_node = "/dev/dri/renderD" + std::to_string(node_id);
+        if (access(dev_node.c_str(), R_OK | W_OK) == 0) {
+            AVBufferRef* dev_ctx = nullptr;
+            if (av_hwdevice_ctx_create(&dev_ctx, AV_HWDEVICE_TYPE_VAAPI, dev_node.c_str(), nullptr, 0) == 0 && dev_ctx) {
+                return dev_ctx;
+            }
+        }
+    }
+    return nullptr;
+}
+
+struct PulseAudioCapture {
+    pa_mainloop* ml = nullptr;
+    pa_context* ctx = nullptr;
+    pa_stream* stream = nullptr;
+
+    PulseAudioCapture() = default;
+    ~PulseAudioCapture() {
+        cleanup();
+    }
+    PulseAudioCapture(const PulseAudioCapture&) = delete;
+    PulseAudioCapture& operator=(const PulseAudioCapture&) = delete;
+
+    void cleanup() {
+        if (stream) {
+            pa_stream_disconnect(stream);
+            pa_stream_unref(stream);
+            stream = nullptr;
+        }
+        if (ctx) {
+            pa_context_disconnect(ctx);
+            pa_context_unref(ctx);
+            ctx = nullptr;
+        }
+        if (ml) {
+            pa_mainloop_free(ml);
+            ml = nullptr;
+        }
+    }
+
+    bool init(const std::string& monitor_source, const std::atomic<bool>& running) {
+        ml = pa_mainloop_new();
+        if (!ml) return false;
+        pa_mainloop_api* api = pa_mainloop_get_api(ml);
+        ctx = pa_context_new(api, "FPSHUD_Recorder");
+        if (!ctx) {
+            cleanup();
+            return false;
+        }
+
+        if (pa_context_connect(ctx, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0) {
+            cleanup();
+            return false;
+        }
+
+        auto start = std::chrono::steady_clock::now();
+        while (running.load(std::memory_order_relaxed)) {
+            pa_context_state_t state = pa_context_get_state(ctx);
+            if (state == PA_CONTEXT_READY) break;
+            if (!PA_CONTEXT_IS_GOOD(state)) {
+                cleanup();
+                return false;
+            }
+            pa_mainloop_iterate(ml, 0, nullptr);
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() > 500) {
+                cleanup();
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        if (!running.load(std::memory_order_relaxed)) {
+            cleanup();
+            return false;
+        }
+
+        pa_sample_spec ss{};
+        ss.format = PA_SAMPLE_S16LE;
+        ss.rate = 48000;
+        ss.channels = 2;
+
+        stream = pa_stream_new(ctx, "Gameplay Audio", &ss, nullptr);
+        if (!stream) {
+            cleanup();
+            return false;
+        }
+
+        pa_buffer_attr attr{};
+        attr.maxlength = static_cast<uint32_t>(-1);
+        attr.fragsize = 4096;
+        attr.tlength = static_cast<uint32_t>(-1);
+        attr.prebuf = static_cast<uint32_t>(-1);
+        attr.minreq = static_cast<uint32_t>(-1);
+
+        if (pa_stream_connect_record(stream, monitor_source.c_str(), &attr, PA_STREAM_ADJUST_LATENCY) < 0) {
+            cleanup();
+            return false;
+        }
+
+        start = std::chrono::steady_clock::now();
+        while (running.load(std::memory_order_relaxed)) {
+            pa_stream_state_t state = pa_stream_get_state(stream);
+            if (state == PA_STREAM_READY) break;
+            if (!PA_STREAM_IS_GOOD(state)) {
+                cleanup();
+                return false;
+            }
+            pa_mainloop_iterate(ml, 0, nullptr);
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() > 500) {
+                cleanup();
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        if (!running.load(std::memory_order_relaxed) || pa_stream_get_state(stream) != PA_STREAM_READY) {
+            cleanup();
+            return false;
+        }
+
+        return true;
+    }
+};
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -95,19 +222,34 @@ int main(int argc, char* argv[]) {
     int quality_mode = 0; // 0 = CQP, 1 = Fixed VBR
     int target_cq = 22;   // 16 - 30
     std::string save_dir;
+    bool probe_encoders = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--socket" && i + 1 < argc) socket_path = argv[++i];
+        if (arg == "--probe-encoders") probe_encoders = true;
+        else if (arg == "--socket" && i + 1 < argc) socket_path = argv[++i];
         else if (arg == "--shm" && i + 1 < argc) shm_path = argv[++i];
-        else if (arg == "--width" && i + 1 < argc) target_width = std::max(640, std::atoi(argv[++i]));
-        else if (arg == "--height" && i + 1 < argc) target_height = std::max(360, std::atoi(argv[++i]));
+        else if (arg == "--width" && i + 1 < argc) target_width = std::max(64, std::atoi(argv[++i]));
+        else if (arg == "--height" && i + 1 < argc) target_height = std::max(64, std::atoi(argv[++i]));
         else if (arg == "--fps" && i + 1 < argc) target_fps = std::clamp(std::atoi(argv[++i]), 15, 240);
         else if (arg == "--bitrate" && i + 1 < argc) target_bitrate_kbps = std::clamp(std::atoi(argv[++i]), 1000, 100000);
         else if (arg == "--codec" && i + 1 < argc) codec_choice = argv[++i];
         else if (arg == "--cqp-mode" && i + 1 < argc) quality_mode = std::clamp(std::atoi(argv[++i]), 0, 1);
         else if (arg == "--cqp" && i + 1 < argc) target_cq = std::clamp(std::atoi(argv[++i]), 16, 30);
         else if (arg == "--dir" && i + 1 < argc) save_dir = argv[++i];
+    }
+
+    if (probe_encoders) {
+        std::printf("FPSHUD Recorder Encoder Probe:\n");
+        std::printf("HEVC Candidates: hevc_nvenc, hevc_vaapi, libx265, hevc, h264_nvenc, h264_vaapi, libx264, h264\n");
+        std::printf("H264 Candidates: h264_nvenc, h264_vaapi, libx264, h264\n");
+        std::printf("Compiled Codec Support:\n");
+        const char* probe_list[] = {"hevc_vaapi", "h264_vaapi", "hevc_nvenc", "h264_nvenc", "libx265", "libx264"};
+        for (const char* name : probe_list) {
+            const AVCodec* c = avcodec_find_encoder_by_name(name);
+            std::printf("  %-12s: %s\n", name, c ? "COMPILED" : "NOT_FOUND");
+        }
+        return 0;
     }
 
     if (socket_path.empty()) {
@@ -189,8 +331,8 @@ int main(int argc, char* argv[]) {
     fpshud::IpcStartPayload start_cfg{};
     if (hdr.payload_size > 0) {
         recv(client_fd, &start_cfg, sizeof(start_cfg), 0);
-        if (start_cfg.width > 0) target_width = start_cfg.width;
-        if (start_cfg.height > 0) target_height = start_cfg.height;
+        if (start_cfg.width > 0) target_width = std::max(64, static_cast<int>(start_cfg.width));
+        if (start_cfg.height > 0) target_height = std::max(64, static_cast<int>(start_cfg.height));
         if (start_cfg.fps > 0) target_fps = start_cfg.fps;
         if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = start_cfg.bitrate_kbps;
         if (start_cfg.save_dir[0] != '\0') save_dir = start_cfg.save_dir;
@@ -205,9 +347,9 @@ int main(int argc, char* argv[]) {
     std::error_code ec;
     fs::create_directories(save_dir, ec);
 
-    // Ensure width and height are even for YUV420p video encoding
-    target_width &= ~1;
-    target_height &= ~1;
+    // Ensure width and height are even for YUV420p/NV12 video encoding and at least 64
+    target_width = std::max(64, target_width & ~1);
+    target_height = std::max(64, target_height & ~1);
 
     std::string ext = (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
     std::string out_filename = (fs::path(save_dir) / generate_timestamp_filename("FPSHUD", ext)).string();
@@ -229,17 +371,18 @@ int main(int argc, char* argv[]) {
     }
 
     // Find best video encoder using candidate fallback loop:
-    // HEVC:  {"hevc_nvenc", "libx265", "hevc", "h264_nvenc", "libx264", "h264"}
-    // H.264: {"h264_nvenc", "libx264", "h264"}
+    // HEVC:  {"hevc_nvenc", "hevc_vaapi", "libx265", "hevc", "h264_nvenc", "h264_vaapi", "libx264", "h264"}
+    // H.264: {"h264_nvenc", "h264_vaapi", "libx264", "h264"}
     std::vector<const char*> candidates;
     if (codec_choice == "hevc") {
-        candidates = {"hevc_nvenc", "libx265", "hevc", "h264_nvenc", "libx264", "h264"};
+        candidates = {"hevc_nvenc", "hevc_vaapi", "libx265", "hevc", "h264_nvenc", "h264_vaapi", "libx264", "h264"};
     } else {
-        candidates = {"h264_nvenc", "libx264", "h264"};
+        candidates = {"h264_nvenc", "h264_vaapi", "libx264", "h264"};
     }
 
     const AVCodec* vcodec = nullptr;
     AVCodecContext* vctx = nullptr;
+    AVBufferRef* hw_device_ctx = nullptr;
 
     for (const char* cand : candidates) {
         const AVCodec* c = avcodec_find_encoder_by_name(cand);
@@ -253,12 +396,53 @@ int main(int argc, char* argv[]) {
         if (!ctx) continue;
 
         bool is_nv = (std::strstr(c->name, "nvenc") != nullptr);
+        bool is_va = (std::strstr(c->name, "vaapi") != nullptr);
+
+        if (is_va) {
+            if (!hw_device_ctx) {
+                hw_device_ctx = create_vaapi_device();
+            }
+            if (!hw_device_ctx) {
+                std::fprintf(stderr, "[FPSHUD Recorder] VAAPI device node inaccessible, skipping %s...\n", cand);
+                avcodec_free_context(&ctx);
+                continue;
+            }
+
+            AVBufferRef* hw_frames_ref = av_hwframe_ctx_alloc(hw_device_ctx);
+            if (!hw_frames_ref) {
+                avcodec_free_context(&ctx);
+                continue;
+            }
+            AVHWFramesContext* frames_ctx = reinterpret_cast<AVHWFramesContext*>(hw_frames_ref->data);
+            frames_ctx->format = AV_PIX_FMT_VAAPI;
+            frames_ctx->sw_format = AV_PIX_FMT_NV12;
+            frames_ctx->width = target_width;
+            frames_ctx->height = target_height;
+            frames_ctx->initial_pool_size = 20;
+
+            if (av_hwframe_ctx_init(hw_frames_ref) < 0) {
+                av_buffer_unref(&hw_frames_ref);
+                avcodec_free_context(&ctx);
+                continue;
+            }
+
+            ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+            av_buffer_unref(&hw_frames_ref);
+            ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        }
+
         ctx->codec_id = c->id;
         ctx->width = target_width;
         ctx->height = target_height;
         ctx->time_base = AVRational{1, target_fps};
         ctx->framerate = AVRational{target_fps, 1};
-        ctx->pix_fmt = is_nv ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
+        if (is_va) {
+            ctx->pix_fmt = AV_PIX_FMT_VAAPI;
+        } else if (is_nv) {
+            ctx->pix_fmt = AV_PIX_FMT_NV12;
+        } else {
+            ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+        }
         ctx->gop_size = target_fps * 2; // 2-second keyframe interval
         ctx->max_b_frames = 0;          // Low latency for gameplay capture
 
@@ -271,6 +455,10 @@ int main(int argc, char* argv[]) {
                 av_opt_set_int(ctx->priv_data, "qp", target_cq, 0);
                 av_opt_set(ctx->priv_data, "spatial-aq", "1", 0);  // Preserves HUD text and sharp UI fonts
                 av_opt_set(ctx->priv_data, "temporal-aq", "1", 0); // Bitrate savings on static/dialogue scenes
+            } else if (is_va) {
+                ctx->global_quality = target_cq;
+                av_opt_set(ctx->priv_data, "rc_mode", "CQP", 0);
+                av_opt_set_int(ctx->priv_data, "qp", target_cq, 0);
             } else {
                 av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
                 av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
@@ -283,6 +471,8 @@ int main(int argc, char* argv[]) {
                 av_opt_set(ctx->priv_data, "preset", "p4", 0); // p4 = balanced quality/speed
                 av_opt_set(ctx->priv_data, "tune", "ll", 0);   // Low latency
                 av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+            } else if (is_va) {
+                av_opt_set(ctx->priv_data, "rc_mode", "VBR", 0);
             } else {
                 av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
                 av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
@@ -304,12 +494,16 @@ int main(int argc, char* argv[]) {
             if (quality_mode == 0) {
                 if (is_nv) {
                     std::fprintf(stderr, "[FPSHUD Recorder] NVENC Adaptive CQP: CQ=%d, Spatial-AQ=ON, Temporal-AQ=ON\n", target_cq);
+                } else if (is_va) {
+                    std::fprintf(stderr, "[FPSHUD Recorder] VAAPI CQP: CQ=%d\n", target_cq);
                 } else {
                     std::fprintf(stderr, "[FPSHUD Recorder] Software CRF: %d\n", target_cq);
                 }
             } else {
                 if (is_nv) {
                     std::fprintf(stderr, "[FPSHUD Recorder] NVENC VBR: %d kbps\n", target_bitrate_kbps);
+                } else if (is_va) {
+                    std::fprintf(stderr, "[FPSHUD Recorder] VAAPI VBR: %d kbps\n", target_bitrate_kbps);
                 } else {
                     std::fprintf(stderr, "[FPSHUD Recorder] Software VBR: %d kbps\n", target_bitrate_kbps);
                 }
@@ -319,6 +513,10 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "[FPSHUD Recorder] Candidate encoder '%s' failed to open, falling back...\n", cand);
             avcodec_free_context(&ctx);
         }
+    }
+
+    if ((!vcodec || std::strstr(vcodec->name, "vaapi") == nullptr) && hw_device_ctx) {
+        av_buffer_unref(&hw_device_ctx);
     }
 
     if (!vctx) {
@@ -334,6 +532,7 @@ int main(int argc, char* argv[]) {
     if (!vstream) {
         std::fprintf(stderr, "[FPSHUD Recorder] Could not allocate video stream.\n");
         avcodec_free_context(&vctx);
+        if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
         avformat_free_context(oc);
         close(client_fd);
         close(server_fd);
@@ -350,8 +549,8 @@ int main(int argc, char* argv[]) {
     // 4. Initialize Audio Stream via PulseAudio / PipeWire
     AVStream* astream = nullptr;
     AVCodecContext* actx = nullptr;
-    pa_simple* pa_record = nullptr;
     bool audio_enabled = (start_cfg.audio_source != 3); // 3 = Mute
+    std::string monitor_source;
 
     if (audio_enabled) {
         const AVCodec* acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -372,23 +571,7 @@ int main(int argc, char* argv[]) {
 
             if (avcodec_open2(actx, acodec, nullptr) >= 0) {
                 avcodec_parameters_from_context(astream->codecpar, actx);
-
-                // Open PulseAudio / PipeWire capture stream
-                pa_sample_spec ss{};
-                ss.format = PA_SAMPLE_S16LE;
-                ss.rate = 48000;
-                ss.channels = 2;
-
-                std::string monitor_source = get_default_monitor_source();
-                int pa_err = 0;
-                pa_record = pa_simple_new(nullptr, "FPSHUD_Recorder", PA_STREAM_RECORD,
-                                          monitor_source.c_str(), "Gameplay Audio", &ss,
-                                          nullptr, nullptr, &pa_err);
-                if (pa_record) {
-                    std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s\n", monitor_source.c_str());
-                } else {
-                    std::fprintf(stderr, "[FPSHUD Recorder] pa_simple_new failed (%s), audio disabled.\n", pa_strerror(pa_err));
-                }
+                monitor_source = get_default_monitor_source();
             }
         }
     }
@@ -405,9 +588,9 @@ int main(int argc, char* argv[]) {
 
     auto cleanup_early_failure = [&]() {
         av_dict_free(&opt_dict);
-        if (pa_record) pa_simple_free(pa_record);
         if (vctx) avcodec_free_context(&vctx);
         if (actx) avcodec_free_context(&actx);
+        if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
         if (oc) {
             if (oc->pb && !(oc->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc->pb);
             avformat_free_context(oc);
@@ -436,9 +619,12 @@ int main(int argc, char* argv[]) {
     std::mutex mux_mutex;
     std::atomic<int64_t> video_frame_idx{0};
 
+    bool is_vaapi_encoder = (vctx->pix_fmt == AV_PIX_FMT_VAAPI);
+    AVPixelFormat sw_pix_fmt = is_vaapi_encoder ? AV_PIX_FMT_NV12 : vctx->pix_fmt;
+
     // Allocate staging video frame (NV12 or YUV420P)
     AVFrame* vframe = av_frame_alloc();
-    vframe->format = vctx->pix_fmt;
+    vframe->format = sw_pix_fmt;
     vframe->width = target_width;
     vframe->height = target_height;
     av_frame_get_buffer(vframe, 0);
@@ -454,17 +640,31 @@ int main(int argc, char* argv[]) {
         std::memset(vframe->data[2], 128, vframe->linesize[2] * (target_height / 2));
     }
 
+    AVFrame* hw_frame = nullptr;
+    if (is_vaapi_encoder) {
+        hw_frame = av_frame_alloc();
+    }
+
     // SwsContext for RGB/NV12 conversion if needed
     SwsContext* sws_ctx = sws_getContext(target_width, target_height, AV_PIX_FMT_RGBA,
-                                         target_width, target_height, vctx->pix_fmt,
+                                         target_width, target_height, sw_pix_fmt,
                                          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 
-    // Spawn Audio Capture Thread
+    // Spawn Audio Capture Thread (Asynchronous libpulse)
     std::thread audio_thread([&]() {
-        if (!pa_record || !actx) return;
+        if (!actx || !audio_enabled || monitor_source.empty()) return;
+
+        PulseAudioCapture pulse;
+        if (!pulse.init(monitor_source, g_running)) {
+            std::fprintf(stderr, "[FPSHUD Recorder] PulseAudio connection failed or timeout, audio capture disabled.\n");
+            return;
+        }
+
+        std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s\n", monitor_source.c_str());
 
         constexpr int kAudioSamplesPerFrame = 1024;
-        std::vector<int16_t> pcm_buf(kAudioSamplesPerFrame * 2);
+        std::vector<int16_t> pcm_ring;
+        pcm_ring.reserve(kAudioSamplesPerFrame * 8);
         int64_t audio_pts = 0;
 
         // Resampler from S16 to FLTP
@@ -488,29 +688,52 @@ int main(int argc, char* argv[]) {
         AVPacket* pkt = av_packet_alloc();
 
         while (g_running.load(std::memory_order_relaxed)) {
-            int pa_err = 0;
-            if (pa_simple_read(pa_record, pcm_buf.data(), pcm_buf.size() * sizeof(int16_t), &pa_err) < 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
+            pa_mainloop_iterate(pulse.ml, 0, nullptr);
+
+            if (!PA_STREAM_IS_GOOD(pa_stream_get_state(pulse.stream))) {
+                break;
             }
 
-            av_frame_make_writable(aframe);
-            const uint8_t* in_data[1] = { reinterpret_cast<const uint8_t*>(pcm_buf.data()) };
-            if (swr) {
-                swr_convert(swr, aframe->data, kAudioSamplesPerFrame, in_data, kAudioSamplesPerFrame);
-            }
-
-            aframe->pts = audio_pts;
-            audio_pts += kAudioSamplesPerFrame;
-
-            if (avcodec_send_frame(actx, aframe) >= 0) {
-                while (avcodec_receive_packet(actx, pkt) >= 0) {
-                    av_packet_rescale_ts(pkt, actx->time_base, astream->time_base);
-                    pkt->stream_index = astream->index;
-                    std::lock_guard<std::mutex> lock(mux_mutex);
-                    av_interleaved_write_frame(oc, pkt);
-                    av_packet_unref(pkt);
+            const void* data = nullptr;
+            size_t nbytes = 0;
+            if (pa_stream_peek(pulse.stream, &data, &nbytes) == 0 && nbytes > 0) {
+                if (data == nullptr) {
+                    // Hole in stream: inject silence (zeros)
+                    size_t samples_to_inject = nbytes / sizeof(int16_t);
+                    pcm_ring.insert(pcm_ring.end(), samples_to_inject, 0);
+                } else {
+                    const int16_t* samples = static_cast<const int16_t*>(data);
+                    size_t num_samples = nbytes / sizeof(int16_t);
+                    pcm_ring.insert(pcm_ring.end(), samples, samples + num_samples);
                 }
+                pa_stream_drop(pulse.stream);
+            }
+
+            while (pcm_ring.size() >= static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
+                av_frame_make_writable(aframe);
+                const uint8_t* in_data[1] = { reinterpret_cast<const uint8_t*>(pcm_ring.data()) };
+                if (swr) {
+                    swr_convert(swr, aframe->data, kAudioSamplesPerFrame, in_data, kAudioSamplesPerFrame);
+                }
+
+                aframe->pts = audio_pts;
+                audio_pts += kAudioSamplesPerFrame;
+
+                if (avcodec_send_frame(actx, aframe) >= 0) {
+                    while (avcodec_receive_packet(actx, pkt) >= 0) {
+                        av_packet_rescale_ts(pkt, actx->time_base, astream->time_base);
+                        pkt->stream_index = astream->index;
+                        std::lock_guard<std::mutex> lock(mux_mutex);
+                        av_interleaved_write_frame(oc, pkt);
+                        av_packet_unref(pkt);
+                    }
+                }
+
+                pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+            }
+
+            if (nbytes == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
 
@@ -527,7 +750,7 @@ int main(int argc, char* argv[]) {
         av_packet_free(&pkt);
         av_frame_free(&aframe);
         if (swr) swr_free(&swr);
-        pa_simple_free(pa_record);
+        pulse.cleanup();
     });
 
     // 6. Main Socket Event Loop: Handle Frame Signals & Stop Commands
@@ -599,7 +822,7 @@ int main(int argc, char* argv[]) {
                                 if (sws_ctx) sws_freeContext(sws_ctx);
                                 sws_ctx = sws_getContext(
                                     notify.width, notify.height, src_fmt,
-                                    target_width, target_height, vctx->pix_fmt,
+                                    target_width, target_height, sw_pix_fmt,
                                     SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
                                 );
                                 last_src_fmt = src_fmt;
@@ -649,13 +872,31 @@ int main(int argc, char* argv[]) {
                 vframe->pts = next_pts++;
                 video_frame_idx.store(next_pts, std::memory_order_relaxed);
 
-                if (avcodec_send_frame(vctx, vframe) >= 0) {
-                    while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-                        av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-                        v_pkt->stream_index = vstream->index;
-                        std::lock_guard<std::mutex> lock(mux_mutex);
-                        av_interleaved_write_frame(oc, v_pkt);
-                        av_packet_unref(v_pkt);
+                if (is_vaapi_encoder && hw_frame) {
+                    if (av_hwframe_get_buffer(vctx->hw_frames_ctx, hw_frame, 0) >= 0) {
+                        if (av_hwframe_transfer_data(hw_frame, vframe, 0) >= 0) {
+                            hw_frame->pts = vframe->pts;
+                            if (avcodec_send_frame(vctx, hw_frame) >= 0) {
+                                while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+                                    av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
+                                    v_pkt->stream_index = vstream->index;
+                                    std::lock_guard<std::mutex> lock(mux_mutex);
+                                    av_interleaved_write_frame(oc, v_pkt);
+                                    av_packet_unref(v_pkt);
+                                }
+                            }
+                        }
+                        av_frame_unref(hw_frame);
+                    }
+                } else {
+                    if (avcodec_send_frame(vctx, vframe) >= 0) {
+                        while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+                            av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
+                            v_pkt->stream_index = vstream->index;
+                            std::lock_guard<std::mutex> lock(mux_mutex);
+                            av_interleaved_write_frame(oc, v_pkt);
+                            av_packet_unref(v_pkt);
+                        }
                     }
                 }
                 next_frame_time += frame_interval;
@@ -700,8 +941,10 @@ int main(int argc, char* argv[]) {
     }
     avcodec_free_context(&vctx);
     if (actx) avcodec_free_context(&actx);
+    if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     avformat_free_context(oc);
     av_frame_free(&vframe);
+    if (hw_frame) av_frame_free(&hw_frame);
     if (sws_ctx) sws_freeContext(sws_ctx);
 
     close(client_fd);

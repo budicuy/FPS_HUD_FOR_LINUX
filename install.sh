@@ -166,7 +166,7 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
     echo "[*] Notice: Host FFmpeg library version differs from prebuilt binary."
     echo "    Compiling native fpshud_recorder for this system..."
     select_cpp_toolchain
-    if [ -n "$CXX_BIN" ] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavformat libavcodec libavutil libswscale libswresample libpulse-simple 2>/dev/null; then
+    if [ -n "$CXX_BIN" ] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavformat libavcodec libavutil libswscale libswresample libpulse 2>/dev/null; then
         REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
         REC_SRC_DIR="$REC_TMP/src"
         if [ -f "./src/recorder_main.cpp" ]; then
@@ -181,7 +181,7 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
             fi
             if "$CXX_BIN" -O3 "$REC_STD_FLAG" "$REC_SRC_DIR/src/recorder_main.cpp" \
                 -I"$REC_SRC_DIR/src" \
-                $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse-simple) \
+                $(pkg-config --cflags --libs libavformat libavcodec libavutil libswscale libswresample libpulse) \
                 -pthread -ldl \
                 -Wl,-rpath,'$ORIGIN:$ORIGIN/../lib:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib' \
                 -Wl,--disable-new-dtags \

@@ -256,11 +256,11 @@ if (PKG_CONFIG_FOUND)
     pkg_check_modules(AVUTIL IMPORTED_TARGET libavutil)
     pkg_check_modules(SWSCALE IMPORTED_TARGET libswscale)
     pkg_check_modules(SWRESAMPLE IMPORTED_TARGET libswresample)
-    pkg_check_modules(PULSE_SIMPLE IMPORTED_TARGET libpulse-simple)
+    pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
 endif()
 
 if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
-    TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE_SIMPLE)
+    TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
     add_executable(fpshud_recorder_bin
         src/recorder_main.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
@@ -276,7 +276,7 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
         PkgConfig::AVUTIL
         PkgConfig::SWSCALE
         PkgConfig::SWRESAMPLE
-        PkgConfig::PULSE_SIMPLE
+        PkgConfig::PULSE
         Threads::Threads
         ${CMAKE_DL_LIBS}
     )
@@ -304,7 +304,7 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
 
     message(STATUS "Screen Recorder: ENABLED (fpshud_recorder & fpshud_recorder_bin will be built)")
 else()
-    message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse-simple not found)")
+    message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse not found)")
 endif()
 
 # Generate Vulkan Implicit Layer JSON manifest with absolute path to libfpshud.so

@@ -8,6 +8,10 @@
 #include <vulkan/vk_layer.h>
 
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <elf.h>
@@ -234,6 +238,27 @@ fs::path find_libfpshud_path() {
     candidates.push_back(fs::path("./build/libfpshud.so"));
     candidates.push_back(fs::path("./libfpshud.so"));
     candidates.push_back(fs::path("../lib/fpshud/libfpshud.so"));
+
+    for (const auto& p : candidates) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            return fs::canonical(p, ec);
+        }
+    }
+    return {};
+}
+
+fs::path find_recorder_bin_path() {
+    std::vector<fs::path> candidates;
+    char exe_buf[4096] = {0};
+    ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (len > 0) {
+        fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+        candidates.push_back(exe_dir / "fpshud_recorder_bin");
+        candidates.push_back(exe_dir / "build" / "fpshud_recorder_bin");
+    }
+    candidates.push_back(fs::path("./build/fpshud_recorder_bin"));
+    candidates.push_back(fs::path("./fpshud_recorder_bin"));
 
     for (const auto& p : candidates) {
         std::error_code ec;
@@ -899,6 +924,139 @@ void run_elf_and_layer_abi_suite() {
         }
 
         check_cond(lifecycle_ok, "4. Vulkan Multi-Device Lifecycle & UAF-Free", lifecycle_detail.c_str());
+    }
+
+    // 5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio Daemon
+    {
+        using namespace fpshud;
+        fs::path rec_path = find_recorder_bin_path();
+        bool test_passed = false;
+        std::string detail;
+
+        if (rec_path.empty()) {
+            detail = "Skipped: fpshud_recorder_bin not found";
+        } else {
+            // Step 1: Probe Encoders
+            std::string probe_cmd = rec_path.string() + " --probe-encoders 2>&1";
+            FILE* pipe = popen(probe_cmd.c_str(), "r");
+            std::string probe_output;
+            int exit_code = -1;
+            if (pipe) {
+                char pbuf[256];
+                while (fgets(pbuf, sizeof(pbuf), pipe)) {
+                    probe_output += pbuf;
+                }
+                int status = pclose(pipe);
+                exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+
+            bool probe_ok = (exit_code == 0 &&
+                             probe_output.find("hevc_vaapi") != std::string::npos &&
+                             probe_output.find("h264_vaapi") != std::string::npos);
+
+            // Step 2: Odd Dimensions & Quick Stop Daemon
+            std::string test_sock = "/tmp/fpshud_test_rec_" + std::to_string(getpid()) + ".sock";
+            std::string test_dir = "/tmp/fpshud_test_rec_" + std::to_string(getpid()) + "_out";
+            unlink(test_sock.c_str());
+            std::error_code ec;
+            fs::remove_all(test_dir, ec);
+
+            pid_t child_pid = fork();
+            if (child_pid == 0) {
+                execl(rec_path.c_str(), rec_path.c_str(),
+                      "--socket", test_sock.c_str(),
+                      "--dir", test_dir.c_str(),
+                      "--width", "321",
+                      "--height", "241",
+                      nullptr);
+                _exit(127);
+            }
+
+            bool connected = false;
+            int client_fd = -1;
+            for (int i = 0; i < 100; ++i) {
+                client_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+                if (client_fd >= 0) {
+                    struct sockaddr_un saddr{};
+                    saddr.sun_family = AF_UNIX;
+                    std::strncpy(saddr.sun_path, test_sock.c_str(), sizeof(saddr.sun_path) - 1);
+                    if (connect(client_fd, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) == 0) {
+                        connected = true;
+                        break;
+                    }
+                    close(client_fd);
+                    client_fd = -1;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            bool child_stopped_cleanly = false;
+            if (connected && client_fd >= 0) {
+                // Send StartRecord
+                IpcPacketHeader start_hdr{};
+                start_hdr.magic = kRecorderIpcMagic;
+                start_hdr.command = static_cast<uint32_t>(RecorderCommand::StartRecord);
+                start_hdr.payload_size = sizeof(IpcStartPayload);
+
+                IpcStartPayload start_payload{};
+                start_payload.width = 321;
+                start_payload.height = 241;
+                start_payload.fps = 60;
+                start_payload.bitrate_kbps = 4000;
+                start_payload.audio_source = 0;
+                start_payload.container = 0;
+                start_payload.codec = 0;
+                start_payload.quality_mode = 0;
+                std::strncpy(start_payload.save_dir, test_dir.c_str(), sizeof(start_payload.save_dir) - 1);
+
+                send(client_fd, &start_hdr, sizeof(start_hdr), 0);
+                send(client_fd, &start_payload, sizeof(start_payload), 0);
+
+                // Wait 20ms and send StopRecord
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+                IpcPacketHeader stop_hdr{};
+                stop_hdr.magic = kRecorderIpcMagic;
+                stop_hdr.command = static_cast<uint32_t>(RecorderCommand::StopRecord);
+                stop_hdr.payload_size = 0;
+                send(client_fd, &stop_hdr, sizeof(stop_hdr), 0);
+
+                IpcStatusResponse resp{};
+                recv(client_fd, &resp, sizeof(resp), 0);
+                close(client_fd);
+
+                // Waitpid loop < 1500ms
+                auto stop_wait_start = std::chrono::steady_clock::now();
+                while (std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - stop_wait_start).count() < 1500) {
+                    int wstatus = 0;
+                    pid_t res = waitpid(child_pid, &wstatus, WNOHANG);
+                    if (res == child_pid) {
+                        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) {
+                            child_stopped_cleanly = true;
+                        }
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+
+            if (!child_stopped_cleanly && child_pid > 0) {
+                kill(child_pid, SIGKILL);
+                waitpid(child_pid, nullptr, 0);
+            }
+
+            unlink(test_sock.c_str());
+            fs::remove_all(test_dir, ec);
+
+            test_passed = (probe_ok && child_stopped_cleanly);
+            detail = "probe_ok=" + std::to_string(probe_ok) +
+                     " (found hevc/h264_vaapi, exit=" + std::to_string(exit_code) + ")" +
+                     ", child_stopped_cleanly=" + std::to_string(child_stopped_cleanly) +
+                     " (<1500ms exit on odd dim 321x241)";
+        }
+
+        check_cond(test_passed, "5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio", detail.c_str());
     }
 }
 
