@@ -77,9 +77,33 @@ std::string get_secure_runtime_dir() {
         ::chmod(dir.c_str(), 0700);
         return dir;
     }
+
     std::string fallback = "/tmp/fpshud-" + std::to_string(::getuid());
-    ::mkdir(fallback.c_str(), 0700);
-    ::chmod(fallback.c_str(), 0700);
+    struct stat st{};
+    if (::lstat(fallback.c_str(), &st) == 0) {
+        if (S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) &&
+            st.st_uid == ::getuid() && ((st.st_mode & 0777) == 0700)) {
+            return fallback;
+        }
+        if (st.st_uid == ::getuid() && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+            if (::chmod(fallback.c_str(), 0700) == 0) {
+                return fallback;
+            }
+        }
+    } else {
+        if (::mkdir(fallback.c_str(), 0700) == 0) {
+            ::chmod(fallback.c_str(), 0700);
+            return fallback;
+        }
+    }
+
+    // Untrusted or compromised fallback; create a secure private directory via mkdtemp
+    char tmpl[] = "/tmp/fpshud-sec-XXXXXX";
+    char* safe_dir = ::mkdtemp(tmpl);
+    if (safe_dir) {
+        ::chmod(safe_dir, 0700);
+        return std::string(safe_dir);
+    }
     return fallback;
 }
 

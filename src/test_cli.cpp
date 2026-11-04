@@ -1215,9 +1215,29 @@ void run_elf_and_layer_abi_suite() {
         struct stat st{};
         bool dir_ok = (stat(sdir.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
                        (st.st_mode & 0777) == 0700 && st.st_uid == ::getuid());
-        check_cond(dir_ok, "5.1 Private 0700 Runtime Directory & Hardened IPC Paths",
-                   dir_ok ? ("Secured private runtime path: " + sdir).c_str()
-                          : ("Insecure permissions or ownership on: " + sdir).c_str());
+
+        // Test fallback path validation when XDG_RUNTIME_DIR is absent
+        const char* orig_xdg = std::getenv("XDG_RUNTIME_DIR");
+        std::string saved_xdg = orig_xdg ? orig_xdg : "";
+        ::unsetenv("XDG_RUNTIME_DIR");
+        std::string fallback_dir = fpshud::get_secure_runtime_dir();
+        struct stat st_fb{};
+        bool fb_ok = (lstat(fallback_dir.c_str(), &st_fb) == 0 && S_ISDIR(st_fb.st_mode) &&
+                      !S_ISLNK(st_fb.st_mode) && (st_fb.st_mode & 0777) == 0700 &&
+                      st_fb.st_uid == ::getuid());
+        if (!saved_xdg.empty()) {
+            ::setenv("XDG_RUNTIME_DIR", saved_xdg.c_str(), 1);
+        }
+
+        fs::path rroot = find_repo_root();
+        std::string ipc_src = read_text_file(rroot / "src" / "recorder_ipc.cpp");
+        bool lstat_guarded = (ipc_src.find("lstat") != std::string::npos &&
+                              ipc_src.find("mkdtemp") != std::string::npos);
+
+        bool all_dir_ok = dir_ok && fb_ok && lstat_guarded;
+        check_cond(all_dir_ok, "5.1 Private 0700 Runtime Directory & Hardened IPC Paths",
+                   all_dir_ok ? ("Secured private runtime path: " + sdir + ", fallback: " + fallback_dir).c_str()
+                              : ("Insecure permissions or missing lstat/mkdtemp validation: " + sdir).c_str());
     }
 
     // 6. Steam Proton Multiarch Container Host Library & VAAPI Driver Resolution
