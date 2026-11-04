@@ -102,6 +102,9 @@ struct IpcFrameNotify {
 // and hardware VAAPI driver directories (LIBVA_DRIVERS_PATH) under <root>/run/host and <root>/var/run/host.
 bool build_container_host_env_paths(const std::string& root_prefix, std::string& out_ld_path, std::string& out_libva_path);
 
+// Secure private runtime directory (0700) for Unix domain sockets and shared memory buffers
+std::string get_secure_runtime_dir();
+
 // Singleton controller in libfpshud.so to manage on-demand helper process & IPC
 class RecorderController {
 public:

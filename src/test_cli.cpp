@@ -1168,6 +1168,17 @@ void run_elf_and_layer_abi_suite() {
         check_cond(test_passed, "5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio", detail.c_str());
     }
 
+    // 5.1 Private 0700 Runtime Directory & Path Hardening Invariant (I2)
+    {
+        std::string sdir = fpshud::get_secure_runtime_dir();
+        struct stat st{};
+        bool dir_ok = (stat(sdir.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
+                       (st.st_mode & 0777) == 0700 && st.st_uid == ::getuid());
+        check_cond(dir_ok, "5.1 Private 0700 Runtime Directory & Hardened IPC Paths",
+                   dir_ok ? ("Secured private runtime path: " + sdir).c_str()
+                          : ("Insecure permissions or ownership on: " + sdir).c_str());
+    }
+
     // 6. Steam Proton Multiarch Container Host Library & VAAPI Driver Resolution
     {
         std::string mock_pv_dir = "/tmp/fpshud_mock_pv_" + std::to_string(::getpid());

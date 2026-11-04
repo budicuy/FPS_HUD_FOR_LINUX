@@ -69,14 +69,29 @@ std::string get_helper_binary_path() {
 
 } // namespace
 
+std::string get_secure_runtime_dir() {
+    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
+    if (xdg && xdg[0] != '\0') {
+        std::string dir = std::string(xdg) + "/fpshud";
+        ::mkdir(dir.c_str(), 0700);
+        ::chmod(dir.c_str(), 0700);
+        return dir;
+    }
+    std::string fallback = "/tmp/fpshud-" + std::to_string(::getuid());
+    ::mkdir(fallback.c_str(), 0700);
+    ::chmod(fallback.c_str(), 0700);
+    return fallback;
+}
+
 RecorderController& RecorderController::instance() {
     static RecorderController s_inst;
     return s_inst;
 }
 
 RecorderController::RecorderController() {
-    socket_path_ = "/tmp/fpshud_rec_" + std::to_string(getpid()) + ".sock";
-    shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
+    std::string rdir = get_secure_runtime_dir();
+    socket_path_ = rdir + "/fpshud_rec_" + std::to_string(getpid()) + ".sock";
+    shm_path_ = rdir + "/fpshud_rec_shm_" + std::to_string(getpid());
 }
 
 RecorderController::~RecorderController() {
@@ -468,11 +483,12 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
 
     cleanup_shm();
 
-    shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
+    std::string rdir = get_secure_runtime_dir();
+    shm_path_ = rdir + "/fpshud_rec_shm_" + std::to_string(getpid());
     size_t slot_sz = static_cast<size_t>(width) * height * 4;
     size_t total_sz = 4096 + slot_sz * 3;
 
-    shm_fd_ = open(shm_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+    shm_fd_ = open(shm_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (shm_fd_ < 0) {
         return false;
     }
