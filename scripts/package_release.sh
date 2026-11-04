@@ -63,6 +63,7 @@ else
 fi
 
 mkdir -p "$DIST_DIR"
+chmod 755 "${STRIP_TARGETS[@]}"
 tar -czf "$DIST_DIR/fpshud-linux-x86_64.tar.gz" -C "$BUILD_DIR" "${TAR_FILES[@]}"
 echo "[✓] Packaged portable release archive: $DIST_DIR/fpshud-linux-x86_64.tar.gz"
 
