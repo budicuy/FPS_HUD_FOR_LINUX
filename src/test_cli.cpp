@@ -816,6 +816,20 @@ void run_elf_and_layer_abi_suite() {
                    q2_export_ok ? "vkGetDeviceQueue2 resolved via vkGetDeviceProcAddr & vkGetInstanceProcAddr"
                                 : "vkGetDeviceQueue2 returned nullptr on VK_NULL_HANDLE");
 
+        // Verify Host Process Signal Safety & Fence Deadlock Invariant (C2, I7)
+        bool sigpipe_clean = false;
+        fs::path rroot = find_repo_root();
+        std::string ipc_src = read_text_file(rroot / "src" / "recorder_ipc.cpp");
+        std::string vk_src = read_text_file(rroot / "src" / "vulkan_layer.cpp");
+        if (ipc_src.find("signal(SIGPIPE") == std::string::npos &&
+            vk_src.find("UINT64_MAX") == std::string::npos &&
+            vk_src.find("2000000000ULL") != std::string::npos) {
+            sigpipe_clean = true;
+        }
+        check_cond(sigpipe_clean, "3.1 Host Signal Safety & Bounded Fence Wait",
+                   sigpipe_clean ? "signal(SIGPIPE) removed from game host and 2s bounded fence timeout active"
+                                 : "Failed: SIGPIPE mutation or unbounded UINT64_MAX fence wait present");
+
         // 4. Vulkan Multi-Device Lifecycle, Zero-Extent Swapchain & UAF-Free DestroyDevice
         bool lifecycle_ok = false;
         std::string lifecycle_detail;

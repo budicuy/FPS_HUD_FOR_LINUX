@@ -490,15 +490,19 @@ extern "C" {
 
 __attribute__((visibility("default")))
 void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
-    ensure_glx_resolved();
-    if (fpshud::get_global_config().enabled) {
-        GLXContext ctx = g_gl.glXGetCurrentContext ? g_gl.glXGetCurrentContext() : nullptr;
-        unsigned int w = 0, h = 0;
-        if (dpy && drawable && g_gl.glXQueryDrawable) {
-            g_gl.glXQueryDrawable(dpy, drawable, GLX_WIDTH, &w);
-            g_gl.glXQueryDrawable(dpy, drawable, GLX_HEIGHT, &h);
+    try {
+        ensure_glx_resolved();
+        if (fpshud::get_global_config().enabled) {
+            GLXContext ctx = g_gl.glXGetCurrentContext ? g_gl.glXGetCurrentContext() : nullptr;
+            unsigned int w = 0, h = 0;
+            if (dpy && drawable && g_gl.glXQueryDrawable) {
+                g_gl.glXQueryDrawable(dpy, drawable, GLX_WIDTH, &w);
+                g_gl.glXQueryDrawable(dpy, drawable, GLX_HEIGHT, &h);
+            }
+            render_gl_frame(reinterpret_cast<void*>(ctx), w, h);
         }
-        render_gl_frame(reinterpret_cast<void*>(ctx), w, h);
+    } catch (...) {
+        // Exception safety at C ABI boundary
     }
     if (real_glXSwapBuffers) {
         real_glXSwapBuffers(dpy, drawable);
@@ -507,50 +511,66 @@ void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
 
 __attribute__((visibility("default")))
 __GLXextFuncPtr glXGetProcAddress(const GLubyte* procName) {
-    ensure_glx_resolved();
-    if (procName) {
-        const char* name = reinterpret_cast<const char*>(procName);
-        if (std::strcmp(name, "glXSwapBuffers") == 0) {
-            return reinterpret_cast<__GLXextFuncPtr>(&glXSwapBuffers);
+    try {
+        ensure_glx_resolved();
+        if (procName) {
+            const char* name = reinterpret_cast<const char*>(procName);
+            if (std::strcmp(name, "glXSwapBuffers") == 0) {
+                return reinterpret_cast<__GLXextFuncPtr>(&glXSwapBuffers);
+            }
         }
+        return real_glXGetProcAddress ? real_glXGetProcAddress(procName) : nullptr;
+    } catch (...) {
+        return real_glXGetProcAddress ? real_glXGetProcAddress(procName) : nullptr;
     }
-    return real_glXGetProcAddress ? real_glXGetProcAddress(procName) : nullptr;
 }
 
 __attribute__((visibility("default")))
 __GLXextFuncPtr glXGetProcAddressARB(const GLubyte* procName) {
-    ensure_glx_resolved();
-    if (procName) {
-        const char* name = reinterpret_cast<const char*>(procName);
-        if (std::strcmp(name, "glXSwapBuffers") == 0) {
-            return reinterpret_cast<__GLXextFuncPtr>(&glXSwapBuffers);
+    try {
+        ensure_glx_resolved();
+        if (procName) {
+            const char* name = reinterpret_cast<const char*>(procName);
+            if (std::strcmp(name, "glXSwapBuffers") == 0) {
+                return reinterpret_cast<__GLXextFuncPtr>(&glXSwapBuffers);
+            }
         }
+        return real_glXGetProcAddressARB ? real_glXGetProcAddressARB(procName) : nullptr;
+    } catch (...) {
+        return real_glXGetProcAddressARB ? real_glXGetProcAddressARB(procName) : nullptr;
     }
-    return real_glXGetProcAddressARB ? real_glXGetProcAddressARB(procName) : nullptr;
 }
 
 __attribute__((visibility("default")))
 EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
-    ensure_egl_resolved();
-    if (fpshud::get_global_config().enabled) {
-        EGLContext ctx = g_gl.eglGetCurrentContext ? g_gl.eglGetCurrentContext() : nullptr;
-        EGLint w = 0, h = 0;
-        if (dpy != EGL_NO_DISPLAY && surface != EGL_NO_SURFACE && g_gl.eglQuerySurface) {
-            g_gl.eglQuerySurface(dpy, surface, EGL_WIDTH, &w);
-            g_gl.eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
+    try {
+        ensure_egl_resolved();
+        if (fpshud::get_global_config().enabled) {
+            EGLContext ctx = g_gl.eglGetCurrentContext ? g_gl.eglGetCurrentContext() : nullptr;
+            EGLint w = 0, h = 0;
+            if (dpy != EGL_NO_DISPLAY && surface != EGL_NO_SURFACE && g_gl.eglQuerySurface) {
+                g_gl.eglQuerySurface(dpy, surface, EGL_WIDTH, &w);
+                g_gl.eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
+            }
+            render_gl_frame(reinterpret_cast<void*>(ctx), static_cast<unsigned int>(w), static_cast<unsigned int>(h));
         }
-        render_gl_frame(reinterpret_cast<void*>(ctx), static_cast<unsigned int>(w), static_cast<unsigned int>(h));
+    } catch (...) {
+        // Exception safety at C ABI boundary
     }
     return real_eglSwapBuffers ? real_eglSwapBuffers(dpy, surface) : EGL_FALSE;
 }
 
 __attribute__((visibility("default")))
 __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* procName) {
-    ensure_egl_resolved();
-    if (procName && std::strcmp(procName, "eglSwapBuffers") == 0) {
-        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&eglSwapBuffers);
+    try {
+        ensure_egl_resolved();
+        if (procName && std::strcmp(procName, "eglSwapBuffers") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&eglSwapBuffers);
+        }
+        return real_eglGetProcAddress ? real_eglGetProcAddress(procName) : nullptr;
+    } catch (...) {
+        return real_eglGetProcAddress ? real_eglGetProcAddress(procName) : nullptr;
     }
-    return real_eglGetProcAddress ? real_eglGetProcAddress(procName) : nullptr;
 }
 
 } // extern "C"

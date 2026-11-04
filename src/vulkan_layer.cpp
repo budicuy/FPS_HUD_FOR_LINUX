@@ -1197,7 +1197,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     std::lock_guard<std::mutex> render_lock(sd->mutex);
     FrameResources& frame = sd->frames[image_idx];
 
-    dd->WaitForFences(dd->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
+    // Bounded fence wait (2 seconds) to guarantee the game's render thread never deadlocks
+    VkResult wait_res = dd->WaitForFences(dd->device, 1, &frame.fence, VK_TRUE, 2000000000ULL);
+    if (wait_res != VK_SUCCESS) {
+        return dd->QueuePresentKHR(queue, pPresentInfo);
+    }
     dd->ResetFences(dd->device, 1, &frame.fence);
     dd->ResetCommandBuffer(frame.command_buffer, 0);
 
@@ -1379,6 +1383,17 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
         modified_present.pWaitSemaphores = &frame.semaphore;
         pres_res = dd->QueuePresentKHR(queue, &modified_present);
     } else {
+        // QueueSubmit failed: frame.fence was reset and remains unsignaled.
+        // Submit an empty batch or recreate in signaled state so future frames do not deadlock
+        VkSubmitInfo empty_sub{};
+        empty_sub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        if (dd->QueueSubmit(target_queue, 1, &empty_sub, frame.fence) != VK_SUCCESS) {
+            dd->DestroyFence(dd->device, frame.fence, nullptr);
+            VkFenceCreateInfo fence_info{};
+            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            dd->CreateFence(dd->device, &fence_info, nullptr, &frame.fence);
+        }
         pres_res = dd->QueuePresentKHR(queue, pPresentInfo);
     }
 
@@ -1396,66 +1411,78 @@ extern "C" {
 
 __attribute__((visibility("default")))
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char* pName) {
-    if (!pName) return nullptr;
-    if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
-    if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
-    if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
-    if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
-    if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
-    if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
-    if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
+    try {
+        if (!pName) return nullptr;
+        if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
+        if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
+        if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
+        if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
+        if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
+        if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+        if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 
-    if (!device) return nullptr;
+        if (!device) return nullptr;
 
-    DeviceData* dd = find_device_data(get_dispatch_key(device));
-    if (dd && dd->GetDeviceProcAddr) {
-        return dd->GetDeviceProcAddr(device, pName);
+        DeviceData* dd = find_device_data(get_dispatch_key(device));
+        if (dd && dd->GetDeviceProcAddr) {
+            return dd->GetDeviceProcAddr(device, pName);
+        }
+        return nullptr;
+    } catch (...) {
+        return nullptr;
     }
-    return nullptr;
 }
 
 __attribute__((visibility("default")))
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
-    if (!pName) return nullptr;
-    if (std::strcmp(pName, "vkGetInstanceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetInstanceProcAddr);
-    if (std::strcmp(pName, "vkCreateInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateInstance);
-    if (std::strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyInstance);
-    if (std::strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDevices);
-    if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
-    if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroupsKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
-    if (std::strcmp(pName, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateDevice);
-    if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
-    if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
-    if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
-    if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
-    if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
-    if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
-    if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
+    try {
+        if (!pName) return nullptr;
+        if (std::strcmp(pName, "vkGetInstanceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetInstanceProcAddr);
+        if (std::strcmp(pName, "vkCreateInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateInstance);
+        if (std::strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyInstance);
+        if (std::strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDevices);
+        if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
+        if (std::strcmp(pName, "vkEnumeratePhysicalDeviceGroupsKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_EnumeratePhysicalDeviceGroups);
+        if (std::strcmp(pName, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateDevice);
+        if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&vkGetDeviceProcAddr);
+        if (std::strcmp(pName, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroyDevice);
+        if (std::strcmp(pName, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue);
+        if (std::strcmp(pName, "vkGetDeviceQueue2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_GetDeviceQueue2);
+        if (std::strcmp(pName, "vkCreateSwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
+        if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+        if (std::strcmp(pName, "vkQueuePresentKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 
-    if (!instance) return nullptr;
+        if (!instance) return nullptr;
 
-    InstanceData* id = find_instance_data(get_dispatch_key(instance));
-    if (id && id->GetInstanceProcAddr) {
-        return id->GetInstanceProcAddr(instance, pName);
+        InstanceData* id = find_instance_data(get_dispatch_key(instance));
+        if (id && id->GetInstanceProcAddr) {
+            return id->GetInstanceProcAddr(instance, pName);
+        }
+        return nullptr;
+    } catch (...) {
+        return nullptr;
     }
-    return nullptr;
 }
 
 __attribute__((visibility("default")))
 VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
-    if (!pVersionStruct || pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT) {
+    try {
+        if (!pVersionStruct || pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+
+        if (pVersionStruct->loaderLayerInterfaceVersion > 2) {
+            pVersionStruct->loaderLayerInterfaceVersion = 2;
+        }
+
+        pVersionStruct->pfnGetInstanceProcAddr = &vkGetInstanceProcAddr;
+        pVersionStruct->pfnGetDeviceProcAddr = &vkGetDeviceProcAddr;
+        pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
+
+        return VK_SUCCESS;
+    } catch (...) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-
-    if (pVersionStruct->loaderLayerInterfaceVersion > 2) {
-        pVersionStruct->loaderLayerInterfaceVersion = 2;
-    }
-
-    pVersionStruct->pfnGetInstanceProcAddr = &vkGetInstanceProcAddr;
-    pVersionStruct->pfnGetDeviceProcAddr = &vkGetDeviceProcAddr;
-    pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
-
-    return VK_SUCCESS;
 }
 
 } // extern "C"

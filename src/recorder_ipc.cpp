@@ -75,7 +75,6 @@ RecorderController& RecorderController::instance() {
 }
 
 RecorderController::RecorderController() {
-    signal(SIGPIPE, SIG_IGN);
     socket_path_ = "/tmp/fpshud_rec_" + std::to_string(getpid()) + ".sock";
     shm_path_ = "/dev/shm/fpshud_rec_shm_" + std::to_string(getpid());
 }
