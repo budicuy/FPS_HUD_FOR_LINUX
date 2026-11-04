@@ -80,6 +80,44 @@ bool read_sysfs_buf(const char* path, char* buf, size_t buf_size) noexcept {
   return true;
 }
 
+// Parses sysfs CPU range string (e.g. "0-7,16-23") into bitmask and returns count of CPUs.
+static int parse_cpu_list_mask(const char* str, std::bitset<512>& mask) noexcept {
+  mask.reset();
+  if (!str) return 0;
+  int count = 0;
+  const char* p = str;
+  while (*p) {
+    while (*p && (*p == ' ' || *p == ',' || *p == '\n' || *p == '\r')) ++p;
+    if (!*p) break;
+
+    char* end = nullptr;
+    long start_val = std::strtol(p, &end, 10);
+    if (end == p) break;
+    p = end;
+
+    long end_val = start_val;
+    if (*p == '-') {
+      ++p;
+      end_val = std::strtol(p, &end, 10);
+      if (end == p)
+        end_val = start_val;
+      else
+        p = end;
+    }
+
+    if (start_val >= 0 && end_val >= start_val) {
+      long max_limit = std::min(end_val, 511L);
+      for (long i = start_val; i <= max_limit; ++i) {
+        if (!mask.test(static_cast<size_t>(i))) {
+          mask.set(static_cast<size_t>(i));
+          ++count;
+        }
+      }
+    }
+  }
+  return count;
+}
+
 // Shortens verbose CPU/GPU marketing strings so they fit cleanly in the GUI header
 void clean_hardware_name(const char* raw, char* out, size_t out_size) noexcept {
   if (!raw || !*raw || out_size == 0) return;
@@ -507,6 +545,33 @@ void TelemetryCollector::init_cpu_sensors() {
       }
       break;
     }
+  }
+
+  // 4. Discover Intel Hybrid CPU PMU topology (/sys/devices/cpu_core & /sys/devices/cpu_atom)
+  hybrid_cpu_ = false;
+  p_core_count_ = 0;
+  e_core_count_ = 0;
+  p_core_mask_.reset();
+  e_core_mask_.reset();
+
+  std::string p_core_path = root_prefix_ + "/sys/devices/cpu_core/cpus";
+  std::string e_core_path = root_prefix_ + "/sys/devices/cpu_atom/cpus";
+  char p_buf[256];
+  char e_buf[256];
+  if (read_sysfs_buf(p_core_path.c_str(), p_buf, sizeof(p_buf)) &&
+      read_sysfs_buf(e_core_path.c_str(), e_buf, sizeof(e_buf))) {
+    p_core_count_ = parse_cpu_list_mask(p_buf, p_core_mask_);
+    e_core_count_ = parse_cpu_list_mask(e_buf, e_core_mask_);
+    if (p_core_count_ > 0 && e_core_count_ > 0) {
+      hybrid_cpu_ = true;
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.hybrid_cpu = hybrid_cpu_;
+    hw_data_.cpu_p_core_count = p_core_count_;
+    hw_data_.cpu_e_core_count = e_core_count_;
   }
 }
 
@@ -1497,29 +1562,125 @@ void TelemetryCollector::poll_battery() {
 }
 
 void TelemetryCollector::poll_cpu_load() {
-  char buf[256];
   std::string stat_path = root_prefix_ + "/proc/stat";
-  if (!read_sysfs_buf(stat_path.c_str(), buf, sizeof(buf))) return;
 
-  uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
-  if (std::sscanf(buf, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle, &iowait,
-                  &irq, &softirq, &steal) < 4) {
+  if (!hybrid_cpu_) {
+    char buf[256];
+    if (!read_sysfs_buf(stat_path.c_str(), buf, sizeof(buf))) return;
+
+    uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
+    if (std::sscanf(buf, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
+                    &iowait, &irq, &softirq, &steal) < 4) {
+      return;
+    }
+
+    uint64_t idle_all = idle + iowait;
+    uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
+
+    if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
+      uint64_t total_d = total - prev_cpu_total_;
+      uint64_t idle_d = idle_all - prev_cpu_idle_;
+      float usage = 100.0f * static_cast<float>(total_d - idle_d) / static_cast<float>(total_d);
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      hw_data_.cpu_load_pct = usage;
+    }
+
+    prev_cpu_total_ = total;
+    prev_cpu_idle_ = idle_all;
     return;
   }
 
-  uint64_t idle_all = idle + iowait;
-  uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
+  // Hybrid CPU: parse /proc/stat lines to break down P-Core and E-Core cluster loads
+  int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  char buf[16384];
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) return;
+  buf[n] = '\0';
 
-  if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
-    uint64_t total_d = total - prev_cpu_total_;
-    uint64_t idle_d = idle_all - prev_cpu_idle_;
-    float usage = 100.0f * static_cast<float>(total_d - idle_d) / static_cast<float>(total_d);
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.cpu_load_pct = usage;
+  uint64_t p_busy_sum = 0, p_total_sum = 0;
+  uint64_t e_busy_sum = 0, e_total_sum = 0;
+
+  const char* line = buf;
+  while (*line) {
+    const char* next_line = std::strchr(line, '\n');
+
+    if (line[0] == 'c' && line[1] == 'p' && line[2] == 'u') {
+      if (line[3] == ' ') {
+        // Overall CPU line
+        uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
+                 steal = 0;
+        if (std::sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
+                        &iowait, &irq, &softirq, &steal) >= 4) {
+          uint64_t idle_all = idle + iowait;
+          uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
+          if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
+            uint64_t total_d = total - prev_cpu_total_;
+            uint64_t idle_d = idle_all - prev_cpu_idle_;
+            float usage =
+                100.0f * static_cast<float>(total_d - idle_d) / static_cast<float>(total_d);
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            hw_data_.cpu_load_pct = usage;
+          }
+          prev_cpu_total_ = total;
+          prev_cpu_idle_ = idle_all;
+        }
+      } else if (line[3] >= '0' && line[3] <= '9') {
+        // Per-core line: cpu<N>
+        char* endp = nullptr;
+        long cpu_idx = std::strtol(line + 3, &endp, 10);
+        if (endp && endp != line + 3 && cpu_idx >= 0 && cpu_idx < 512) {
+          uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
+                   steal = 0;
+          if (std::sscanf(endp, "%lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
+                          &iowait, &irq, &softirq, &steal) >= 4) {
+            uint64_t idle_all = idle + iowait;
+            uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
+            uint64_t busy = (total > idle_all) ? (total - idle_all) : 0;
+            if (p_core_mask_.test(static_cast<size_t>(cpu_idx))) {
+              p_total_sum += total;
+              p_busy_sum += busy;
+            } else if (e_core_mask_.test(static_cast<size_t>(cpu_idx))) {
+              e_total_sum += total;
+              e_busy_sum += busy;
+            }
+          }
+        }
+      }
+    }
+
+    if (!next_line) break;
+    line = next_line + 1;
   }
 
-  prev_cpu_total_ = total;
-  prev_cpu_idle_ = idle_all;
+  // Calculate P-Core load delta
+  float p_load = 0.0f;
+  if (prev_p_core_total_ != 0 && p_total_sum > prev_p_core_total_) {
+    uint64_t tot_d = p_total_sum - prev_p_core_total_;
+    uint64_t busy_d = (p_busy_sum > prev_p_core_busy_) ? (p_busy_sum - prev_p_core_busy_) : 0;
+    p_load =
+        std::clamp(100.0f * static_cast<float>(busy_d) / static_cast<float>(tot_d), 0.0f, 100.0f);
+  }
+  prev_p_core_total_ = p_total_sum;
+  prev_p_core_busy_ = p_busy_sum;
+
+  // Calculate E-Core load delta
+  float e_load = 0.0f;
+  if (prev_e_core_total_ != 0 && e_total_sum > prev_e_core_total_) {
+    uint64_t tot_d = e_total_sum - prev_e_core_total_;
+    uint64_t busy_d = (e_busy_sum > prev_e_core_busy_) ? (e_busy_sum - prev_e_core_busy_) : 0;
+    e_load =
+        std::clamp(100.0f * static_cast<float>(busy_d) / static_cast<float>(tot_d), 0.0f, 100.0f);
+  }
+  prev_e_core_total_ = e_total_sum;
+  prev_e_core_busy_ = e_busy_sum;
+
+  if (p_total_sum > 0 || e_total_sum > 0) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.cpu_p_core_load_pct = p_load;
+    hw_data_.cpu_e_core_load_pct = e_load;
+  }
 }
 
 void TelemetryCollector::poll_cpu_clock() {

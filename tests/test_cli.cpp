@@ -2338,6 +2338,60 @@ void run_all_devices_and_features_suite() {
                "Parsed BAT0 82% 16.5W discharging and confirmed desktop PC auto-disable");
   }
 
+  // ------------------------------------------------------------------------
+  // PROFILE 9.4: Intel Hybrid CPU Topology (P-Core & E-Core Breakdown)
+  // ------------------------------------------------------------------------
+  {
+    fs::path hybrid_base = "/tmp/fpshud_mock_hybrid_" + std::to_string(::getpid());
+    fs::create_directories(hybrid_base / "sys/devices/cpu_core", ec);
+    fs::create_directories(hybrid_base / "sys/devices/cpu_atom", ec);
+    fs::create_directories(hybrid_base / "proc", ec);
+
+    // Mock Intel i7-13700K: 8 P-Cores (16 threads: 0-7, 16-23) + 8 E-Cores (8 threads: 8-15)
+    write_mock_file(hybrid_base / "proc/cpuinfo",
+                    "processor\t: 0\nmodel name\t: 13th Gen Intel(R) Core(TM) i7-13700K\n");
+    write_mock_file(hybrid_base / "sys/devices/cpu_core/cpus", "0-7,16-23\n");
+    write_mock_file(hybrid_base / "sys/devices/cpu_atom/cpus", "8-15\n");
+
+    // Baseline /proc/stat
+    std::string stat_initial = "cpu  24000 0 0 216000 0 0 0 0 0 0\n";
+    for (int i = 0; i < 24; ++i) {
+      stat_initial += "cpu" + std::to_string(i) + " 200 0 0 800 0 0 0 0 0 0\n";
+    }
+    write_mock_file(hybrid_base / "proc/stat", stat_initial);
+
+    TelemetryCollector hybrid_collector(hybrid_base.string(), true);
+    hybrid_collector.poll_once_sync();  // Baseline
+
+    // Next tick progression:
+    // P-Cores: busy +600, idle +400 (total +1000) -> 60% load
+    // E-Cores: busy +250, idle +750 (total +1000) -> 25% load
+    std::string stat_next = "cpu  35600 0 0 228400 0 0 0 0 0 0\n";
+    for (int i = 0; i < 24; ++i) {
+      bool is_p = (i < 8 || i >= 16);
+      if (is_p) {
+        stat_next += "cpu" + std::to_string(i) + " 800 0 0 1200 0 0 0 0 0 0\n";
+      } else {
+        stat_next += "cpu" + std::to_string(i) + " 450 0 0 1550 0 0 0 0 0 0\n";
+      }
+    }
+    write_mock_file(hybrid_base / "proc/stat", stat_next);
+    hybrid_collector.poll_once_sync();  // Delta poll
+
+    auto hybrid_snap = hybrid_collector.get_snapshot();
+    fs::remove_all(hybrid_base, ec);
+
+    bool p_count_ok = (hybrid_snap.cpu_p_core_count == 16);
+    bool e_count_ok = (hybrid_snap.cpu_e_core_count == 8);
+    bool hybrid_flag_ok = hybrid_snap.hybrid_cpu;
+    bool p_load_ok = std::fabs(hybrid_snap.cpu_p_core_load_pct - 60.0f) < 1.0f;
+    bool e_load_ok = std::fabs(hybrid_snap.cpu_e_core_load_pct - 25.0f) < 1.0f;
+
+    check_cond(hybrid_flag_ok && p_count_ok && e_count_ok && p_load_ok && e_load_ok,
+               "PROFILE 9.4: Intel Hybrid CPU Topology (P-Core & E-Core)",
+               "Parsed 16 P-threads (60% load) and 8 E-threads (25% load) from sysfs PMU topology");
+  }
+
   fs::remove_all(base, ec);
 
   // --------------------------------------------------------------------

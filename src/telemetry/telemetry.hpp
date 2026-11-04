@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -254,6 +255,17 @@ private:
   std::string battery_current_ua_path_;
   std::string battery_voltage_uv_path_;
   bool battery_discovered_ = false;
+
+  // Intel Hybrid P-Core vs E-Core CPU discovery & delta tracking
+  bool hybrid_cpu_ = false;
+  int p_core_count_ = 0;
+  int e_core_count_ = 0;
+  std::bitset<512> p_core_mask_{};
+  std::bitset<512> e_core_mask_{};
+  uint64_t prev_p_core_total_ = 0;
+  uint64_t prev_p_core_busy_ = 0;
+  uint64_t prev_e_core_total_ = 0;
+  uint64_t prev_e_core_busy_ = 0;
 
   // Previous counters for delta calculation
   uint64_t prev_cpu_total_ = 0;
