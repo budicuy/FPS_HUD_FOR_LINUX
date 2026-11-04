@@ -362,3 +362,45 @@ if(CLANG_TIDY_EXE)
     )
     message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
 endif()
+
+# Automated Code Formatting with clang-format (Google Style)
+find_program(CLANG_FORMAT_EXE NAMES clang-format clang-format-23 clang-format-20 clang-format-19 clang-format-18)
+if(CLANG_FORMAT_EXE)
+    set(FORMAT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/inplace_vec.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
+    )
+
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Auto-formatting FPSHUD C/C++ source code with clang-format (Google Style)..."
+        VERBATIM
+    )
+
+    add_custom_target(format-check
+        COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror ${FORMAT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking FPSHUD code format compliance with clang-format (Google Style)..."
+        VERBATIM
+    )
+    message(STATUS "Code Formatter: clang-format targets AVAILABLE ('ninja format', 'ninja format-check')")
+endif()
