@@ -2594,15 +2594,18 @@ void run_all_devices_and_features_suite() {
   size_t total_shm_needed = sizeof(ShmFrameHeader) + (static_cast<size_t>(test_hdr.slot_size) * 3);
 
   // Call runtime RecorderController methods with edge-case payloads
+  uint64_t frames_initial = RecorderController::instance().get_recorded_frames();
   RecorderController::instance().submit_frame(nullptr, 0, 0, 0, false);  // null + zero dim
   std::vector<uint8_t> dummy_pixel(64, 0xFF);
   RecorderController::instance().submit_frame(dummy_pixel.data(), 4, 4, 0,
                                               false);  // inactive recording
   RecorderController::instance().on_frame_present(1920, 1080, -1);
+  bool present_no_double_inc =
+      (RecorderController::instance().get_recorded_frames() == frames_initial);
 
   bool bounds_ok = (test_hdr.magic == kShmFrameMagic &&
                     test_hdr.offset[2] + test_hdr.slot_size == total_shm_needed &&
-                    kRecorderIpcMagic == 0x46505352);
+                    kRecorderIpcMagic == 0x46505352 && present_no_double_inc);
   check_cond(bounds_ok, "4. IPC Buffer Bounds & Runtime Guard",
              "Triple-buffered SHM offset math & RecorderController runtime guards verified");
 

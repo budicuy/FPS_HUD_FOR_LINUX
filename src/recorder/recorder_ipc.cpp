@@ -232,10 +232,11 @@ void RecorderController::stop_recording() {
   }
 
   if (socket_fd_ >= 0) {
-    // Enforce 1.5s socket timeout so the game render thread NEVER freezes
+    // Enforce 5.0s socket timeout so the game render thread NEVER freezes
+    // while accommodating large MP4 FastStart moov atom atom remuxing
     struct timeval tv{};
-    tv.tv_sec = 1;
-    tv.tv_usec = 500000;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
     setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     send_command(RecorderCommand::StopRecord, nullptr, 0);
@@ -629,10 +630,6 @@ void RecorderController::on_frame_present(uint32_t width, uint32_t height, int d
   (void)width;
   (void)height;
   (void)dmabuf_fd;
-  if (!is_recording_.load(std::memory_order_relaxed)) {
-    return;
-  }
-  recorded_frames_.fetch_add(1, std::memory_order_relaxed);
 }
 
 }  // namespace fpshud
