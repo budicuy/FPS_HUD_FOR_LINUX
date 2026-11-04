@@ -12,6 +12,9 @@ if [ -z "${CXX:-}" ]; then
     elif command -v g++-16 >/dev/null 2>&1; then
         export CXX="g++-16"
         export CC="gcc-16"
+    elif command -v g++-15 >/dev/null 2>&1; then
+        export CXX="g++-15"
+        export CC="gcc-15"
     else
         export CXX="g++"
         export CC="gcc"

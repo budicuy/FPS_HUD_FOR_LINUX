@@ -1562,6 +1562,9 @@ void run_elf_and_layer_abi_suite() {
     bool pkg_decoupled_ok = false;
     bool setup_security_notice_ok = false;
     bool inplace_native_cxx26_ok = false;
+#if defined(__cpp_lib_inplace_vector) && (__cpp_lib_inplace_vector >= 202406L)
+    inplace_native_cxx26_ok = true;
+#endif
 
     fs::path repo_root = find_repo_root();
     if (!repo_root.empty()) {
@@ -1595,16 +1598,11 @@ void run_elf_and_layer_abi_suite() {
           fpshud_in_content.find("Platypus") != std::string::npos && sec6_has_cve) {
         setup_security_notice_ok = true;
       }
-
-#if defined(__cpp_lib_inplace_vector) && (__cpp_lib_inplace_vector >= 202406L)
-      inplace_native_cxx26_ok = true;
-#endif
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;
       pkg_decoupled_ok = true;
       setup_security_notice_ok = true;
-      inplace_native_cxx26_ok = true;
     }
 
     // D. ELF32 Tolerance & LD_PRELOAD wrapper check

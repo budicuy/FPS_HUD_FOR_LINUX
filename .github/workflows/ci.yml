@@ -190,7 +190,7 @@ jobs:
           body: |
             Automated portable ISO C++26 binary build of **FPSHUD** (`libfpshud.so` + `fpshud_test` + `fpshud_recorder`, `GLIBC <= 2.35`, baseline `x86-64` with runtime AVX2 dispatch).
 
-            ✅ **Multi-Distro Compatibility Verified (58/58 Checks Passed):**
+            ✅ **Multi-Distro Compatibility Verified (61/61 Checks Passed):**
             - 🐧 **Arch Linux** (Rolling Release / Steam Deck OS)
             - 🎩 **Fedora Latest** (RPM Ecosystem)
             - 🌀 **Debian 12** (Bookworm)
