@@ -597,23 +597,40 @@ echo "  • In-game GUI menu & hotkeys on Wayland compositors"
 echo ""
 echo "Sudo access is STRONGLY RECOMMENDED to enable these sensors"
 echo "via lightweight, standard system udev rules."
+echo ""
+echo "Perhatian Keamanan / Security Notice:"
+echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
+echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
+echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat input"
+echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
 echo "=================================================================="
 
-if [ "$EUID" -eq 0 ]; then
-    HAVE_SUDO=1
-    SUDO_CMD=""
-elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
-    if sudo -n true 2>/dev/null; then
+USER_CONFIRM=1
+if [ -t 0 ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
+    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm
+    case "$confirm" in
+        [yY][eE][sS]|[yY]) ;;
+        *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
+    esac
+fi
+
+if [ "$USER_CONFIRM" -eq 1 ]; then
+    if [ "$EUID" -eq 0 ]; then
         HAVE_SUDO=1
-        SUDO_CMD="sudo"
-    elif [ -e /dev/tty ]; then
-        echo ""
-        echo "[*] Requesting sudo permission to configure hardware sensors permanently..."
-        if sudo </dev/tty -v; then
+        SUDO_CMD=""
+    elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
+        if sudo -n true 2>/dev/null; then
             HAVE_SUDO=1
             SUDO_CMD="sudo"
-        else
-            echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
+        elif [ -e /dev/tty ]; then
+            echo ""
+            echo "[*] Requesting sudo permission to configure hardware sensors permanently..."
+            if sudo </dev/tty -v; then
+                HAVE_SUDO=1
+                SUDO_CMD="sudo"
+            else
+                echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
+            fi
         fi
     fi
 fi

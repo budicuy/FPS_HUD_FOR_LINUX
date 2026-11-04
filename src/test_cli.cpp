@@ -1388,8 +1388,13 @@ void run_elf_and_layer_abi_suite() {
 
         bool setup_security_notice_ok = false;
         std::string fpshud_in_content = read_text_file(repo_root / "scripts" / "fpshud.in");
+        std::string install_sh_content = read_text_file(repo_root / "install.sh");
+        size_t sec6_pos = install_sh_content.find("# 6. Hardware Telemetry Permissions");
+        bool sec6_has_cve = (sec6_pos != std::string::npos &&
+                             install_sh_content.substr(sec6_pos).find("CVE-2020-8694") != std::string::npos);
         if (fpshud_in_content.find("CVE-2020-8694") != std::string::npos &&
-            fpshud_in_content.find("Platypus") != std::string::npos) {
+            fpshud_in_content.find("Platypus") != std::string::npos &&
+            sec6_has_cve) {
             setup_security_notice_ok = true;
         }
 
