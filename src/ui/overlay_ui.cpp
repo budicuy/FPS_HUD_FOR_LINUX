@@ -70,6 +70,7 @@ GroupCategory get_metric_category(MetricType m) noexcept {
     case MetricType::CpuClock:
     case MetricType::CpuWatt:
     case MetricType::CpuTemp:
+    case MetricType::CpuHybrid:
       return GroupCategory::CPU;
     case MetricType::Ram:
     case MetricType::GameRam:
@@ -79,6 +80,7 @@ GroupCategory get_metric_category(MetricType m) noexcept {
       return GroupCategory::RAM;
     case MetricType::EngineApi:
     case MetricType::SystemClock:
+    case MetricType::Battery:
       return GroupCategory::SYS;
   }
   return GroupCategory::FPS;
@@ -231,6 +233,13 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
                     "\xC2\xB0"
                     "C");  // UTF-8 °C
       return;
+    case MetricType::CpuHybrid:
+      if (!d.hybrid_cpu) return;
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "P/E:");
+      std::snprintf(sv.number, sizeof(sv.number), "%.0f/%.0f", d.cpu_p_core_load_pct,
+                    d.cpu_e_core_load_pct);
+      std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+      return;
     case MetricType::Ram:
       std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.ram_used_gb);
       std::snprintf(sv.unit, sizeof(sv.unit), "GB %.0f%%", d.ram_used_pct);
@@ -273,6 +282,17 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
     case MetricType::SystemClock:
       std::snprintf(sv.number, sizeof(sv.number), "%s", d.local_time_str);
       return;
+    case MetricType::Battery:
+      if (!d.battery_available) return;
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "BAT:");
+      std::snprintf(sv.number, sizeof(sv.number), "%.0f", d.battery_pct);
+      if (d.battery_power_w > 0.05f) {
+        std::snprintf(sv.unit, sizeof(sv.unit), "%% (%.1fW%s)", d.battery_power_w,
+                      d.battery_charging ? "+" : "");
+      } else {
+        std::snprintf(sv.unit, sizeof(sv.unit), "%%%s", d.battery_charging ? "(+)" : "");
+      }
+      return;
   }
 }
 
@@ -280,6 +300,8 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
                                     uint8_t alpha) noexcept {
   MetricGroupList list{};
   for (MetricType m : cfg.metrics) {
+    if (m == MetricType::Battery && !data.battery_available) continue;
+    if (m == MetricType::CpuHybrid && !data.hybrid_cpu) continue;
     GroupCategory cat = get_metric_category(m);
     MetricGroup* target = nullptr;
     for (auto& item : list.items) {

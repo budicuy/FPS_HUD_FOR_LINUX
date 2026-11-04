@@ -1817,8 +1817,28 @@ void run_all_devices_and_features_suite() {
     apply_preset_standard(test_cfg);
     bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
     apply_preset_advance(test_cfg);
-    bool adv_ok =
-        (test_cfg.metrics.size() == kTotalMetricCount && test_cfg.active_preset == "advance");
+    bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 25 &&
+                   test_cfg.active_preset == "advance");
+
+    // Verify MetricType::Battery and MetricType::CpuHybrid
+    test_cfg.set_metric(MetricType::Battery, true);
+    test_cfg.set_metric(MetricType::CpuHybrid, true);
+    bool new_metrics_ok =
+        test_cfg.has_metric(MetricType::Battery) && test_cfg.has_metric(MetricType::CpuHybrid);
+
+    TelemetryData td_check;
+    td_check.battery_available = true;
+    td_check.battery_pct = 75.5f;
+    td_check.battery_power_w = 12.3f;
+    td_check.battery_charging = true;
+    std::strncpy(td_check.battery_status, "Charging", sizeof(td_check.battery_status));
+    td_check.hybrid_cpu = true;
+    td_check.cpu_p_core_load_pct = 45.0f;
+    td_check.cpu_e_core_load_pct = 20.0f;
+    td_check.cpu_p_core_count = 8;
+    td_check.cpu_e_core_count = 8;
+    bool td_ok = (td_check.battery_available && td_check.battery_pct == 75.5f &&
+                  td_check.hybrid_cpu && td_check.cpu_p_core_count == 8);
 
     test_cfg.gui_scale = 1.35f;
     save_ini_file("/tmp/test_gui_scale.ini", test_cfg, "Test Scale");
@@ -1826,9 +1846,9 @@ void run_all_devices_and_features_suite() {
     load_ini_file("/tmp/test_gui_scale.ini", loaded_cfg);
     bool scale_ok = std::fabs(loaded_cfg.gui_scale - 1.35f) < 0.01f;
 
-    check_cond(min_ok && std_ok && adv_ok && scale_ok,
-               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=23, Scale=1.35x)",
-               "All 3 built-in presets, 23 metrics & GUI scale INI persistence verified");
+    check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok,
+               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=25, Scale=1.35x)",
+               "All 3 built-in presets, 25 metrics & GUI scale INI persistence verified");
   }
 
   {

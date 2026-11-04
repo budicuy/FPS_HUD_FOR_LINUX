@@ -13,7 +13,7 @@
 
 namespace fpshud {
 
-enum class GpuBackendType { None = 0, NvidiaNvml, AmdSysfs, IntelSysfs };
+enum class GpuBackendType { None = 0, NvidiaNvml, AmdSysfs, IntelSysfs, IntelLevelZero };
 
 struct BenchmarkSummary {
   bool has_result = false;
@@ -72,6 +72,13 @@ struct TelemetryData {
   int cpu_temp_c = 0;
   float cpu_power_w = 0.0f;
 
+  // Intel Hybrid P-Core vs E-Core CPU metrics
+  bool hybrid_cpu = false;
+  float cpu_p_core_load_pct = 0.0f;
+  float cpu_e_core_load_pct = 0.0f;
+  int cpu_p_core_count = 0;
+  int cpu_e_core_count = 0;
+
   float ram_used_gb = 0.0f;
   float ram_total_gb = 0.0f;
   float ram_used_pct = 0.0f;
@@ -85,6 +92,13 @@ struct TelemetryData {
   int ram_speed_mts = 0;      // Effective RAM speed in MT/s (0 = unknown / permission missing)
   int ram_modules = 0;        // Populated DIMM / memory device count
   char ram_type[12] = "RAM";  // DDR4, DDR5, LPDDR5, ...
+
+  // Laptop & Handheld battery / power sensors
+  bool battery_available = false;
+  float battery_pct = 0.0f;
+  float battery_power_w = 0.0f;
+  bool battery_charging = false;
+  char battery_status[16] = "Discharging";
 
   const char* render_api = "VULKAN";
   char cpu_name[48] = "CPU";

@@ -31,7 +31,9 @@ enum class MetricType {
   MemPressure,  // Linux PSI memory pressure (stutter indicator)
   RamSpeed,     // RAM type + speed (MT/s)
   EngineApi,
-  SystemClock
+  SystemClock,
+  Battery,   // Laptop / Handheld battery % & discharge power (W)
+  CpuHybrid  // Intel Hybrid P-Core vs E-Core load breakdown
 };
 
 enum class LayoutPosition {
@@ -65,7 +67,7 @@ enum class FontFamily {
 constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
-constexpr std::size_t kTotalMetricCount = 23;
+constexpr std::size_t kTotalMetricCount = 25;
 constexpr std::size_t kMaxMetricsCapacity = 32;
 static_assert(kTotalMetricCount <= kMaxMetricsCapacity,
               "kMaxMetricsCapacity must accommodate all MetricType sensors");

@@ -20,14 +20,13 @@ namespace fpshud {
 namespace {
 
 constexpr MetricType kCanonicalMetricsOrder[] = {
-    MetricType::FPS,       MetricType::FpsAvg,      MetricType::Fps1Low,
-    MetricType::Fps01Low,  MetricType::FrameTimes,  MetricType::GpuLoad,
-    MetricType::GpuClock,  MetricType::GpuVram,     MetricType::GpuBandwidth,
-    MetricType::GpuTemp,   MetricType::GpuFan,      MetricType::GpuWatt,
-    MetricType::CpuLoad,   MetricType::CpuClock,    MetricType::CpuWatt,
-    MetricType::CpuTemp,   MetricType::Ram,         MetricType::GameRam,
-    MetricType::SwapRam,   MetricType::MemPressure, MetricType::RamSpeed,
-    MetricType::EngineApi, MetricType::SystemClock};
+    MetricType::FPS,          MetricType::FpsAvg,   MetricType::Fps1Low,   MetricType::Fps01Low,
+    MetricType::FrameTimes,   MetricType::GpuLoad,  MetricType::GpuClock,  MetricType::GpuVram,
+    MetricType::GpuBandwidth, MetricType::GpuTemp,  MetricType::GpuFan,    MetricType::GpuWatt,
+    MetricType::CpuLoad,      MetricType::CpuClock, MetricType::CpuWatt,   MetricType::CpuTemp,
+    MetricType::CpuHybrid,    MetricType::Ram,      MetricType::GameRam,   MetricType::SwapRam,
+    MetricType::MemPressure,  MetricType::RamSpeed, MetricType::EngineApi, MetricType::SystemClock,
+    MetricType::Battery};
 static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0]) ==
                   kTotalMetricCount,
               "kTotalMetricCount must match the number of MetricType entries");
@@ -109,6 +108,10 @@ const char* metric_id_key(MetricType m) {
       return "api";
     case MetricType::SystemClock:
       return "clock";
+    case MetricType::Battery:
+      return "battery";
+    case MetricType::CpuHybrid:
+      return "cpuhybrid";
   }
   return "fps";
 }
@@ -552,6 +555,10 @@ const char* metric_name(MetricType m) {
       return "API";
     case MetricType::SystemClock:
       return "CLOCK";
+    case MetricType::Battery:
+      return "BAT";
+    case MetricType::CpuHybrid:
+      return "P/E.LOAD";
   }
   return "UNK";
 }
