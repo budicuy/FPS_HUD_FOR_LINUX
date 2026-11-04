@@ -39,16 +39,16 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 
 ### What features are inside?
 - **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 25 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder & Benchmark Hub).
-- **Hardware-Accelerated Screen Recording (`F7`)**: Built-in zero-stutter video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), prominent 1-click recording, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
+- **Hardware-Accelerated Screen Recording (`F7`)**: Dedicated background video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), prominent 1-click recording, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
 - **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 25 sensors), or save your own **Custom** preset.
 - **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs**, **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
 - **Easy-to-Read Two-Tone Design & Thermal Warnings**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings when your GPU or CPU runs hot.
 - **Accurate 1% & 0.1% Low FPS + CSV Benchmark Recorder (`F9`)**: Measures real frame smoothness over a rolling 3.5-second window (automatically ignoring loading-screen freezes) and lets you record benchmark results directly to a `.csv` file.
 
 ### How does it work?
-1. **Install once** using the 1-line `curl` command above (it places the portable `libfpshud.so` library in `~/.local/lib/fpshud/` and registers the Vulkan layer in your user folder).
+1. **Install once** using the 1-line `curl` command above (or follow the manual install steps).
 2. **Enable in your game** by adding `FPS_HUD=1 %command%` in Steam Launch Options (or running `FPS_HUD=1 your_game` in terminal).
-3. **Zero FPS drop while gaming**: As your game renders each frame, FPSHUD draws the overlay on top of the final image before it hits your monitor. Meanwhile, a separate background thread quietly reads your CPU/GPU temperatures and power usage once every 0.5 seconds—so the overlay never slows down your game.
+3. **Negligible frame pacing impact**: As your game renders each frame, FPSHUD draws the overlay on top of the final image before presentation in less than 8 microseconds. Meanwhile, an asynchronous background thread quietly reads CPU/GPU temperatures and power usage once every 0.5 seconds—preventing frame stutter or render thread lock contention.
 
 ---
 
@@ -91,8 +91,8 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and automatic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**).
 - **Mini Frametime Graph & CSV Benchmark Logging (`F9`)**:
   - Optional live frametime waveform graph right on the HUD, plus 1-key CSV benchmarking (`~/Documents/fpshud_benchmark.csv`) that logs Avg FPS, 1% Low, 0.1% Low, Min/Max FPS, and peak GPU/CPU temperatures and wattage.
-- **Extreme LLVM/Clang 23 Optimization & Memory Hardening**:
-  - Compiled with Clang 23.1.4, LLD linker, ThinLTO (`-flto=thin`), and `-O3` producing an ultra-compact **1.3 MB** library with zero runtime overhead, verified by AddressSanitizer and UndefinedBehaviorSanitizer.
+- **Optimized LLVM/Clang Toolchain & Memory Hardening**:
+  - Compiled with modern Clang, LLD linker, ThinLTO (`-flto=thin`), and `-O3` producing a compact **1.3 MB** library with memory safety verified by AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ---
 
@@ -335,6 +335,7 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 > **Total Resource Consumption Range (Summary):**
 > - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds just **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
 > - **Memory (RAM) Footprint Range:** **~4.5 MB** internal data & font atlas footprint (**~17 MB** total isolated process VmRSS), with **0 bytes/frame** heap allocation during active gameplay.
+> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 61-check automated simulation test suite (`./build/fpshud_test 1`). Community benchmark contributions across AMD and Intel Arc setups are warmly welcomed!
 
 ---
 

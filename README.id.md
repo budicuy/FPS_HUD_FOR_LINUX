@@ -39,16 +39,16 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 
 ### Fitur apa saja yang ada di dalamnya?
 - **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 25 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
-- **Perekam Layar Hardware Bebas Lag (`F7`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang tidak membebani game engine, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), tombol rekam 1-klik, dan perekaman audio (Game, Mic, atau Campuran).
+- **Perekam Layar Hardware Ringan (`F7`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang berjalan di luar proses game, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), tombol rekam 1-klik, dan perekaman audio (Game, Mic, atau Campuran).
 - **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 25 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
 - **1% Low FPS Akurat & Perekam Benchmark ke CSV (`F9`)**: Menghitung rata-rata frame terendah secara akurat (otomatis mengabaikan jeda saat layar *loading*) dan bisa merekam laporan performa ke file `.csv` kapan saja dengan menekan `F9`.
 
 ### Bagaimana cara kerjanya?
-1. **Pasang sekali lewat 1 perintah `curl`**: Script installer otomatis mengunduh file `libfpshud.so` siap pakai ke `~/.local/lib/fpshud/` dan mendaftarkannya ke sistem Vulkan/OpenGL pengguna.
+1. **Pasang sekali lewat 1 perintah `curl`**: Script installer otomatis mengunduh file `libfpshud.so` siap pakai ke `~/.local/lib/fpshud/` dan mendaftarkannya ke sistem Vulkan/OpenGL pengguna (atau ikuti langkah instalasi manual).
 2. **Aktifkan di game**: Cukup tambahkan `FPS_HUD=1 %command%` pada Launch Options game di Steam (atau Lutris/Heroic).
-3. **Tidak bikin FPS game turun**: Saat game menggambar setiap frame ke layar, FPSHUD ikut menempelkan teks informasi tepat sebelum gambar ditampilkan ke monitor. Sementara itu, tugas membaca sensor suhu, kipas, dan Watt dilakukan oleh pekerja terpisah di latar belakang setiap 0,5 detik—sehingga performa game kamu tetap kencang tanpa gangguan.
+3. **Dampak performa sangat minimal**: Saat game merender setiap frame ke layar, FPSHUD menempelkan teks overlay dalam waktu kurang dari 8 mikrodetik sebelum frame dikirim ke monitor. Sementara itu, tugas membaca sensor suhu, kipas, dan konsumsi Watt dilakukan secara asinkron di latar belakang setiap 0,5 detik—mencegah stutter atau hambatan pada render thread game.
 
 ---
 
@@ -89,8 +89,8 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
   - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
-- **Optimasi Ekstrem Clang 23 & Arsitektur Zero-Heap C++26**:
-  - Dikompilasi menggunakan Clang 23.1.4, linker LLD, ThinLTO (`-flto=thin`), dan `-O3` menghasilkan biner shared library ramping **1.3 MB** yang zero-overhead dan bebas memory leak/UB (diverifikasi dengan ASan & UBSan).
+- **Optimasi Toolchain LLVM/Clang & Keamanan Memori**:
+  - Dikompilasi menggunakan modern Clang, linker LLD, ThinLTO (`-flto=thin`), dan `-O3` menghasilkan biner shared library ramping **1.3 MB** dengan keamanan memori yang diverifikasi melalui AddressSanitizer & UndefinedBehaviorSanitizer.
 
 ---
 
@@ -333,6 +333,7 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 > **Rentang Total Konsumsi Sumber Daya (Ringkasan):**
 > - **Rentang Penggunaan CPU:** **0,01% – 0,05% dari 1 core CPU** saat bermain game pada 60 FPS (**0,03% – 0,11% @ 144 FPS**); thread telemetri sensor hanya menambah **~0,045% dari 1 core**. Beban terhadap total prosesor multi-core adalah **< 0,01% dari total kapasitas CPU**.
 > - **Rentang Pemakaian Memori (RAM):** **~4,5 MB** memori internal & font atlas (**~17 MB** total VmRSS proses terisolasi), dengan **0 byte/frame** alokasi heap saat gameplay berjalan.
+> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 61-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian komunitas pada berbagai setup hardware AMD dan Intel sangat kami sambut!
 
 ---
 
