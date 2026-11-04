@@ -38,9 +38,9 @@ With traditional Linux overlays, customizing what appears on screen usually mean
 FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architecture (`std::inplace_vector`), Pack Indexing, and SIMD frametime analytics for maximum speed and zero memory allocation overhead during gameplay. It uses **Dear ImGui** to draw both the on-screen HUD and the in-game settings menu, and hooks directly into **Vulkan** (as a standard Vulkan Implicit Layer) and **OpenGL** (`LD_PRELOAD`). Fonts are embedded directly inside the library so text always looks sharp, even inside containerized environments like Steam Linux Runtime and Proton.
 
 ### What features are inside?
-- **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 23 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder & Benchmark Hub).
+- **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 25 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder & Benchmark Hub).
 - **Hardware-Accelerated Screen Recording (`F7`)**: Built-in zero-stutter video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), prominent 1-click recording, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
-- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 23 sensors), or save your own **Custom** preset.
+- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 25 sensors), or save your own **Custom** preset.
 - **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs**, **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
 - **Easy-to-Read Two-Tone Design & Thermal Warnings**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings when your GPU or CPU runs hot.
 - **Accurate 1% & 0.1% Low FPS + CSV Benchmark Recorder (`F9`)**: Measures real frame smoothness over a rolling 3.5-second window (automatically ignoring loading-screen freezes) and lets you record benchmark results directly to a `.csv` file.
@@ -59,7 +59,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 3. [How to Use in Steam, Lutris, Heroic & Terminal](#3-how-to-use-in-steam-lutris-heroic--terminal)
 4. [In-Game GUI Guide & Keyboard Shortcuts](#4-in-game-gui-guide--keyboard-shortcuts)
 5. [Hardware-Accelerated Screen Recording](#5-hardware-accelerated-screen-recording)
-6. [Supported Hardware & All 23 Sensors](#6-supported-hardware--all-23-sensors)
+6. [Supported Hardware & All 25 Sensors](#6-supported-hardware--all-25-sensors)
 7. [Tech Stack & System Architecture](#7-tech-stack--system-architecture)
 8. [Developer Guide (Building from Source, Sanitizers & Testing)](#8-developer-guide-building-from-source-sanitizers--testing)
 9. [Troubleshooting & FAQ](#9-troubleshooting--faq)
@@ -73,7 +73,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - `FPS_HUD=1`: Turns on the HUD overlay, Screen Recorder, and the In-Game GUI Configurator.
   - `FPS_HUD=0` (or unset): Completely disabled with zero background impact.
 - **3-Column Split View In-Game GUI (`FPSHUD Configuration Tool`)**:
-  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Center: 23 Live Hardware Sensors & Quick Filters | Right: Screen Recorder & Benchmark Hub).
+  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Center: 25 Live Hardware Sensors & Quick Filters | Right: Screen Recorder & Benchmark Hub).
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
   - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
 - **Hardware-Accelerated Screen Recording Hub**:
@@ -83,7 +83,9 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 - **Universal Multi-Vendor Hardware Support**:
   - **NVIDIA**: Uses `libnvidia-ml.so.1` (NVML) dynamically.
   - **AMD Radeon & APUs (`amdgpu`)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, and combines shared `GTT` memory on APUs/Steam Deck.
-  - **Intel Arc & Integrated Graphics (`i915` / `xe`)**: Reads Linux DRM & `hwmon` sensors, `lmem_total_bytes`, and Intel RAPL power counters.
+  - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`), Linux DRM & `hwmon` sysfs fallback, and Intel RAPL power counters.
+  - **Intel Hybrid Architecture (P-Core & E-Core)**: Automatic topology discovery for 12th/13th/14th Gen Intel Core and Core Ultra processors via `/sys/devices/cpu_{core,atom}/cpus` with real-time cluster load breakdown.
+  - **Laptop & Handheld Battery (`/sys/class/power_supply`)**: Real-time capacity percentage, discharge/charge wattage, and charging state with automatic desktop PC detection (auto-disabled and grayed out on desktop machines).
   - **Hybrid Gaming Laptops**: Automatically prioritizes the dedicated gaming GPU (`card1`) over the integrated GPU (`card0`) and identifies exact GPU model names via `/usr/share/hwdata/pci.ids`.
 - **High-Contrast Readability & Dynamic Alerts**:
   - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and automatic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**).
@@ -177,7 +179,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
 - **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
-- **`Advance`**: Enables all **23 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 4 `CPU` metrics, all 5 `Memory/RAM` metrics, `Render API`, and `Local Clock`).
+- **`Advance`**: Enables all **25 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 5 `CPU` metrics including `P/E Core Load`, all 5 `Memory/RAM` metrics, `Render API`, `Local Clock`, and `Battery & Power`).
 - **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
 
 ---
@@ -207,7 +209,7 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 
 ---
 
-## 6. Supported Hardware & All 23 Sensors
+## 6. Supported Hardware & All 25 Sensors
 
 ### Hardware Compatibility Matrix
 
@@ -215,12 +217,13 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 | :--- | :--- | :--- |
 | **NVIDIA GPUs** | NVIDIA Proprietary / Open Kernel (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
 | **AMD GPUs & APUs** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
-| **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
-| **Intel CPUs** | Intel Core (All Generations) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
+| **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) with `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
+| **Intel CPUs** | Intel Core & Core Ultra (Hybrid & Standard) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
 | **System Memory** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
+| **Battery & Power** | Standard ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (auto-disabled on Desktop PCs) |
 
-### All 23 Available Sensors
+### All 25 Available Sensors
 
 | # | Sensor Name | Group | What It Shows | Example |
 | :--- | :--- | :--- | :--- | :--- |
@@ -237,16 +240,18 @@ FPSHUD includes a dedicated, lightweight background screen recording daemon (`fp
 | `11` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
 | `12` | **GPU Power** | `GPU` | GPU power draw in Watts | `185 W` |
 | `13` | **CPU Load** | `CPU` | Total CPU utilization across all threads | `42%` |
-| `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
-| `16` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
-| `17` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
-| `18` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
-| `19` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
-| `20` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
-| `21` | **RAM Speed** | `RAM` | Effective memory transfer speed and generation | `DDR5: 6000 MT/s` |
-| `22` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
-| `23` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+| `14` | **P/E Core Load** | `CPU` | Intel Hybrid Core breakdown (P-Core % / E-Core %; auto-disabled on non-hybrid CPUs) | `P/E: 45/20%` |
+| `15` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
+| `16` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
+| `17` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
+| `18` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
+| `19` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
+| `20` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
+| `21` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
+| `22` | **RAM Speed** | `RAM` | Effective memory transfer speed and generation | `DDR5: 6000 MT/s` |
+| `23` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
+| `24` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+| `25` | **Battery & Power** | `SYS` | Battery percentage, power draw (W), and charging state (auto-disabled on Desktop PCs) | `BAT: 82% (16.5W+)` |
 
 ---
 

@@ -38,9 +38,9 @@ Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, me
 FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline storage* (`std::inplace_vector`), Pack Indexing, dan analitik frametime SIMD yang sangat kencang, hemat memori, dan bebas alokasi dinamis saat bermain game. Menggunakan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
 
 ### Fitur apa saja yang ada di dalamnya?
-- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 23 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
+- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 25 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
 - **Perekam Layar Hardware Bebas Lag (`F7`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang tidak membebani game engine, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), tombol rekam 1-klik, dan perekaman audio (Game, Mic, atau Campuran).
-- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 23 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
+- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 25 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
 - **1% Low FPS Akurat & Perekam Benchmark ke CSV (`F9`)**: Menghitung rata-rata frame terendah secara akurat (otomatis mengabaikan jeda saat layar *loading*) dan bisa merekam laporan performa ke file `.csv` kapan saja dengan menekan `F9`.
@@ -59,7 +59,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)
 4. [Panduan Menu In-Game GUI & Tombol Shortcut](#4-panduan-menu-in-game-gui--tombol-shortcut)
 5. [Perekam Layar Hardware](#5-perekam-layar-hardware)
-6. [Dukungan Perangkat Keras & Daftar 23 Sensor](#6-dukungan-perangkat-keras--daftar-23-sensor)
+6. [Dukungan Perangkat Keras & Daftar 25 Sensor](#6-dukungan-perangkat-keras--daftar-25-sensor)
 7. [Tech Stack & Arsitektur Sistem](#7-tech-stack--arsitektur-sistem)
 8. [Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)](#8-panduan-pengembang-build-dari-source-sanitizers--pengujian)
 9. [Troubleshooting & Tanya Jawab (FAQ)](#9-troubleshooting--tanya-jawab-faq)
@@ -73,7 +73,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, dan menu In-Game GUI Configurator.
   - `FPS_HUD=0` (or dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
-  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 23 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
+  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 25 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
 - **Perekam Layar Hardware Zero-Stutter**:
@@ -83,7 +83,9 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 - **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
   - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
   - **AMD Radeon & APU (`amdgpu`)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, serta menggabungkan memori *Shared GTT* pada APU/Steam Deck.
-  - **Intel Arc & Integrated Graphics (`i915` / `xe`)**: Membaca sensor DRM & `hwmon`, `lmem_total_bytes`, serta sensor daya Intel RAPL.
+  - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Backend dinamis Intel Level Zero Sysman (`libze_loader.so.1` via runtime `dlopen`), fallback sensor Linux DRM & `hwmon`, serta sensor daya Intel RAPL.
+  - **Topologi Core Intel Hybrid (P-Core vs E-Core)**: Penguraian otomatis topologi prosesor Intel Core Generasi 12/13/14 dan Core Ultra via `/sys/devices/cpu_{core,atom}/cpus` dengan beban kerja klaster terpisah secara real-time.
+  - **Status Baterai Laptop & Handheld (`/sys/class/power_supply`)**: Persentase kapasitas baterai, daya listrik Watt (discharge/charge), dan indikator charging dengan deteksi otomatis Desktop PC (otomatis di-disabled dan digelapkan pada komputer desktop tanpa baterai).
   - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU diskrit (`card1`) dibanding iGPU (`card0`) serta menampilkan nama model GPU secara akurat lewat database `/usr/share/hwdata/pci.ids`.
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
   - Tersedia opsi grafik gelombang frametime langsung di HUD, serta perekam benchmark CSV (`~/Documents/fpshud_benchmark.csv` atau `~/Dokumen/fpshud_benchmark.csv`) yang mencatat rata-rata FPS, 1% Low, 0.1% Low, serta suhu & daya maksimum GPU/CPU.
@@ -175,7 +177,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 ### 4 Pilihan Preset di Dalam GUI
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
 - **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
-- **`Advance`**: Menampilkan lengkap **23 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 4 sensor `CPU`, 5 sensor `RAM/Memori`, `Render API`, dan `Local Clock`).
+- **`Advance`**: Menampilkan lengkap **25 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 5 sensor `CPU` termasuk `P/E Core Load`, 5 sensor `RAM/Memori`, `Render API`, `Local Clock`, dan `Battery & Power`).
 - **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
 
 ---
@@ -205,7 +207,7 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 
 ---
 
-## 6. Dukungan Perangkat Keras & Daftar 23 Sensor
+## 6. Dukungan Perangkat Keras & Daftar 25 Sensor
 
 ### Matriks Kompatibilitas Perangkat Keras
 
@@ -213,12 +215,13 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 | :--- | :--- | :--- |
 | **GPU NVIDIA** | Driver NVIDIA Proprietary / Open (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
 | **GPU & APU AMD** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
-| **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | `/sys/class/drm/card*` + `hwmon` + `intel-rapl:0:1` + `pci.ids` |
-| **CPU Intel** | Intel Core (Semua Generasi) | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `coretemp`, `intel-rapl` |
+| **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) dengan `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
+| **CPU Intel** | Intel Core & Core Ultra (Hybrid & Standar) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
 | **Memori RAM** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
+| **Baterai & Daya** | Standar ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (otomatis disabled di Desktop PC) |
 
-### Daftar Lengkap 23 Sensor
+### Daftar Lengkap 25 Sensor
 
 | # | Nama Sensor | Grup | Informasi yang Ditampilkan | Contoh di HUD |
 | :--- | :--- | :--- | :--- | :--- |
@@ -235,16 +238,18 @@ FPSHUD dilengkapi dengan daemon perekam layar latar belakang khusus yang sangat 
 | `11` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
 | `12` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
 | `13` | **CPU Load** | `CPU` | Persentase pemakaian total seluruh thread CPU | `42%` |
-| `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
-| `16` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
-| `17` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
-| `18` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
-| `19` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
-| `20` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
-| `21` | **RAM Speed** | `RAM` | Kecepatan transfer efektif & generasi RAM | `DDR4: 3200 MT/s` |
-| `22` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
-| `23` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+| `14` | **P/E Core Load** | `CPU` | Penguraian beban core Intel Hybrid (P-Core % / E-Core %; auto-disabled pada non-hybrid) | `P/E: 45/20%` |
+| `15` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
+| `16` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
+| `17` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
+| `18` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
+| `19` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
+| `20` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
+| `21` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
+| `22` | **RAM Speed** | `RAM` | Kecepatan transfer efektif & generasi RAM | `DDR5: 6000 MT/s` |
+| `23` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
+| `24` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+| `25` | **Battery & Power** | `SYS` | Persentase baterai, daya Watt, dan status cas (otomatis disabled di PC Desktop) | `BAT: 82% (16.5W+)` |
 
 ---
 
