@@ -320,6 +320,27 @@ if [ "$IS_ELF32" -eq 1 ]; then
     exec "$@"
 fi
 
+# Check if libfpshud.so requires AddressSanitizer runtime
+if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
+    if readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
+        ASAN_RT=""
+        if command -v clang >/dev/null 2>&1; then
+            ASAN_RT="$(clang -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)"
+        fi
+        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
+            if command -v gcc >/dev/null 2>&1; then
+                ASAN_RT="$(gcc -print-file-name=libasan.so 2>/dev/null || true)"
+            fi
+        fi
+        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
+            ASAN_RT="$(ldconfig -p 2>/dev/null | grep 'libasan\.so' | awk '{print $NF}' | head -n1 || true)"
+        fi
+        if [ -n "$ASAN_RT" ] && [ -f "$ASAN_RT" ]; then
+            export LD_PRELOAD="${ASAN_RT}${LD_PRELOAD:+:$LD_PRELOAD}"
+        fi
+    fi
+fi
+
 # Launch game with LD_PRELOAD
 if [ -z "$FPS_HUD" ]; then
     export FPS_HUD=1

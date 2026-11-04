@@ -36,7 +36,7 @@ cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -G Ninja \
     -DENABLE_ASAN=ON \
     -DENABLE_UBSAN=ON
 
-ninja -C "${BUILD_DIR}" fpshud_test
+ninja -C "${BUILD_DIR}" fpshud fpshud_test
 
 echo "----------------------------------------------------------"
 echo "  Running Test Suite under AddressSanitizer & UBSan..."
