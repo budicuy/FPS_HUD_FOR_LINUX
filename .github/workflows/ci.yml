@@ -29,7 +29,8 @@ jobs:
           sudo apt-get install -y gcc-16 g++-16 build-essential cmake ninja-build pkg-config binutils clang-format \
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
             fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev \
+            mesa-vulkan-drivers vulkan-tools xvfb
 
       - name: Configure, Build & Verify ABI/GLIBC Portability Gates
         run: |
@@ -59,6 +60,14 @@ jobs:
       - name: Run Multi-Device Simulation & Feature Verification Suite
         run: |
           ./build/fpshud_test 1
+
+      - name: Verify Real Vulkan Hook & HUD Rendering (Mesa Lavapipe CPU Software Rasterizer)
+        run: |
+          ./scripts/test_vulkan_headless.sh
+
+      - name: Verify End-to-End Installation & Uninstallation Lifecycle
+        run: |
+          ./scripts/test_e2e_install.sh
 
       - name: Package Portable Release Archive
         run: |
@@ -108,8 +117,27 @@ jobs:
         run: |
           docker run --rm -v "$PWD/dist_test:/test" -w /test "${{ matrix.distro.image }}" bash -c "${{ matrix.distro.cmd }}"
 
+  sanitizer-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Toolchain & Dependencies for Sanitizers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang build-essential cmake ninja-build pkg-config \
+            libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
+            fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev
+
+      - name: Run Memory Safety & Undefined Behavior Suite (ASan + UBSan)
+        run: |
+          CC=clang CXX=clang++ ./scripts/run_sanitizers.sh
+          rm -rf build_asan
+
   publish-release:
-    needs: [build-test-release, distro-compatibility-matrix]
+    needs: [build-test-release, distro-compatibility-matrix, sanitizer-verification]
     if: success() && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -136,6 +164,11 @@ jobs:
             - 🟠 **Ubuntu 22.04 LTS** (Jammy - GLIBC 2.35 Floor)
             - 🟣 **Ubuntu 24.04 LTS** (Noble)
             - 🦎 **openSUSE Tumbleweed** (Rolling SUSE)
+
+            🛡️ **Quality, Safety & Rendering Gates Verified:**
+            - 🛡️ **Memory Safety & Hardening**: 0 Leaks, 0 Buffer Overflows, 0 UB (AddressSanitizer + UBSan)
+            - 🎮 **Real Vulkan Hook & Rendering**: 120-frame swapchain overlay verification via Mesa Lavapipe CPU rasterizer
+            - 📦 **Zero-Residue Lifecycle**: Clean sandboxed `install.sh` and `uninstall.sh` lifecycle verification
 
             Install with one command:
             ```bash
