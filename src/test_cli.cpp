@@ -840,6 +840,28 @@ void run_elf_and_layer_abi_suite() {
                    sigpipe_clean ? "signal(SIGPIPE) removed from game host and 2s bounded fence timeout active"
                                  : "Failed: SIGPIPE mutation or unbounded UINT64_MAX fence wait present");
 
+        // 3.2 Vulkan C ABI Exception Isolation Boundaries
+        bool vk_try_catch_ok = false;
+        size_t pos_qpresent = vk_src.find("Hook_QueuePresentKHR");
+        size_t pos_cswap = vk_src.find("Hook_CreateSwapchainKHR");
+        size_t pos_cdev = vk_src.find("Hook_CreateDevice");
+        if (pos_qpresent != std::string::npos && pos_cswap != std::string::npos && pos_cdev != std::string::npos) {
+            size_t next_fn1 = vk_src.find("VKAPI_ATTR", pos_cdev + 20);
+            size_t next_fn2 = vk_src.find("VKAPI_ATTR", pos_cswap + 20);
+            size_t next_fn3 = vk_src.find("extern \"C\"", pos_qpresent + 20);
+            std::string cd_sub = (next_fn1 != std::string::npos) ? vk_src.substr(pos_cdev, next_fn1 - pos_cdev) : "";
+            std::string cs_sub = (next_fn2 != std::string::npos) ? vk_src.substr(pos_cswap, next_fn2 - pos_cswap) : "";
+            std::string qp_sub = (next_fn3 != std::string::npos) ? vk_src.substr(pos_qpresent, next_fn3 - pos_qpresent) : "";
+            if (qp_sub.find("try {") != std::string::npos && qp_sub.find("catch (...)") != std::string::npos &&
+                cs_sub.find("try {") != std::string::npos && cs_sub.find("catch (...)") != std::string::npos &&
+                cd_sub.find("try {") != std::string::npos && cd_sub.find("catch (...)") != std::string::npos) {
+                vk_try_catch_ok = true;
+            }
+        }
+        check_cond(vk_try_catch_ok, "3.2 Vulkan C ABI Exception Isolation Boundaries",
+                   vk_try_catch_ok ? "All Vulkan hook entry points wrapped in try/catch boundaries"
+                                   : "Failed: Missing try/catch exception trap on Vulkan hook callbacks");
+
         // 4. Vulkan Multi-Device Lifecycle, Zero-Extent Swapchain & UAF-Free DestroyDevice
         bool lifecycle_ok = false;
         std::string lifecycle_detail;

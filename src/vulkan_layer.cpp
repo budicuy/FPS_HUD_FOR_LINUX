@@ -717,7 +717,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     const VkDeviceCreateInfo* pCreateInfo,
     const VkAllocationCallbacks* pAllocator,
     VkDevice* pDevice) {
-
+    try {
     VkLayerDeviceCreateInfo* chain_info = const_cast<VkLayerDeviceCreateInfo*>(
         reinterpret_cast<const VkLayerDeviceCreateInfo*>(pCreateInfo->pNext));
 
@@ -926,12 +926,15 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     }
 
     return VK_SUCCESS;
+    } catch (...) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(
     VkDevice device,
     const VkAllocationCallbacks* pAllocator) {
-
+    try {
     if (!device) return;
 
     DeviceData* dd = nullptr;
@@ -985,6 +988,8 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(
         }
         delete dd;
     }
+    } catch (...) {
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue(
@@ -1036,7 +1041,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
     const VkSwapchainCreateInfoKHR* pCreateInfo,
     const VkAllocationCallbacks* pAllocator,
     VkSwapchainKHR* pSwapchain) {
-
+    try {
     DeviceData* dd = find_device_data(get_dispatch_key(device));
     if (!dd || !dd->CreateSwapchainKHR) {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -1092,13 +1097,20 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
     }
 
     return VK_SUCCESS;
+    } catch (...) {
+        DeviceData* dd = find_device_data(get_dispatch_key(device));
+        if (dd && dd->CreateSwapchainKHR) {
+            return dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(
     VkDevice device,
     VkSwapchainKHR swapchain,
     const VkAllocationCallbacks* pAllocator) {
-
+    try {
     DeviceData* dd = find_device_data(get_dispatch_key(device));
     SwapchainData* sd = nullptr;
     {
@@ -1117,12 +1129,14 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(
     if (dd && dd->DestroySwapchainKHR) {
         dd->DestroySwapchainKHR(device, swapchain, pAllocator);
     }
+    } catch (...) {
+    }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
     VkQueue queue,
     const VkPresentInfoKHR* pPresentInfo) {
-
+    try {
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
     if (!dd && pPresentInfo && pPresentInfo->swapchainCount > 0 && pPresentInfo->pSwapchains) {
         VkSwapchainKHR sc0 = pPresentInfo->pSwapchains[0];
@@ -1399,6 +1413,13 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(
 
     fpshud::RecorderController::instance().on_frame_present(sd->extent.width, sd->extent.height);
     return pres_res;
+    } catch (...) {
+        DeviceData* dd = find_device_data(get_dispatch_key(queue));
+        if (dd && dd->QueuePresentKHR) {
+            return dd->QueuePresentKHR(queue, pPresentInfo);
+        }
+        return VK_ERROR_DEVICE_LOST;
+    }
 }
 
 } // namespace
