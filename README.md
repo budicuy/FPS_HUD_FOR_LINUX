@@ -188,6 +188,18 @@ FPS_HUD=1 ./your_game
 ~/.local/bin/fpshud ./your_game
 ```
 
+### Anti-Cheat Compatibility Advisory
+> [!WARNING]
+> **Online Multiplayer Games & Anti-Cheat Software (EAC, BattlEye, VAC, Ricochet):**
+> Like MangoHud, OBS Game Capture, and ReShade, FPSHUD functions by injecting into the game's graphics pipeline via a Vulkan Implicit Layer or `LD_PRELOAD`.
+> While performance overlays are benign, strict anti-cheat software in competitive online games (e.g., Easy Anti-Cheat, BattlEye, Valve Anti-Cheat, Ricochet) may flag third-party injected libraries as an integrity violation, potentially preventing the game from launching or risking account sanctions.
+>
+> **Best Practice:** When playing competitive online multiplayer titles, disable the overlay by setting `FPS_HUD=0 %command%` in your launch options.
+
+### 32-Bit Game Compatibility
+> [!NOTE]
+> FPSHUD is compiled as a 64-bit (`x86_64`) library covering virtually all modern Linux native games and Proton titles. If you launch a legacy 32-bit game, the dynamic loader gracefully ignores the 64-bit layer without crashing or interfering, though the HUD will not appear.
+
 ---
 
 ## 4. In-Game GUI Guide & Keyboard Shortcuts
@@ -425,6 +437,10 @@ FPS_HUD_FOR_LINUX/
    - Run `fpshud --setup` to install the read-only RAPL udev rule (see [Section 2](#2-installation--sensor-permissions) for Platypus security trade-offs).
 3. **How do I reset all settings back to default?**
    - Open the In-Game GUI (`Insert` / `F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
+4. **Is FPSHUD safe to use with Anti-Cheat in online games?**
+   - See our [Anti-Cheat Compatibility Advisory](#anti-cheat-compatibility-advisory). For competitive multiplayer games protected by EAC, BattlEye, VAC, or Ricochet, we strongly recommend disabling the overlay by setting `FPS_HUD=0`.
+5. **Does FPSHUD work with older 32-bit games?**
+   - FPSHUD targets 64-bit (`x86_64`) games. When running legacy 32-bit titles, the 64-bit layer is safely bypassed by the system loader without issues, though the HUD will not render.
 
 ---
 

@@ -186,6 +186,18 @@ FPS_HUD=1 ./nama_game
 ~/.local/bin/fpshud ./nama_game
 ```
 
+### Peringatan Terkait Anti-Cheat (EAC, BattlEye, VAC, Ricochet)
+> [!WARNING]
+> **Game Online Multiplayer & Perangkat Lunak Anti-Cheat:**
+> Sebagaimana MangoHud, OBS Game Capture, dan ReShade, FPSHUD beroperasi dengan menyisipkan hook ke pipeline rendering game via Vulkan Implicit Layer atau `LD_PRELOAD`.
+> Meskipun overlay murni bersifat diagnostik performa, sistem anti-cheat ketat pada game multiplayer kompetitif (seperti Easy Anti-Cheat, BattlEye, Valve Anti-Cheat, atau Ricochet) dapat mendeteksi injeksi pustaka pihak ketiga sebagai pelanggaran integritas biner, yang berisiko membuat game gagal terbuka atau memicu sanksi akun.
+>
+> **Praktik Terbaik:** Saat memainkan game online multiplayer kompetitif dengan proteksi anti-cheat, nonaktifkan overlay dengan menambahkan `FPS_HUD=0 %command%` pada Launch Options.
+
+### Kompatibilitas Game 32-Bit
+> [!NOTE]
+> FPSHUD dikompilasi sebagai pustaka 64-bit (`x86_64`) yang mencakup hampir seluruh game modern native Linux dan game Windows via Proton. Jika Anda menjalankan game lama berbasis 32-bit, dynamic loader sistem akan secara otomatis melewati layer 64-bit ini tanpa crash atau kendala, namun teks overlay HUD tidak akan muncul.
+
 ---
 
 ## 4. Panduan Menu In-Game GUI & Tombol Shortcut
@@ -423,6 +435,10 @@ FPS_HUD_FOR_LINUX/
    - Jalankan `fpshud --setup` untuk memasang aturan udev read-only RAPL (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) untuk penjelasan trade-off keamanan Platypus).
 3. **Bagaimana cara mengembalikan semua pengaturan ke kondisi awal (Reset)?**
    - Buka menu GUI di dalam game (`Insert` / `F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
+4. **Apakah FPSHUD aman digunakan dengan Anti-Cheat di game online?**
+   - Baca [Peringatan Terkait Anti-Cheat](#peringatan-terkait-anti-cheat-eac-battleye-vac-ricochet). Untuk game kompetitif online dengan proteksi EAC, BattlEye, VAC, atau Ricochet, kami sangat menyarankan menonaktifkan overlay dengan `FPS_HUD=0`.
+5. **Apakah FPSHUD mendukung game jadul berbasis 32-bit?**
+   - FPSHUD menargetkan game 64-bit (`x86_64`). Saat game 32-bit lama dijalankan, loader sistem secara otomatis melewati layer 64-bit ini tanpa kendala, namun HUD tidak akan tampil.
 
 ---
 
