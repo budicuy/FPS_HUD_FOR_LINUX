@@ -307,6 +307,11 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 | **Geometri Draw per Frame** | **11,34 KB** total | Vertex buffer 9,69 KB + Index buffer 1,65 KB |
 | **Kestabilan Heap per Frame** | **0 byte / frame** | Terverifikasi **zero-heap allocation** sepanjang 10.000 frame |
 
+> [!NOTE]
+> **Rentang Total Konsumsi Sumber Daya (Ringkasan):**
+> - **Rentang Penggunaan CPU:** **0,01% – 0,05% dari 1 core CPU** saat bermain game pada 60 FPS (**0,03% – 0,11% @ 144 FPS**); thread telemetri sensor hanya menambah **~0,045% dari 1 core**. Beban terhadap total prosesor multi-core adalah **< 0,01% dari total kapasitas CPU**.
+> - **Rentang Pemakaian Memori (RAM):** **~4,5 MB** memori internal & font atlas (**~17 MB** total VmRSS proses terisolasi), dengan **0 byte/frame** alokasi heap saat gameplay berjalan.
+
 ---
 
 ## 8. Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)
