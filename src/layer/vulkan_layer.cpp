@@ -155,16 +155,20 @@ DeviceData* find_device_data(void* key) {
 VKAPI_ATTR VkResult VKAPI_CALL
 ImGui_AllocateCommandBuffers(VkDevice device, const VkCommandBufferAllocateInfo* pAllocateInfo,
                              VkCommandBuffer* pCommandBuffers) {
-  DeviceData* dd = find_device_data(get_dispatch_key(device));
-  if (!dd || !dd->AllocateCommandBuffers) return VK_ERROR_INITIALIZATION_FAILED;
+  try {
+    DeviceData* dd = find_device_data(get_dispatch_key(device));
+    if (!dd || !dd->AllocateCommandBuffers) return VK_ERROR_INITIALIZATION_FAILED;
 
-  VkResult res = dd->AllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers);
-  if (res == VK_SUCCESS && pAllocateInfo && pCommandBuffers) {
-    for (uint32_t i = 0; i < pAllocateInfo->commandBufferCount; ++i) {
-      copy_dispatch_key(pCommandBuffers[i], device);
+    VkResult res = dd->AllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers);
+    if (res == VK_SUCCESS && pAllocateInfo && pCommandBuffers) {
+      for (uint32_t i = 0; i < pAllocateInfo->commandBufferCount; ++i) {
+        copy_dispatch_key(pCommandBuffers[i], device);
+      }
     }
+    return res;
+  } catch (...) {
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
-  return res;
 }
 
 bool is_instance_level_function(const char* name) {
@@ -568,160 +572,177 @@ static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, Frame
 VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
                                                    const VkAllocationCallbacks* pAllocator,
                                                    VkInstance* pInstance) {
-  VkLayerInstanceCreateInfo* chain_info = const_cast<VkLayerInstanceCreateInfo*>(
-      reinterpret_cast<const VkLayerInstanceCreateInfo*>(pCreateInfo->pNext));
+  try {
+    VkLayerInstanceCreateInfo* chain_info = const_cast<VkLayerInstanceCreateInfo*>(
+        reinterpret_cast<const VkLayerInstanceCreateInfo*>(pCreateInfo->pNext));
 
-  while (chain_info && !(chain_info->sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO &&
-                         chain_info->function == VK_LAYER_LINK_INFO)) {
-    chain_info = const_cast<VkLayerInstanceCreateInfo*>(
-        reinterpret_cast<const VkLayerInstanceCreateInfo*>(chain_info->pNext));
-  }
+    while (chain_info && !(chain_info->sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO &&
+                           chain_info->function == VK_LAYER_LINK_INFO)) {
+      chain_info = const_cast<VkLayerInstanceCreateInfo*>(
+          reinterpret_cast<const VkLayerInstanceCreateInfo*>(chain_info->pNext));
+    }
 
-  if (!chain_info || !chain_info->u.pLayerInfo) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+    if (!chain_info || !chain_info->u.pLayerInfo) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  PFN_vkGetInstanceProcAddr fpGetInstanceProcAddr =
-      chain_info->u.pLayerInfo->pfnNextGetInstanceProcAddr;
-  chain_info->u.pLayerInfo = chain_info->u.pLayerInfo->pNext;
+    PFN_vkGetInstanceProcAddr fpGetInstanceProcAddr =
+        chain_info->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+    chain_info->u.pLayerInfo = chain_info->u.pLayerInfo->pNext;
 
-  auto fpCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
-      fpGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
-  if (!fpCreateInstance) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+    auto fpCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
+        fpGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
+    if (!fpCreateInstance) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  VkResult res = fpCreateInstance(pCreateInfo, pAllocator, pInstance);
-  if (res != VK_SUCCESS) {
-    return res;
-  }
+    VkResult res = fpCreateInstance(pCreateInfo, pAllocator, pInstance);
+    if (res != VK_SUCCESS) {
+      return res;
+    }
 
-  auto* id = new InstanceData();
-  id->instance = *pInstance;
-  id->GetInstanceProcAddr = fpGetInstanceProcAddr;
-  id->DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
-      fpGetInstanceProcAddr(*pInstance, "vkDestroyInstance"));
-  id->EnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
-      fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDevices"));
-  id->GetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
-      fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceProperties"));
-  id->GetPhysicalDeviceQueueFamilyProperties =
-      reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
-          fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
-  id->GetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
-      fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
-  id->GetPhysicalDeviceMemoryProperties2 =
-      reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
-          fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2"));
-  if (!id->GetPhysicalDeviceMemoryProperties2) {
+    auto* id = new InstanceData();
+    id->instance = *pInstance;
+    id->GetInstanceProcAddr = fpGetInstanceProcAddr;
+    id->DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
+        fpGetInstanceProcAddr(*pInstance, "vkDestroyInstance"));
+    id->EnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDevices"));
+    id->GetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceProperties"));
+    id->GetPhysicalDeviceQueueFamilyProperties =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+            fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+    id->GetPhysicalDeviceMemoryProperties =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
+            fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
     id->GetPhysicalDeviceMemoryProperties2 =
         reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
-            fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
-  }
-  id->EnumerateDeviceExtensionProperties =
-      reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
-          fpGetInstanceProcAddr(*pInstance, "vkEnumerateDeviceExtensionProperties"));
-  id->EnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(
-      fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroups"));
-  if (!id->EnumeratePhysicalDeviceGroups) {
+            fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2"));
+    if (!id->GetPhysicalDeviceMemoryProperties2) {
+      id->GetPhysicalDeviceMemoryProperties2 =
+          reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+              fpGetInstanceProcAddr(*pInstance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
+    }
+    id->EnumerateDeviceExtensionProperties =
+        reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+            fpGetInstanceProcAddr(*pInstance, "vkEnumerateDeviceExtensionProperties"));
     id->EnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(
-        fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroupsKHR"));
-  }
+        fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroups"));
+    if (!id->EnumeratePhysicalDeviceGroups) {
+      id->EnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(
+          fpGetInstanceProcAddr(*pInstance, "vkEnumeratePhysicalDeviceGroupsKHR"));
+    }
 
-  std::lock_guard<std::mutex> lock(g_map_mutex);
-  g_instance_map[get_dispatch_key(*pInstance)] = id;
-  return VK_SUCCESS;
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    g_instance_map[get_dispatch_key(*pInstance)] = id;
+    return VK_SUCCESS;
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
 }
 
 VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
                                                 const VkAllocationCallbacks* pAllocator) {
-  if (!instance) return;
+  try {
+    if (!instance) return;
 
-  InstanceData* id = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(g_map_mutex);
-    auto it = g_instance_map.find(get_dispatch_key(instance));
-    if (it != g_instance_map.end()) {
-      id = it->second;
-    } else {
-      for (auto& kv : g_instance_map) {
-        if (kv.second && kv.second->instance == instance) {
-          id = kv.second;
-          break;
+    InstanceData* id = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      auto it = g_instance_map.find(get_dispatch_key(instance));
+      if (it != g_instance_map.end()) {
+        id = it->second;
+      } else {
+        for (auto& kv : g_instance_map) {
+          if (kv.second && kv.second->instance == instance) {
+            id = kv.second;
+            break;
+          }
+        }
+      }
+
+      if (id) {
+        for (auto iter = g_instance_map.begin(); iter != g_instance_map.end();) {
+          if (iter->second == id) {
+            iter = g_instance_map.erase(iter);
+          } else {
+            ++iter;
+          }
         }
       }
     }
 
     if (id) {
-      for (auto iter = g_instance_map.begin(); iter != g_instance_map.end();) {
-        if (iter->second == id) {
-          iter = g_instance_map.erase(iter);
-        } else {
-          ++iter;
-        }
+      if (id->DestroyInstance) {
+        id->DestroyInstance(instance, pAllocator);
       }
+      delete id;
     }
-  }
-
-  if (id) {
-    if (id->DestroyInstance) {
-      id->DestroyInstance(instance, pAllocator);
-    }
-    delete id;
+  } catch (...) {
   }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDevices(VkInstance instance,
                                                              uint32_t* pPhysicalDeviceCount,
                                                              VkPhysicalDevice* pPhysicalDevices) {
-  if (!instance) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+  try {
+    if (!instance) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  InstanceData* id = find_instance_data(get_dispatch_key(instance));
-  if (!id || !id->EnumeratePhysicalDevices) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->EnumeratePhysicalDevices) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  VkResult res = id->EnumeratePhysicalDevices(instance, pPhysicalDeviceCount, pPhysicalDevices);
-  if (res == VK_SUCCESS && pPhysicalDevices && pPhysicalDeviceCount && *pPhysicalDeviceCount > 0) {
-    std::lock_guard<std::mutex> lock(g_map_mutex);
-    for (uint32_t i = 0; i < *pPhysicalDeviceCount; ++i) {
-      if (pPhysicalDevices[i] != VK_NULL_HANDLE) {
-        g_instance_map[get_dispatch_key(pPhysicalDevices[i])] = id;
+    VkResult res = id->EnumeratePhysicalDevices(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    if (res == VK_SUCCESS && pPhysicalDevices && pPhysicalDeviceCount &&
+        *pPhysicalDeviceCount > 0) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      for (uint32_t i = 0; i < *pPhysicalDeviceCount; ++i) {
+        if (pPhysicalDevices[i] != VK_NULL_HANDLE) {
+          g_instance_map[get_dispatch_key(pPhysicalDevices[i])] = id;
+        }
       }
     }
+    return res;
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
   }
-  return res;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_EnumeratePhysicalDeviceGroups(
     VkInstance instance, uint32_t* pPhysicalDeviceGroupCount,
     VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) {
-  if (!instance) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+  try {
+    if (!instance) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  InstanceData* id = find_instance_data(get_dispatch_key(instance));
-  if (!id || !id->EnumeratePhysicalDeviceGroups) {
-    return VK_ERROR_INITIALIZATION_FAILED;
-  }
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->EnumeratePhysicalDeviceGroups) {
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
-  VkResult res = id->EnumeratePhysicalDeviceGroups(instance, pPhysicalDeviceGroupCount,
-                                                   pPhysicalDeviceGroupProperties);
-  if (res == VK_SUCCESS && pPhysicalDeviceGroupProperties && pPhysicalDeviceGroupCount &&
-      *pPhysicalDeviceGroupCount > 0) {
-    std::lock_guard<std::mutex> lock(g_map_mutex);
-    for (uint32_t i = 0; i < *pPhysicalDeviceGroupCount; ++i) {
-      for (uint32_t j = 0; j < pPhysicalDeviceGroupProperties[i].physicalDeviceCount; ++j) {
-        if (pPhysicalDeviceGroupProperties[i].physicalDevices[j] != VK_NULL_HANDLE) {
-          g_instance_map[get_dispatch_key(pPhysicalDeviceGroupProperties[i].physicalDevices[j])] =
-              id;
+    VkResult res = id->EnumeratePhysicalDeviceGroups(instance, pPhysicalDeviceGroupCount,
+                                                     pPhysicalDeviceGroupProperties);
+    if (res == VK_SUCCESS && pPhysicalDeviceGroupProperties && pPhysicalDeviceGroupCount &&
+        *pPhysicalDeviceGroupCount > 0) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      for (uint32_t i = 0; i < *pPhysicalDeviceGroupCount; ++i) {
+        for (uint32_t j = 0; j < pPhysicalDeviceGroupProperties[i].physicalDeviceCount; ++j) {
+          if (pPhysicalDeviceGroupProperties[i].physicalDevices[j] != VK_NULL_HANDLE) {
+            g_instance_map[get_dispatch_key(pPhysicalDeviceGroupProperties[i].physicalDevices[j])] =
+                id;
+          }
         }
       }
     }
+    return res;
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
   }
-  return res;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice,
@@ -1014,39 +1035,45 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device,
 
 VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue(VkDevice device, uint32_t queueFamilyIndex,
                                                uint32_t queueIndex, VkQueue* pQueue) {
-  if (!device) return;
+  try {
+    if (!device) return;
 
-  DeviceData* dd = find_device_data(get_dispatch_key(device));
-  if (dd && dd->GetDeviceQueue) {
-    dd->GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
-    if (pQueue && *pQueue) {
-      copy_dispatch_key(*pQueue, device);
-      std::lock_guard<std::mutex> lock(g_map_mutex);
-      g_device_map[get_dispatch_key(*pQueue)] = dd;
+    DeviceData* dd = find_device_data(get_dispatch_key(device));
+    if (dd && dd->GetDeviceQueue) {
+      dd->GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
+      if (pQueue && *pQueue) {
+        copy_dispatch_key(*pQueue, device);
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        g_device_map[get_dispatch_key(*pQueue)] = dd;
+      }
     }
+  } catch (...) {
   }
 }
 
 VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
                                                 const VkDeviceQueueInfo2* pQueueInfo,
                                                 VkQueue* pQueue) {
-  if (!device) return;
+  try {
+    if (!device) return;
 
-  DeviceData* dd = find_device_data(get_dispatch_key(device));
-  if (dd && dd->GetDeviceQueue2) {
-    dd->GetDeviceQueue2(device, pQueueInfo, pQueue);
-    if (pQueue && *pQueue) {
-      copy_dispatch_key(*pQueue, device);
-      std::lock_guard<std::mutex> lock(g_map_mutex);
-      g_device_map[get_dispatch_key(*pQueue)] = dd;
+    DeviceData* dd = find_device_data(get_dispatch_key(device));
+    if (dd && dd->GetDeviceQueue2) {
+      dd->GetDeviceQueue2(device, pQueueInfo, pQueue);
+      if (pQueue && *pQueue) {
+        copy_dispatch_key(*pQueue, device);
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        g_device_map[get_dispatch_key(*pQueue)] = dd;
+      }
+    } else if (dd && dd->GetDeviceQueue && pQueueInfo) {
+      dd->GetDeviceQueue(device, pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex, pQueue);
+      if (pQueue && *pQueue) {
+        copy_dispatch_key(*pQueue, device);
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        g_device_map[get_dispatch_key(*pQueue)] = dd;
+      }
     }
-  } else if (dd && dd->GetDeviceQueue && pQueueInfo) {
-    dd->GetDeviceQueue(device, pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex, pQueue);
-    if (pQueue && *pQueue) {
-      copy_dispatch_key(*pQueue, device);
-      std::lock_guard<std::mutex> lock(g_map_mutex);
-      g_device_map[get_dispatch_key(*pQueue)] = dd;
-    }
+  } catch (...) {
   }
 }
 
