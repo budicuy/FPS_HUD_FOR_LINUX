@@ -101,29 +101,35 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
-### Izin Sensor Hardware (SANGAT DISARANKAN)
+### Izin Akses Perangkat Keras, Model Keamanan & Trade-off
 > [!IMPORTANT]
-> Saat instalasi meminta **izin akses `sudo`**, Anda **sangat disarankan untuk menyetujuinya**.
+> Saat penginstal meminta **izin akses `sudo`**, langkah ini bertujuan mendaftarkan aturan udev untuk pemantauan perangkat keras tanpa privilege root. Pahami trade-off keamanan berikut:
 >
-> Secara bawaan, kebijakan keamanan kernel Linux membatasi pembacaan beberapa counter perangkat keras bagi akun pengguna biasa:
-> 1. **Daya CPU / Konsumsi Listrik (Watt via RAPL)**: Mitigasi keamanan kernel untuk celah CVE-2020-8694 (Platypus) membatasi file `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`). Sudo akan memasang aturan udev Linux standar (`/etc/udev/rules.d/99-fpshud-rapl.rules`) yang dengan aman memberikan hak baca saja (`0444`) bagi pengguna biasa.
-> 2. **Kecepatan RAM (MT/s) & Generasi Memori (DDR4 / DDR5)**: Tabel raw SMBIOS DMI pada `/sys/firmware/dmi/entries/` dibatasi untuk root. Sudo akan melakukan deteksi cepat sekali saja dan menyimpan hasilnya ke `~/.local/share/fpshud/ram_info` (berpemilik pengguna biasa).
-> 3. **Shortcut Keyboard & Mouse Wayland (`Insert` / `F12`)**: Pada sistem desktop Wayland (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), isolasi keamanan mencegah aplikasi membaca tombol keyboard dan klik mouse lintas jendela. Sudo akan memasang `/etc/udev/rules.d/99-fpshud-input.rules` dan menambahkan pengguna Anda ke grup standar `input`.
+> 1. **Daya CPU / Konsumsi Listrik (Watt via RAPL & Trade-off Celah Platypus CVE-2020-8694)**:
+>    Kebijakan keamanan kernel Linux membatasi `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`) guna memitigasi serangan side-channel **Platypus** (CVE-2020-8694), di mana proses tanpa privilege pada sistem bersama berpotensi menebak kunci kriptografis dari fluktuasi mikroskopis daya CPU. Pemasangan aturan udev (`/etc/udev/rules.d/99-fpshud-rapl.rules`) mengatur hak baca `0444` (read-only untuk semua pengguna lokal). Ini adalah trade-off eksplisit pengguna: kenyamanan memantau konsumsi Watt CPU berbanding mitigasi serangan side-channel pada sistem multi-user atau server sensitif.
+> 2. **Kecepatan & Generasi RAM (Deteksi SMBIOS DMI)**:
+>    Tabel raw SMBIOS DMI pada `/sys/firmware/dmi/entries/` dibatasi untuk root. Setup menjalankan deteksi statis read-only satu kali dan menyimpan ringkasan tipe memori ke `~/.local/share/fpshud/ram_info` (sepenuhnya milik akun user biasa Anda).
+> 3. **Shortcut Keyboard Wayland & Batasan Keamanan Grup Input**:
+>    Pada sesi desktop Wayland (GNOME, KDE Plasma Wayland, Hyprland, Sway), batas isolasi keamanan mencegah aplikasi mengintip tombol keyboard lintas jendela. FPSHUD membaca penekanan tombol toggle in-game via antarmuka kernel Linux evdev (`/dev/input/event*`). Setup menambahkan aturan udev khusus serta memasukkan akun Anda ke grup standar `input`.
+>    > [!WARNING]
+>    > Setiap proses yang dijalankan oleh akun pengguna di dalam grup `input` dapat membaca event perangkat input evdev. Jangan masukkan akun user yang tidak dipercaya ke grup ini, dan **jangan pernah menjalankan `chmod a+r /dev/input/event*`** (karena akan membuka celah keylogger bagi semua pengguna di mesin).
+>
+> Jika Anda memilih tidak memberikan akses sudo, FPSHUD tetap dapat berjalan normal tanpa pemantauan Watt RAPL, info RAM SMBIOS, atau shortcut latar belakang Wayland (input in-game Vulkan/OpenGL tetap berfungsi normal).
 
 > [!NOTE]
-> **Lupa atau melewatkan sudo saat instalasi? Tidak perlu install ulang!**
-> Anda dapat mengonfigurasi seluruh izin sensor hardware kapan saja cukup dengan 1 perintah:
+> **Konfigurasi atau Periksa Izin Kapan Saja:**
+> Anda dapat mengonfigurasi izin sensor hardware kapan saja tanpa perlu menginstal ulang:
 > ```bash
 > fpshud --setup
 > ```
-> Untuk memeriksa status izin sensor hardware kapan saja:
+> Untuk memeriksa status keterbacaan sensor hardware pada akun Anda:
 > ```bash
 > fpshud --status
 > ```
 
 > [!TIP]
-> **Jaminan Keamanan & Privasi:**
-> Game dan aplikasi **TIDAK PERNAH** dijalankan sebagai root atau dengan sudo. Seluruh game dijalankan murni dengan hak akses pengguna biasa Anda. Hak sudo hanya digunakan satu kali saat konfigurasi untuk mendaftarkan aturan udev dan membaca tabel SMBIOS.
+> **Arsitektur Keamanan & Batasan Hak Akses:**
+> Seluruh game dan proses overlay HUD berjalan murni dengan hak akses pengguna biasa (*unprivileged*). Hak akses root tidak pernah digunakan saat bermain game. Akses sudo hanya diminta saat setup awal untuk mendaftarkan aturan udev di `/etc/udev/rules.d/`.
 
 ### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)
 ```bash
@@ -389,9 +395,9 @@ FPS_HUD_FOR_LINUX/
 ## 9. Troubleshooting & Tanya Jawab (FAQ)
 
 1. **Menekan `Insert` / `F12` tidak membuka menu GUI atau klik mouse tembus ke dalam game:**
-   - Jalankan `sudo chmod a+r /dev/input/event*` (atau tambahkan user ke grup `input` secara permanen dengan `sudo usermod -aG input $USER` lalu login ulang).
+   - Jalankan `fpshud --setup` untuk memasang aturan udev yang sesuai, atau tambahkan akun user Anda ke grup standar `input`: `sudo usermod -aG input $USER` (kemudian logout dan login ulang). **Jangan pernah menjalankan `chmod a+r /dev/input/event*`**, karena membuka hak baca raw event input untuk seluruh user membawa risiko keamanan keylogging yang fatal.
 2. **Daya CPU menampilkan `0 W`:**
-   - Jalankan `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj` (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) agar aktif permanen setiap kali komputer dinyalakan).
+   - Jalankan `fpshud --setup` untuk memasang aturan udev read-only RAPL (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) untuk penjelasan trade-off keamanan Platypus).
 3. **Bagaimana cara mengembalikan semua pengaturan ke kondisi awal (Reset)?**
    - Buka menu GUI di dalam game (`Insert` / `F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
 

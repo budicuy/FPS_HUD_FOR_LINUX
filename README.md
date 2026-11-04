@@ -103,29 +103,35 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
 
-### Hardware Sensor Permissions (STRONGLY RECOMMENDED)
+### Hardware Permissions, Security Model & Trade-offs
 > [!IMPORTANT]
-> When the installer prompts for **`sudo` access**, it is **strongly recommended to approve it**.
+> When the installer prompts for **`sudo` access**, it configures udev rules for unprivileged hardware monitoring. Please review the security trade-offs below:
 >
-> By default, the Linux kernel restricts reading certain hardware counters for unprivileged user accounts:
-> 1. **CPU Package Power (Watts via RAPL)**: Kernel security mitigations for CVE-2020-8694 (Platypus) restrict `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`). Sudo installs a standard Linux udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) that safely grants read-only permission (`0444`) to regular users.
-> 2. **RAM Speed (MT/s) & Generation (DDR4 / DDR5)**: Raw SMBIOS DMI tables in `/sys/firmware/dmi/entries/` are restricted to root. Sudo performs a quick one-time probe and saves the metadata to `~/.local/share/fpshud/ram_info` (owned by your normal user).
-> 3. **Wayland Hotkeys & Mouse Capture (`Insert` / `F12`)**: On Wayland compositors (GNOME Wayland, KDE Plasma Wayland, Hyprland, Sway), security isolation prevents applications from capturing global hotkeys and mouse clicks across windows. Sudo installs `/etc/udev/rules.d/99-fpshud-input.rules` and adds your user to the standard `input` group.
+> 1. **CPU Package Power (Watts via RAPL & CVE-2020-8694 Platypus Trade-off)**:
+>    The Linux kernel restricts `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`) to mitigate the **Platypus side-channel attack** (CVE-2020-8694), where an unprivileged attacker on a shared system could infer cryptographic operations from micro-fluctuations in CPU power consumption. Installing the udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) sets mode `0444` (read-only for all users). This is an explicit user trade-off: package power monitoring convenience versus cryptographic side-channel mitigation on multi-user or sensitive systems.
+> 2. **RAM Speed & Generation (SMBIOS DMI Probe)**:
+>    Raw SMBIOS DMI tables in `/sys/firmware/dmi/entries/` are restricted to root. Setup runs a quick, read-only one-time probe and caches the static memory metadata to `~/.local/share/fpshud/ram_info` (owned exclusively by your regular user account).
+> 3. **Wayland Hotkeys & Input Group Security**:
+>    On Wayland compositors (GNOME, KDE Plasma Wayland, Hyprland, Sway), security boundaries isolate windows from global hotkey sniffing. FPSHUD reads raw keyboard toggle events via Linux evdev (`/dev/input/event*`). Setup adds a dedicated udev rule and adds your user to the standard `input` group.
+>    > [!WARNING]
+>    > Any process executed under an account in the `input` group can read evdev events. Do not add untrusted users to this group, and **never run `chmod a+r /dev/input/event*`** (which would make keystrokes readable by every user on the system).
+>
+> If you prefer not to grant sudo, FPSHUD continues to run without RAPL CPU wattage, SMBIOS RAM speed, or Wayland background hotkeys (Vulkan/OpenGL in-game inputs still work).
 
 > [!NOTE]
-> **Forgot or skipped sudo during installation? No need to reinstall!**
-> You can configure all sensor permissions at any time with a single command:
+> **Configure or Verify Permissions Anytime:**
+> You can configure sensor permissions at any time without reinstalling:
 > ```bash
 > fpshud --setup
 > ```
-> To verify whether all hardware sensors are readable by your account:
+> To inspect current hardware sensor accessibility:
 > ```bash
 > fpshud --status
 > ```
 
 > [!TIP]
-> **Security & Privacy Guarantee:**
-> Games and applications are **NEVER** run as root or with sudo. All games run strictly with your standard user permissions. Sudo is only used during setup to register system udev rules and read SMBIOS tables.
+> **Security Architecture & Trust Boundaries:**
+> Games and overlay processes run strictly with your unprivileged user account. Root privileges are never used during gameplay. Sudo is requested only during initial setup to register udev rules in `/etc/udev/rules.d/`.
 
 ### 1-Command Uninstallation (Clean Removal)
 ```bash
@@ -391,9 +397,9 @@ FPS_HUD_FOR_LINUX/
 ## 9. Troubleshooting & FAQ
 
 1. **Pressing `Insert` / `F12` does not open the GUI or mouse clicks pass through to the game:**
-   - Run `sudo chmod a+r /dev/input/event*` (or permanently add your user to the `input` group with `sudo usermod -aG input $USER` and log out/in).
+   - Run `fpshud --setup` to configure the proper udev rule, or add your user account to the standard `input` group: `sudo usermod -aG input $USER` (requires logging out and back in). **Never run `chmod a+r /dev/input/event*`**, as making raw input world-readable introduces severe keylogging security risks across users.
 2. **CPU Power shows `0 W`:**
-   - Run `sudo chmod a+r /sys/class/powercap/*rapl*/energy_uj` (see [Section 2](#2-installation--sensor-permissions) to make it permanent across reboots).
+   - Run `fpshud --setup` to install the read-only RAPL udev rule (see [Section 2](#2-installation--sensor-permissions) for Platypus security trade-offs).
 3. **How do I reset all settings back to default?**
    - Open the In-Game GUI (`Insert` / `F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
 
