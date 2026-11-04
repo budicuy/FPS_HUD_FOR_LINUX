@@ -618,7 +618,7 @@ echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sis
 echo "=================================================================="
 
 USER_CONFIRM=1
-if [ -t 0 ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
+if [ -t 0 ] && [ -z "${CI:-}" ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
     read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm
     case "$confirm" in
         [yY][eE][sS]|[yY]) ;;
