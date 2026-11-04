@@ -52,8 +52,8 @@ check_symbol_exists(__GLIBC__ "features.h" FPSHUD_IS_GLIBC)
 set(FPSHUD_GLIBC_COMPAT_SOURCES "")
 set(FPSHUD_GLIBC_COMPAT_LINK_OPTS "")
 if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
-    set_source_files_properties(src/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
-    set(FPSHUD_GLIBC_COMPAT_SOURCES src/glibc_compat.c)
+    set_source_files_properties(src/layer/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
+    set(FPSHUD_GLIBC_COMPAT_SOURCES src/layer/glibc_compat.c)
     set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
         -Wl,--wrap=acosf
         -Wl,--wrap=atan2f
@@ -161,10 +161,10 @@ find_path(FPSHUD_EGL_INCLUDE_DIR NAMES EGL/egl.h REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter)
 
-# Automatically generate src/embedded_fonts.hpp if not already present
+# Automatically generate src/ui/embedded_fonts.hpp if not already present
 if(Python3_Interpreter_FOUND)
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_embedded_fonts.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_fonts.hpp"
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_embedded_fonts.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/embedded_fonts.hpp"
     )
 endif()
 
@@ -179,20 +179,26 @@ set(IMGUI_SOURCES
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 add_library(fpshud SHARED
-    src/config.cpp
-    src/telemetry.cpp
-    src/recorder_ipc.cpp
-    src/input_manager.cpp
-    src/gui_menu.cpp
-    src/overlay_ui.cpp
-    src/vulkan_layer.cpp
-    src/opengl_hook.cpp
+    src/core/config.cpp
+    src/telemetry/telemetry.cpp
+    src/recorder/recorder_ipc.cpp
+    src/input/input_manager.cpp
+    src/ui/gui_menu.cpp
+    src/ui/overlay_ui.cpp
+    src/layer/vulkan_layer.cpp
+    src/layer/opengl_hook.cpp
     ${IMGUI_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
 target_include_directories(fpshud PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${Vulkan_INCLUDE_DIRS}
@@ -227,15 +233,21 @@ set_target_properties(fpshud PROPERTIES
 
 # CLI Test Utility for Config & Hardware Telemetry
 add_executable(fpshud_test
-    src/test_cli.cpp
-    src/config.cpp
-    src/telemetry.cpp
-    src/recorder_ipc.cpp
+    tests/test_cli.cpp
+    src/core/config.cpp
+    src/telemetry/telemetry.cpp
+    src/recorder/recorder_ipc.cpp
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
 target_include_directories(fpshud_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
 )
 
 target_link_libraries(fpshud_test PRIVATE
@@ -261,12 +273,14 @@ endif()
 if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
     TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
     add_executable(fpshud_recorder_bin
-        src/recorder_main.cpp
+        src/recorder/recorder_main.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
     )
 
     target_include_directories(fpshud_recorder_bin PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     )
 
     target_link_libraries(fpshud_recorder_bin PRIVATE
@@ -291,7 +305,7 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
 
     # Universal lightweight container-aware launcher
     add_executable(fpshud_recorder
-        src/recorder_launcher.c
+        src/recorder/recorder_launcher.c
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
     )
     target_link_libraries(fpshud_recorder PRIVATE
@@ -327,16 +341,16 @@ file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/fpshud"
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
 if(CLANG_TIDY_EXE)
     set(SRC_FILES_FOR_TIDY
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/config.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder_ipc.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/input_manager.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui_menu.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/overlay_ui.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/vulkan_layer.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/opengl_hook.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder_main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/test_cli.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
     )
     add_custom_target(clang-tidy
         COMMAND ${CLANG_TIDY_EXE}

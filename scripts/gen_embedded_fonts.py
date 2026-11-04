@@ -2,7 +2,7 @@
 import os
 import sys
 
-out_path = sys.argv[1] if len(sys.argv) > 1 else "src/embedded_fonts.hpp"
+out_path = sys.argv[1] if len(sys.argv) > 1 else "src/ui/embedded_fonts.hpp"
 
 # If already generated and non-empty, keep it
 if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
