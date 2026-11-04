@@ -1198,6 +1198,15 @@ void run_elf_and_layer_abi_suite() {
         }
 
         check_cond(test_passed, "5. Hardware VAAPI Encoders & Anti-Deadlock PulseAudio", detail.c_str());
+
+        // 5.0 Standalone Recorder sws_ctx Null Validation
+        fs::path rroot = find_repo_root();
+        std::string rec_src = read_text_file(rroot / "src" / "recorder_main.cpp");
+        bool sws_ctx_null_guarded = (rec_src.find("if (!sws_ctx)") != std::string::npos &&
+                                     rec_src.find("Failed to allocate") != std::string::npos);
+        check_cond(sws_ctx_null_guarded, "5.0 Recorder sws_ctx Null Validation",
+                   sws_ctx_null_guarded ? "sws_ctx null validation check active before sws_scale"
+                                        : "Failed: Missing if (!sws_ctx) guard after sws_getContext in SendFrame handler");
     }
 
     // 5.1 Private 0700 Runtime Directory & Path Hardening Invariant (I2)

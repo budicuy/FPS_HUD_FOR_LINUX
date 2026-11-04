@@ -843,6 +843,12 @@ int main(int argc, char* argv[]) {
                                     last_src_h = notify.height;
                                 }
 
+                                if (!sws_ctx) {
+                                    fprintf(stderr, "[FPSHUD Recorder] Warning: Failed to allocate/update swscale context (%ux%u -> %dx%d)\n",
+                                            notify.width, notify.height, target_width, target_height);
+                                    continue;
+                                }
+
                                 av_frame_make_writable(vframe);
                                 if (notify.flip_y) {
                                     const uint8_t* src_slice[1] = { src + static_cast<size_t>(notify.height - 1) * stride };
