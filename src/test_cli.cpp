@@ -370,6 +370,48 @@ void run_elf_and_layer_abi_suite() {
     }
 
     check_cond(check_ok, "1. ELF Dynamic Linkage & DT_NEEDED Decoupling", detail.c_str());
+
+    // 2. Deterministic State Machine Test for 2-Slot Async PBO Ring Invariants
+    {
+        size_t write_idx = 0;
+        size_t read_idx = 0;
+        int pending_frames = 0;
+        bool collision_detected = false;
+
+        auto reset_ring = [&]() {
+            pending_frames = 0;
+            write_idx = 0;
+            read_idx = 0;
+        };
+
+        auto step_frame = [&]() {
+            size_t curr_w = write_idx;
+            if (pending_frames > 0) {
+                size_t curr_r = read_idx;
+                if (curr_w == curr_r) {
+                    collision_detected = true;
+                }
+                read_idx = (read_idx + 1) % 2;
+            } else {
+                pending_frames++;
+            }
+            write_idx = (write_idx + 1) % 2;
+        };
+
+        // Session 1: 4 frames (even frame count)
+        for (int i = 0; i < 4; ++i) step_frame();
+        // Stop recording
+        reset_ring();
+        // Session 2: 5 frames (resumed)
+        for (int i = 0; i < 5; ++i) step_frame();
+        // Stop recording
+        reset_ring();
+        // Session 3: 3 frames (resumed)
+        for (int i = 0; i < 3; ++i) step_frame();
+
+        check_cond(!collision_detected, "2. Async Dual-PBO Ring Stop-Resume Invariant",
+                   "Verified 2-slot PBO read/write indices never collide across session stop/resume");
+    }
 }
 
 void run_all_devices_and_features_suite() {

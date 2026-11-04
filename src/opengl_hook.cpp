@@ -241,37 +241,23 @@ void ensure_egl_resolved() {
     });
 }
 
+static bool g_core_gl_resolved = false;
+
 void ensure_core_gl_resolved() {
-    if (!g_gl.glGetString) {
-        g_gl.glGetString = reinterpret_cast<GlDispatchTable::PFN_glGetString>(resolve_proc("glGetString"));
-    }
-    if (!g_gl.glGetIntegerv) {
-        g_gl.glGetIntegerv = reinterpret_cast<GlDispatchTable::PFN_glGetIntegerv>(resolve_proc("glGetIntegerv"));
-    }
-    if (!g_gl.glReadPixels) {
-        g_gl.glReadPixels = reinterpret_cast<GlDispatchTable::PFN_glReadPixels>(resolve_proc("glReadPixels"));
-    }
-    if (!g_gl.glGenBuffers) {
-        g_gl.glGenBuffers = reinterpret_cast<GlDispatchTable::PFN_glGenBuffers>(resolve_proc("glGenBuffers"));
-    }
-    if (!g_gl.glDeleteBuffers) {
-        g_gl.glDeleteBuffers = reinterpret_cast<GlDispatchTable::PFN_glDeleteBuffers>(resolve_proc("glDeleteBuffers"));
-    }
-    if (!g_gl.glBindBuffer) {
-        g_gl.glBindBuffer = reinterpret_cast<GlDispatchTable::PFN_glBindBuffer>(resolve_proc("glBindBuffer"));
-    }
-    if (!g_gl.glBufferData) {
-        g_gl.glBufferData = reinterpret_cast<GlDispatchTable::PFN_glBufferData>(resolve_proc("glBufferData"));
-    }
-    if (!g_gl.glMapBufferRange) {
-        g_gl.glMapBufferRange = reinterpret_cast<GlDispatchTable::PFN_glMapBufferRange>(resolve_proc("glMapBufferRange"));
-    }
-    if (!g_gl.glMapBuffer) {
-        g_gl.glMapBuffer = reinterpret_cast<GlDispatchTable::PFN_glMapBuffer>(resolve_proc("glMapBuffer"));
-    }
-    if (!g_gl.glUnmapBuffer) {
-        g_gl.glUnmapBuffer = reinterpret_cast<GlDispatchTable::PFN_glUnmapBuffer>(resolve_proc("glUnmapBuffer"));
-    }
+    if (g_core_gl_resolved) return;
+
+    g_gl.glGetString = reinterpret_cast<GlDispatchTable::PFN_glGetString>(resolve_proc("glGetString"));
+    g_gl.glGetIntegerv = reinterpret_cast<GlDispatchTable::PFN_glGetIntegerv>(resolve_proc("glGetIntegerv"));
+    g_gl.glReadPixels = reinterpret_cast<GlDispatchTable::PFN_glReadPixels>(resolve_proc("glReadPixels"));
+    g_gl.glGenBuffers = reinterpret_cast<GlDispatchTable::PFN_glGenBuffers>(resolve_proc("glGenBuffers"));
+    g_gl.glDeleteBuffers = reinterpret_cast<GlDispatchTable::PFN_glDeleteBuffers>(resolve_proc("glDeleteBuffers"));
+    g_gl.glBindBuffer = reinterpret_cast<GlDispatchTable::PFN_glBindBuffer>(resolve_proc("glBindBuffer"));
+    g_gl.glBufferData = reinterpret_cast<GlDispatchTable::PFN_glBufferData>(resolve_proc("glBufferData"));
+    g_gl.glMapBufferRange = reinterpret_cast<GlDispatchTable::PFN_glMapBufferRange>(resolve_proc("glMapBufferRange"));
+    g_gl.glMapBuffer = reinterpret_cast<GlDispatchTable::PFN_glMapBuffer>(resolve_proc("glMapBuffer"));
+    g_gl.glUnmapBuffer = reinterpret_cast<GlDispatchTable::PFN_glUnmapBuffer>(resolve_proc("glUnmapBuffer"));
+
+    g_core_gl_resolved = true;
 }
 
 class GlAsyncPboRing {
@@ -297,6 +283,8 @@ public:
 
     void reset_pending() noexcept {
         m_pending_frames = 0;
+        m_write_idx = 0;
+        m_read_idx = 0;
     }
 
     bool ensure_allocated(const GlDispatchTable& gl, void* ctx, uint32_t width, uint32_t height) {
@@ -430,6 +418,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
             g_gl_backend_initialized = false;
         }
         g_gl_pbo_ring.cleanup(g_gl);
+        g_core_gl_resolved = false;
         g_last_gl_context = current_ctx;
     }
 
