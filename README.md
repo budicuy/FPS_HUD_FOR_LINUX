@@ -348,7 +348,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 | Requirement | Minimum Version / Specification | Purpose |
 | :--- | :--- | :--- |
-| **C++ Compiler** | **Clang 18+** (Clang 23 recommended) or **GCC 14+** | Full ISO C++26 support (`-std=c++26`), `std::inplace_vector`, Pack Indexing |
+| **C++ Compiler** | **Clang 18+** (Clang 23 recommended) or **GCC 14+** | ISO C++26 (`-std=c++26` / `-std=c++2c`) with included internal polyfills |
 | **Build System** | **CMake >= 3.25** & **Ninja** | Fast multi-threaded build orchestration |
 | **Linker** | **LLD (`lld`)** | Fast linking with ThinLTO (`-flto=thin`) optimization |
 | **Graphics APIs** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Swapchain presentation hooking |
@@ -356,6 +356,12 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 | **Screen Recorder** | **FFmpeg development libraries** (`libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavutil`) & **libpulse** | Hardware video encoding & audio capture |
 | **Hardware Database** | **hwdata** or **pci.ids** | Discrete & integrated GPU model name identification |
 | **Asset Generator** | **Python 3.8+** | Generates embedded font C++ headers from TTF assets |
+
+> [!NOTE]
+> **C++26 Language Features & Compatibility Architecture:**
+> - **Native Standard Library Support:** Native `std::inplace_vector` and language Pack Indexing (`Types...[N]`) require Clang 19+ / GCC 15+.
+> - **Portability Polyfills Included:** To ensure FPSHUD builds cleanly across today's stable Linux distributions with Clang 18+ or GCC 14+, the codebase includes zero-overhead internal polyfills (`inplace_vec.hpp` and `pack_indexing.hpp`) that automatically activate if native compiler macros are absent.
+> - **Why C++26?** Guarantees zero heap allocation churn in the per-frame render loop via fixed inline vector storage and compile-time metric layout serialization.
 
 ### 2. Clone, Compile & Run Multi-Device Verification Suite
 ```bash

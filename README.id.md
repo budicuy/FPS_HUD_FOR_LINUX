@@ -346,7 +346,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 | Kebutuhan | Versi Minimum / Spesifikasi | Fungsi |
 | :--- | :--- | :--- |
-| **Kompiler C++** | **Clang 18+** (Direkomendasikan Clang 23) atau **GCC 14+** | Dukungan penuh standar ISO C++26 (`-std=c++26`), `std::inplace_vector`, Pack Indexing |
+| **Kompiler C++** | **Clang 18+** (Direkomendasikan Clang 23) atau **GCC 14+** | ISO C++26 (`-std=c++26` / `-std=c++2c`) dengan polyfill internal yang disertakan |
 | **Sistem Build** | **CMake >= 3.25** & **Ninja** | Orkestrasi kompilasi multi-threaded cepat |
 | **Linker** | **LLD (`lld`)** | Fast linking dengan optimasi ThinLTO (`-flto=thin`) |
 | **API Grafis** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Intersepsi swapchain presentasi frame |
@@ -354,6 +354,12 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 | **Perekam Layar** | **Pustaka pengembang FFmpeg** (`libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavutil`) & **libpulse** | Encoding video hardware & penangkapan audio |
 | **Database Hardware** | **hwdata** atau **pci.ids** | Identifikasi nama kartu grafis GPU diskrit/terintegrasi |
 | **Peralatan Asset** | **Python 3.8+** | Menghasilkan header C++ font tertanam dari berkas TTF |
+
+> [!NOTE]
+> **Fitur Bahasa C++26 & Arsitektur Kompatibilitas:**
+> - **Dukungan Standar Native:** `std::inplace_vector` bawaan dan Pack Indexing (`Types...[N]`) membutuhkan Clang 19+ / GCC 15+.
+> - **Polyfill Portabilitas Disertakan:** Agar FPSHUD dapat dikompilasi pada distro Linux saat ini yang menggunakan Clang 18+ atau GCC 14+, codebase menyertakan polyfill zero-overhead (`inplace_vec.hpp` dan `pack_indexing.hpp`) yang aktif secara otomatis bila macro fitur native belum tersedia.
+> - **Mengapa C++26?** Menjamin nol alokasi heap (*zero-heap churn*) di loop render per frame melalui penyimpanan vektor inline dan ekspansi pack saat kompilasi.
 
 ### 2. Clone, Compile & Jalankan Pengujian Simulasi 5 Perangkat
 ```bash
