@@ -9,9 +9,13 @@ DIST_DIR="$PROJECT_DIR/dist"
 echo "[*] Compiling FPSHUD from source with Clang 23 + LLD + ThinLTO..."
 "$SCRIPT_DIR/build_clang.sh"
 
+echo "[*] Preparing portable fpshud wrapper script..."
+sed "s|@FPSHUD_LIB_PATH@|\$HOME/.local/lib/fpshud/libfpshud.so|g" "$PROJECT_DIR/scripts/fpshud.in" > "$BUILD_DIR/fpshud"
+chmod 755 "$BUILD_DIR/fpshud"
+
 STRIP_BIN="$(command -v llvm-strip || command -v strip || true)"
 STRIP_TARGETS=("$BUILD_DIR/libfpshud.so" "$BUILD_DIR/fpshud_test")
-TAR_FILES=("libfpshud.so" "fpshud_test")
+TAR_FILES=("libfpshud.so" "fpshud" "fpshud_test")
 
 if [ -f "$BUILD_DIR/fpshud_recorder" ]; then
     STRIP_TARGETS+=("$BUILD_DIR/fpshud_recorder")

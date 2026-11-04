@@ -27,6 +27,7 @@ test -f "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: libfpshud
 test -x "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: libfpshud.so not executable"; exit 1; }
 test -f "${TEST_HOME}/.local/bin/fpshud" || { echo "FAIL: fpshud binary missing"; exit 1; }
 test -x "${TEST_HOME}/.local/bin/fpshud" || { echo "FAIL: fpshud binary not executable"; exit 1; }
+test ! -f "${TEST_HOME}/.local/bin/fpshud_test" || { echo "FAIL: fpshud_test should not be placed in ~/.local/bin"; exit 1; }
 test -f "${TEST_HOME}/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json" || { echo "FAIL: Vulkan layer manifest missing"; exit 1; }
 
 # Verify layer manifest references the sandbox libfpshud.so

@@ -21,23 +21,45 @@ if command -v flatpak >/dev/null 2>&1; then
     flatpak override --user --nofilesystem="$HOME/.local/lib/fpshud" com.valvesoftware.Steam 2>/dev/null || true
 fi
 
-# Remove system-level udev rules & /etc/fpshud if installed
+# Remove system-level udev rules, /etc/fpshud, and input group membership if installed
+TARGET_USER="${SUDO_USER:-$USER}"
 if [ -f /etc/udev/rules.d/99-fpshud-rapl.rules ] || [ -f /etc/udev/rules.d/99-fpshud-input.rules ] || [ -d /etc/fpshud ]; then
     if [ "$EUID" -eq 0 ]; then
         rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
         rm -rf /etc/fpshud
         udevadm control --reload-rules 2>/dev/null || true
+        if [ -n "$TARGET_USER" ] && groups "$TARGET_USER" 2>/dev/null | grep -qw "input"; then
+            if command -v gpasswd >/dev/null 2>&1; then
+                gpasswd -d "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+            elif command -v deluser >/dev/null 2>&1; then
+                deluser "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+            fi
+        fi
     elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
         if sudo -n true 2>/dev/null; then
             sudo rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
             sudo rm -rf /etc/fpshud
             sudo udevadm control --reload-rules 2>/dev/null || true
+            if [ -n "$TARGET_USER" ] && groups "$TARGET_USER" 2>/dev/null | grep -qw "input"; then
+                if command -v gpasswd >/dev/null 2>&1; then
+                    sudo gpasswd -d "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+                elif command -v deluser >/dev/null 2>&1; then
+                    sudo deluser "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+                fi
+            fi
         elif [ -e /dev/tty ]; then
-            echo "[*] Requesting sudo to clean up system udev rules and /etc/fpshud..."
+            echo "[*] Requesting sudo to clean up system udev rules, /etc/fpshud, and input group..."
             if sudo </dev/tty -v; then
                 sudo rm -f /etc/udev/rules.d/99-fpshud-rapl.rules /etc/udev/rules.d/99-fpshud-input.rules
                 sudo rm -rf /etc/fpshud
                 sudo udevadm control --reload-rules 2>/dev/null || true
+                if [ -n "$TARGET_USER" ] && groups "$TARGET_USER" 2>/dev/null | grep -qw "input"; then
+                    if command -v gpasswd >/dev/null 2>&1; then
+                        sudo gpasswd -d "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+                    elif command -v deluser >/dev/null 2>&1; then
+                        sudo deluser "$TARGET_USER" input 2>/dev/null && echo "[✓] Removed '$TARGET_USER' from 'input' group." || true
+                    fi
+                fi
             fi
         fi
     fi

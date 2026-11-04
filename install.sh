@@ -4,7 +4,9 @@ set -e
 REPO_OWNER="budicuy"
 REPO_NAME="FPS_HUD_FOR_LINUX"
 RELEASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/fpshud-linux-x86_64.tar.gz"
+RELEASE_SHA_URL="${RELEASE_URL}.sha256"
 RAW_DIST_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/dist/fpshud-linux-x86_64.tar.gz"
+RAW_DIST_SHA_URL="${RAW_DIST_URL}.sha256"
 
 LIB_DIR="$HOME/.local/lib/fpshud"
 BIN_DIR="$HOME/.local/bin"
@@ -16,6 +18,7 @@ echo "  FPSHUD — 1-Command Installer for Linux (Vulkan & OpenGL)"
 echo "=================================================================="
 
 mkdir -p "$LIB_DIR" "$BIN_DIR" "$VULKAN_LAYER_DIR" "$FONT_DIR"
+rm -f "$BIN_DIR/fpshud_test"
 
 TMP_DIR="$(mktemp -d /tmp/fpshud-install.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -23,26 +26,75 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 INSTALLED_BIN=0
 INSTALLED_FROM_SOURCE=0
 
+# Parse CLI options & isolate working directory
+ALLOW_LOCAL=0
+FORCE_OPT=0
+for arg in "$@"; do
+    case "$arg" in
+        --local|-l) ALLOW_LOCAL=1 ;;
+        --yes|-y) FORCE_OPT=1 ;;
+    esac
+done
+
+# If executed directly as a script file (not piped into bash) from inside the verified repo:
+if [ "$ALLOW_LOCAL" -eq 0 ] && [ "$0" != "bash" ] && [ "$0" != "-bash" ] && [ "$0" != "sh" ]; then
+    if [ -f "./CMakeLists.txt" ] && grep -q 'project(fpshud' "./CMakeLists.txt" 2>/dev/null; then
+        ALLOW_LOCAL=1
+    fi
+fi
+
+get_clang_version() {
+    local bin="$1"
+    "$bin" --version 2>/dev/null | grep -oE 'clang version [0-9]+' | awk '{print $3}'
+}
+
+get_gcc_version() {
+    local bin="$1"
+    "$bin" -dumpversion 2>/dev/null | cut -d. -f1
+}
+
 select_cpp_toolchain() {
     CXX_BIN=""
     CC_BIN=""
-    if command -v g++-16 >/dev/null 2>&1; then
-        CXX_BIN="g++-16"; CC_BIN="gcc-16"
-    elif command -v clang++ >/dev/null 2>&1; then
-        CXX_BIN="clang++"; CC_BIN="clang"
-    elif command -v g++ >/dev/null 2>&1; then
-        CXX_BIN="g++"; CC_BIN="gcc"
-    fi
+    # 1. Probe Clang candidate compilers (Clang 18+)
+    for cand in clang++-23 clang++-22 clang++-21 clang++-20 clang++-19 clang++-18 clang++; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            local ver
+            ver="$(get_clang_version "$cand")"
+            if [ -n "$ver" ] && [ "$ver" -ge 18 ] 2>/dev/null; then
+                CXX_BIN="$cand"
+                local cc_cand="${cand/clang++/clang}"
+                command -v "$cc_cand" >/dev/null 2>&1 && CC_BIN="$cc_cand" || CC_BIN="clang"
+                return 0
+            fi
+        fi
+    done
+
+    # 2. Probe GCC candidate compilers (GCC 14+)
+    for cand in g++-16 g++-15 g++-14 g++; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            local ver
+            ver="$(get_gcc_version "$cand")"
+            if [ -n "$ver" ] && [ "$ver" -ge 14 ] 2>/dev/null; then
+                CXX_BIN="$cand"
+                local cc_cand="${cand/g++/gcc}"
+                command -v "$cc_cand" >/dev/null 2>&1 && CC_BIN="$cc_cand" || CC_BIN="gcc"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
 }
 
 build_and_install_from_source() {
-    select_cpp_toolchain
-    if ! command -v cmake >/dev/null 2>&1 || [ -z "$CXX_BIN" ]; then
-        echo "[!] Cannot build from source: cmake or C++26 compiler (g++-16+ / clang++) not installed."
+    if ! command -v cmake >/dev/null 2>&1 || ! select_cpp_toolchain; then
+        echo "[!] Cannot build from source: CMake and a modern C++26 compiler (Clang 18+ or GCC 14+) are required."
         return 1
     fi
+    echo "[*] Compiling FPSHUD from source using $CXX_BIN..."
     local src_dir="$TMP_DIR/src"
-    if [ -f "./CMakeLists.txt" ] && [ -d "./src" ]; then
+    if [ "$ALLOW_LOCAL" -eq 1 ] && [ -f "./CMakeLists.txt" ] && [ -d "./src" ]; then
         src_dir="."
     elif [ ! -d "$src_dir" ]; then
         git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$src_dir"
@@ -57,7 +109,7 @@ build_and_install_from_source() {
     cmake "${cmake_args[@]}" "$src_dir"
     cmake --build "$TMP_DIR/build" --parallel
     cp -f "$TMP_DIR/build/libfpshud.so" "$LIB_DIR/libfpshud.so"
-    [ -f "$TMP_DIR/build/fpshud_test" ] && cp -f "$TMP_DIR/build/fpshud_test" "$BIN_DIR/fpshud_test"
+    [ -f "$TMP_DIR/build/fpshud_test" ] && cp -f "$TMP_DIR/build/fpshud_test" "$LIB_DIR/fpshud_test"
     if [ -f "$TMP_DIR/build/fpshud_recorder" ]; then
         cp -f "$TMP_DIR/build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
         cp -f "$TMP_DIR/build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
@@ -70,46 +122,97 @@ build_and_install_from_source() {
     INSTALLED_FROM_SOURCE=1
 }
 
-# 1. If executed from a local checkout with build/libfpshud.so or dist/ tarball
-if [ -f "./build/libfpshud.so" ]; then
-    echo "[*] Installing from local build directory..."
-    cp -f "./build/libfpshud.so" "$LIB_DIR/libfpshud.so"
-    [ -f "./build/fpshud_test" ] && cp -f "./build/fpshud_test" "$BIN_DIR/fpshud_test"
-    if [ -f "./build/fpshud_recorder" ]; then
-        cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
-        cp -f "./build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+# 1. Install from local build or dist only when explicitly authorized
+if [ "$ALLOW_LOCAL" -eq 1 ]; then
+    if [ -f "./build/libfpshud.so" ]; then
+        echo "[*] Installing from local build directory..."
+        cp -f "./build/libfpshud.so" "$LIB_DIR/libfpshud.so"
+        [ -f "./build/fpshud_test" ] && cp -f "./build/fpshud_test" "$LIB_DIR/fpshud_test"
+        if [ -f "./build/fpshud_recorder" ]; then
+            cp -f "./build/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+            cp -f "./build/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+        fi
+        if [ -f "./build/fpshud_recorder_bin" ]; then
+            cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+            cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        fi
+        INSTALLED_BIN=1
+    elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
+        echo "[*] Extracting from local prebuilt package..."
+        tar -xzf "./dist/fpshud-linux-x86_64.tar.gz" -C "$TMP_DIR"
+        if [ ! -f "$TMP_DIR/libfpshud.so" ]; then
+            echo "[!] ERROR: Local archive ./dist/fpshud-linux-x86_64.tar.gz is corrupted or missing libfpshud.so."
+            exit 1
+        fi
+        cp -f "$TMP_DIR/libfpshud.so" "$LIB_DIR/libfpshud.so"
+        [ -f "$TMP_DIR/fpshud_test" ] && cp -f "$TMP_DIR/fpshud_test" "$LIB_DIR/fpshud_test"
+        if [ -f "$TMP_DIR/fpshud_recorder" ]; then
+            cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
+            cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
+        fi
+        if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+            cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+            cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        fi
+        INSTALLED_BIN=1
     fi
-    if [ -f "./build/fpshud_recorder_bin" ]; then
-        cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-        cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-    fi
-    INSTALLED_BIN=1
-elif [ -f "./dist/fpshud-linux-x86_64.tar.gz" ]; then
-    echo "[*] Extracting from local prebuilt package..."
-    tar -xzf "./dist/fpshud-linux-x86_64.tar.gz" -C "$TMP_DIR"
-    cp -f "$TMP_DIR/libfpshud.so" "$LIB_DIR/libfpshud.so"
-    [ -f "$TMP_DIR/fpshud_test" ] && cp -f "$TMP_DIR/fpshud_test" "$BIN_DIR/fpshud_test"
-    if [ -f "$TMP_DIR/fpshud_recorder" ]; then
-        cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
-        cp -f "$TMP_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
-    fi
-    if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
-        cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-        cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-    fi
-    INSTALLED_BIN=1
 fi
 
-# 2. Download prebuilt portable binary via curl (Zero build packages required!)
+verify_sha256() {
+    local target_file="$1"
+    local sha_file="$2"
+    local expected_hash=""
+    expected_hash="$(grep -oE '[a-fA-F0-9]{64}' "$sha_file" 2>/dev/null | head -n 1 || true)"
+    if [ -z "$expected_hash" ]; then
+        echo "[!] ERROR: Checksum hash not found in $sha_file"
+        return 1
+    fi
+    local actual_hash=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_hash="$(sha256sum "$target_file" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual_hash="$(shasum -a 256 "$target_file" | awk '{print $1}')"
+    else
+        echo "[!] WARNING: Neither sha256sum nor shasum is installed; cannot verify archive integrity."
+        return 1
+    fi
+    if [ "$expected_hash" != "$actual_hash" ]; then
+        echo "[!] ERROR: Cryptographic SHA256 checksum verification failed!"
+        echo "    File    : $target_file"
+        echo "    Expected: $expected_hash"
+        echo "    Actual  : $actual_hash"
+        return 1
+    fi
+    echo "[✓] Cryptographic SHA256 integrity verified ($expected_hash)."
+    return 0
+}
+
+# 2. Download prebuilt portable binary with SHA256 verification
 if [ "$INSTALLED_BIN" -eq 0 ]; then
-    echo "[*] Downloading prebuilt portable FPSHUD binary (no compilation needed)..."
-    if curl -fsSL "$RELEASE_URL" -o "$TMP_DIR/fpshud.tar.gz" 2>/dev/null || \
-       curl -fsSL "$RAW_DIST_URL" -o "$TMP_DIR/fpshud.tar.gz"; then
+    echo "[*] Downloading prebuilt portable FPSHUD binary..."
+    DOWNLOAD_OK=0
+    if curl -fL "$RELEASE_URL" -o "$TMP_DIR/fpshud.tar.gz" 2>/dev/null && \
+       curl -fL "$RELEASE_SHA_URL" -o "$TMP_DIR/fpshud.tar.gz.sha256" 2>/dev/null; then
+        DOWNLOAD_OK=1
+    elif curl -fL "$RAW_DIST_URL" -o "$TMP_DIR/fpshud.tar.gz" 2>/dev/null && \
+         curl -fL "$RAW_DIST_SHA_URL" -o "$TMP_DIR/fpshud.tar.gz.sha256" 2>/dev/null; then
+        DOWNLOAD_OK=1
+    fi
+
+    if [ "$DOWNLOAD_OK" -eq 1 ]; then
+        if ! verify_sha256 "$TMP_DIR/fpshud.tar.gz" "$TMP_DIR/fpshud.tar.gz.sha256"; then
+            echo "[!] Security Error: Downloaded release archive does not match published hash! Aborting."
+            exit 1
+        fi
         tar -xzf "$TMP_DIR/fpshud.tar.gz" -C "$TMP_DIR"
+        if [ ! -f "$TMP_DIR/libfpshud.so" ]; then
+            echo "[!] ERROR: Downloaded archive is invalid or missing libfpshud.so."
+            exit 1
+        fi
         cp -f "$TMP_DIR/libfpshud.so" "$LIB_DIR/libfpshud.so"
         if [ -f "$TMP_DIR/fpshud_test" ]; then
-            cp -f "$TMP_DIR/fpshud_test" "$BIN_DIR/fpshud_test"
-            chmod +x "$BIN_DIR/fpshud_test"
+            cp -f "$TMP_DIR/fpshud_test" "$LIB_DIR/fpshud_test"
+            chmod +x "$LIB_DIR/fpshud_test"
         fi
         if [ -f "$TMP_DIR/fpshud_recorder" ]; then
             cp -f "$TMP_DIR/fpshud_recorder" "$BIN_DIR/fpshud_recorder"
@@ -129,21 +232,21 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
 fi
 
 chmod +x "$LIB_DIR/libfpshud.so"
-[ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
+[ -f "$LIB_DIR/fpshud_test" ] && chmod +x "$LIB_DIR/fpshud_test"
 [ -f "$BIN_DIR/fpshud_recorder" ] && chmod +x "$BIN_DIR/fpshud_recorder"
 [ -f "$LIB_DIR/fpshud_recorder" ] && chmod +x "$LIB_DIR/fpshud_recorder"
 [ -f "$BIN_DIR/fpshud_recorder_bin" ] && chmod +x "$BIN_DIR/fpshud_recorder_bin"
 [ -f "$LIB_DIR/fpshud_recorder_bin" ] && chmod +x "$LIB_DIR/fpshud_recorder_bin"
 
-# Verify prebuilt libfpshud.so & fpshud_test compatibility (GLIBC & pre-AVX2 CPU safety)
+# Verify prebuilt libfpshud.so compatibility (GLIBC & pre-AVX2 CPU safety)
 if [ "$INSTALLED_FROM_SOURCE" -eq 0 ]; then
     NEED_REBUILD=0
     if ldd "$LIB_DIR/libfpshud.so" 2>&1 | grep -q "not found"; then
         echo "[*] Notice: Prebuilt libfpshud.so requires newer system libraries than installed on this distro."
         NEED_REBUILD=1
-    elif ! grep -qw "avx2" /proc/cpuinfo 2>/dev/null && [ -x "$BIN_DIR/fpshud_test" ]; then
+    elif ! grep -qw "avx2" /proc/cpuinfo 2>/dev/null && [ -x "$LIB_DIR/fpshud_test" ]; then
         TEST_RC=0
-        "$BIN_DIR/fpshud_test" >/dev/null 2>&1 || TEST_RC=$?
+        "$LIB_DIR/fpshud_test" >/dev/null 2>&1 || TEST_RC=$?
         if [ "$TEST_RC" -eq 132 ] || [ "$TEST_RC" -eq 127 ]; then
             echo "[*] Notice: Prebuilt binary uses CPU instructions unsupported by this processor (exit $TEST_RC)."
             NEED_REBUILD=1
@@ -151,9 +254,9 @@ if [ "$INSTALLED_FROM_SOURCE" -eq 0 ]; then
     fi
     if [ "$NEED_REBUILD" -eq 1 ]; then
         echo "    Rebuilding native FPSHUD binaries from source for this host..."
-        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & g++-16/clang++ to build locally)."
+        build_and_install_from_source || echo "[!] Warning: Native source rebuild skipped (install cmake & Clang 18+ or GCC 14+ to build locally)."
         chmod +x "$LIB_DIR/libfpshud.so"
-        [ -f "$BIN_DIR/fpshud_test" ] && chmod +x "$BIN_DIR/fpshud_test"
+        [ -f "$LIB_DIR/fpshud_test" ] && chmod +x "$LIB_DIR/fpshud_test"
     fi
 fi
 
@@ -167,7 +270,7 @@ if [ -f "$REC_CHECK_TARGET" ] && ldd "$REC_CHECK_TARGET" 2>&1 | grep -q "not fou
     if [ -n "$CXX_BIN" ] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavformat libavcodec libavutil libswscale libswresample libpulse 2>/dev/null; then
         REC_TMP="$(mktemp -d /tmp/fpshud-rec-build.XXXXXX)"
         REC_SRC_DIR="$REC_TMP/src"
-        if [ -f "./src/recorder/recorder_main.cpp" ] || [ -f "./src/recorder_main.cpp" ]; then
+        if [ "$ALLOW_LOCAL" -eq 1 ] && [ -f "./src/recorder/recorder_main.cpp" ]; then
             REC_SRC_DIR="."
         elif command -v git >/dev/null 2>&1; then
             git clone --depth 1 "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REC_SRC_DIR" 2>/dev/null || true
@@ -257,346 +360,24 @@ cat > "$VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json" <<EOF
 }
 EOF
 
-# 5. Generate OpenGL Wrapper Script (~/.local/bin/fpshud)
-cat > "$BIN_DIR/fpshud" << EOF
-#!/usr/bin/env bash
-# ====================================================================
-# FPSHUD — Linux Gaming Performance Overlay & Management CLI
-# ====================================================================
-
-LIB_SO="$LIB_DIR/libfpshud.so"
-RAM_CACHE_USER="\${XDG_DATA_HOME:-\$HOME/.local/share}/fpshud/ram_info"
-RAM_CACHE_SYS="/etc/fpshud/ram_info"
-
-show_help() {
-    cat <<'HELP_EOF'
-====================================================================
-  FPSHUD — Linux Gaming Performance Overlay & Management CLI
-====================================================================
-Penggunaan / Usage:
-  fpshud <perintah/game> [args...] Launch OpenGL / Vulkan game with overlay
-  fpshud --status, -c              Periksa status izin sensor hardware
-  fpshud --setup, -s               Konfigurasi izin sensor hardware (Sudo)
-  fpshud --help, -h                Tampilkan bantuan ini
-
-Contoh / Examples:
-  fpshud glxgears
-  fpshud %command%                 (Steam Launch Options untuk game OpenGL)
-  fpshud --status                  (Periksa apakah CPU Watt & RAM terbaca)
-  fpshud --setup                   (Beri izin sensor kapan saja tanpa instal ulang)
-====================================================================
-HELP_EOF
-}
-
-check_status() {
-    echo "===================================================================="
-    echo "  FPSHUD — Status Izin & Akses Sensor Perangkat Keras"
-    echo "===================================================================="
-
-    local rapl_ok=0
-    local input_ok=0
-    local ram_ok=0
-
-    # 1. RAPL CPU Wattage
-    for r in /sys/class/powercap/*rapl*/*/energy_uj /sys/class/powercap/*rapl*/energy_uj; do
-        if [ -r "\$r" ] 2>/dev/null; then
-            rapl_ok=1
-            break
-        fi
-    done
-
-    # 2. Wayland Input / Evdev
-    if groups 2>/dev/null | grep -qw "input" || [ -r /dev/input/event0 ] 2>/dev/null; then
-        input_ok=1
-    fi
-
-    # 3. RAM Cache
-    if [ -f "\$RAM_CACHE_USER" ] || [ -f "\$RAM_CACHE_SYS" ]; then
-        ram_ok=1
-    fi
-
-    echo -n "  [+] CPU Package Power (RAPL / Watt)   : "
-    if [ "\$rapl_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Dapat dibaca)\033[0m"
-    else
-        echo -e "\033[33mTERBATAS (Perlu izin udev / sudo)\033[0m"
-    fi
-
-    echo -n "  [+] RAM Speed (MT/s) & DDR Type       : "
-    if [ "\$ram_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Cache tersedia)\033[0m"
-    else
-        echo -e "\033[33mTERBATAS (Cache belum dibuat)\033[0m"
-    fi
-
-    echo -n "  [+] Wayland Hotkeys & Mouse Capture   : "
-    if [ "\$input_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Grup input terdeteksi)\033[0m"
-    else
-        echo -e "\033[33mTERBATAS (User belum di grup input)\033[0m"
-    fi
-
-    echo "--------------------------------------------------------------------"
-    if [ "\$rapl_ok" -eq 1 ] && [ "\$ram_ok" -eq 1 ] && [ "\$input_ok" -eq 1 ]; then
-        echo -e "\033[32mSemua izin sensor hardware lengkap dan siap digunakan!\033[0m"
-    else
-        echo -e "\033[33mSebagian sensor belum aktif. Untuk mengaktifkannya, jalankan:\033[0m"
-        echo "    fpshud --setup"
-    fi
-    echo "===================================================================="
-}
-
-run_setup() {
-    echo "===================================================================="
-    echo "  FPSHUD — Konfigurasi Izin Sensor Hardware (CPU, RAM & Wayland)"
-    echo "===================================================================="
-    echo "Mengonfigurasi aturan udev standar Linux & cache SMBIOS agar sensor"
-    echo "dapat dibaca oleh user biasa tanpa hak root saat bermain game."
-    echo ""
-    echo "Perhatian Keamanan / Security Notice (I6):"
-    echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
-    echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
-    echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat input"
-    echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
-    echo "--------------------------------------------------------------------"
-
-    if [ -t 0 ] && [ "\${FORCE_SETUP:-0}" != "1" ] && [ "\${1:-}" != "-y" ] && [ "\${1:-}" != "--yes" ]; then
-        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm
-        case "\$confirm" in
-            [yY][eE][sS]|[yY]) ;;
-            *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
-        esac
-    fi
-
-    local SUDO_CMD="sudo"
-    if [ "\$EUID" -eq 0 ]; then
-        SUDO_CMD=""
-    else
-        if ! command -v sudo >/dev/null 2>&1; then
-            echo "[!] Perintah 'sudo' tidak ditemukan pada sistem ini."
-            exit 1
-        fi
-        echo "[*] Meminta izin administrator (sudo)..."
-        if ! sudo -v; then
-            echo "[!] Gagal mendapatkan izin sudo. Konfigurasi dibatalkan."
-            exit 1
-        fi
-    fi
-
-    # 1. RAPL CPU Wattage udev rule
-    echo "[*] Memasang udev rule untuk CPU Wattage (/etc/udev/rules.d/99-fpshud-rapl.rules)..."
-    \$SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "UDEV_EOF"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", MODE="0444"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", MODE="0444"
-UDEV_EOF'
-    \$SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
-
-    # 2. Wayland Input udev rule & Group
-    echo "[*] Memasang udev rule untuk Wayland Hotkeys (/etc/udev/rules.d/99-fpshud-input.rules)..."
-    \$SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "UDEV_EOF"
-KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input"
-UDEV_EOF'
-    \$SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
-
-    # Add user to input group
-    TARGET_USER="\${SUDO_USER:-\$USER}"
-    if [ -n "\$TARGET_USER" ] && id -u "\$TARGET_USER" >/dev/null 2>&1; then
-        echo "[*] Menambahkan pengguna '\$TARGET_USER' ke grup input..."
-        \$SUDO_CMD usermod -a -G input "\$TARGET_USER" 2>/dev/null || true
-    fi
-
-    # 3. Generate RAM Info Cache
-    echo "[*] Mendeteksi informasi RAM (Kecepatan MT/s & Tipe DDR via SMBIOS)..."
-    TARGET_HOME="\${HOME}"
-    if [ -n "\$SUDO_USER" ]; then
-        USER_HOME="\$(getent passwd "\$SUDO_USER" 2>/dev/null | cut -d: -f6)"
-        [ -n "\$USER_HOME" ] && TARGET_HOME="\$USER_HOME"
-    fi
-    TARGET_RAM_FILE="\${XDG_DATA_HOME:-\$TARGET_HOME/.local/share}/fpshud/ram_info"
-    mkdir -p "\$(dirname "\$TARGET_RAM_FILE")"
-
-    if command -v python3 >/dev/null 2>&1; then
-        \$SUDO_CMD python3 -c '
-import glob, struct, os, re, subprocess
-
-types = {
-    0x12: "DDR", 0x13: "DDR2", 0x18: "DDR3", 0x1A: "DDR4",
-    0x1B: "LPDDR", 0x1C: "LPDDR2", 0x1D: "LPDDR3", 0x1E: "LPDDR4",
-    0x22: "DDR5", 0x23: "LPDDR5"
-}
-
-speed = 0
-ram_type = "RAM"
-modules = 0
-
-for raw_path in glob.glob("/sys/firmware/dmi/entries/17-*/raw"):
-    try:
-        with open(raw_path, "rb") as f:
-            b = f.read()
-        if len(b) < 0x17 or b[0] != 17:
-            continue
-        length = min(b[1], len(b))
-        size = struct.unpack_from("<H", b, 0x0C)[0]
-        if size == 0 or size == 0xFFFF:
-            continue
-        modules += 1
-        if length > 0x12 and ram_type == "RAM":
-            t = types.get(b[0x12])
-            if t: ram_type = t
-        rated = struct.unpack_from("<H", b, 0x15)[0] if length > 0x16 else 0
-        conf = struct.unpack_from("<H", b, 0x20)[0] if length > 0x21 else 0
-        if rated == 0xFFFF and length >= 0x58:
-            rated = struct.unpack_from("<I", b, 0x54)[0]
-        if conf == 0xFFFF and length >= 0x5C:
-            conf = struct.unpack_from("<I", b, 0x58)[0]
-        eff = conf if conf > 0 else rated
-        if eff > speed:
-            speed = eff
-    except Exception:
-        pass
-
-if speed == 0:
-    for cmd in ["/usr/sbin/dmidecode", "/usr/bin/dmidecode", "dmidecode"]:
-        try:
-            out = subprocess.check_output([cmd, "-t", "memory"], text=True, stderr=subprocess.DEVNULL)
-            for block in out.split("Memory Device"):
-                m_size = re.search(r"Size:\s+(\d+)\s+([MG]B)", block)
-                if not m_size or "No Module Installed" in block:
-                    continue
-                modules += 1
-                m_type = re.search(r"Type:\s+([A-Za-z0-9\-]+)", block)
-                if m_type and ram_type == "RAM":
-                    ram_type = m_type.group(1).replace("-", "")
-                m_conf = re.search(r"Configured Memory Speed:\s+(\d+)\s+MT/s", block) or \
-                         re.search(r"Configured Clock Speed:\s+(\d+)\s+MHz", block)
-                m_speed = re.search(r"Speed:\s+(\d+)\s+(?:MT/s|MHz)", block)
-                sp = int(m_conf.group(1)) if m_conf else (int(m_speed.group(1)) if m_speed else 0)
-                if sp > speed:
-                    speed = sp
-            break
-        except Exception:
-            pass
-
-target_file = "'"\$TARGET_RAM_FILE"'"
-if speed > 0:
-    with open(target_file, "w") as f:
-        f.write(f"type={ram_type}\nspeed_mts={speed}\nmodules={modules}\n")
-    os.chmod(target_file, 0o644)
-    print(f"    [+] Deteksi RAM Sukses: {ram_type} {speed} MT/s ({modules} modul)")
-' 2>/dev/null || true
-    else
-        echo "    [!] python3 tidak ditemukan, pembacaan SMBIOS RAM dilewati."
-    fi
-
-    # Fix ownership if created under sudo
-    if [ -n "\$TARGET_USER" ] && [ -f "\$TARGET_RAM_FILE" ]; then
-        \$SUDO_CMD chown -R "\$TARGET_USER:" "\$(dirname "\$TARGET_RAM_FILE")" 2>/dev/null || true
-    fi
-
-    # System-wide copy
-    \$SUDO_CMD mkdir -p /etc/fpshud 2>/dev/null || true
-    if [ -f "\$TARGET_RAM_FILE" ]; then
-        \$SUDO_CMD cp "\$TARGET_RAM_FILE" /etc/fpshud/ram_info 2>/dev/null || true
-        \$SUDO_CMD chmod 644 /etc/fpshud/ram_info 2>/dev/null || true
-    fi
-
-    # 4. Reload udev rules
-    echo "[*] Me-reload aturan udev sistem..."
-    \$SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
-    \$SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
-    \$SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
-
-    # 5. Flatpak Steam configuration
-    FLATPAK_STEAM_DIR="\$TARGET_HOME/.var/app/com.valvesoftware.Steam"
-    if [ -d "\$FLATPAK_STEAM_DIR" ]; then
-        echo "[*] Mendeteksi direktori Flatpak Steam: \$FLATPAK_STEAM_DIR"
-        if command -v flatpak >/dev/null 2>&1; then
-            if [ -n "\$SUDO_USER" ] && [ "\$EUID" -eq 0 ]; then
-                su - "\$SUDO_USER" -c 'flatpak override --user --filesystem="\$HOME/.local/lib/fpshud:ro" --filesystem=xdg-config/fpshud:create --filesystem=xdg-data/fpshud:ro com.valvesoftware.Steam' 2>/dev/null || true
-            else
-                flatpak override --user --filesystem="\$HOME/.local/lib/fpshud:ro" --filesystem=xdg-config/fpshud:create --filesystem=xdg-data/fpshud:ro com.valvesoftware.Steam 2>/dev/null || true
-            fi
-        fi
-        VK_SRC="\${XDG_DATA_HOME:-\$TARGET_HOME/.local/share}/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
-        VK_DST="\$FLATPAK_STEAM_DIR/data/vulkan/implicit_layer.d"
-        mkdir -p "\$VK_DST" 2>/dev/null || true
-        if [ -f "\$VK_SRC" ]; then
-            cp -f "\$VK_SRC" "\$VK_DST/VkLayer_FPSHUD_overlay.json" 2>/dev/null || true
-            if [ -n "\$TARGET_USER" ]; then
-                \$SUDO_CMD chown -R "\$TARGET_USER:" "\$VK_DST" 2>/dev/null || true
-            fi
-        fi
-        echo "    [+] Izin dan Vulkan implicit layer Flatpak Steam berhasil dikonfigurasi."
-    fi
-
-    echo ""
-    echo "===================================================================="
-    echo "  [✓] Konfigurasi Izin Sensor Berhasil Selesai!"
-    echo "===================================================================="
-    echo "Catatan: Jika Anda baru ditambahkan ke grup 'input', silakan relogin"
-    echo "atau jalankan 'newgrp input' agar hotkey Wayland langsung aktif."
-    echo "===================================================================="
-}
-
-case "\$1" in
-    --help|-h|help)
-        show_help
-        exit 0
-        ;;
-    --status|-c|status|check)
-        check_status
-        exit 0
-        ;;
-    --setup|-s|setup)
-        run_setup
-        exit 0
-        ;;
-    *)
-        if [ \$# -eq 0 ]; then
-            show_help
-            exit 1
-        fi
-        ;;
-esac
-
-# Resolve target binary to check for ELF32
-TARGET_BIN="\$1"
-if [ ! -f "\$TARGET_BIN" ]; then
-    RESOLVED_BIN="\$(command -v "\$1" 2>/dev/null || true)"
-    if [ -n "\$RESOLVED_BIN" ] && [ -f "\$RESOLVED_BIN" ]; then
-        TARGET_BIN="\$RESOLVED_BIN"
-    fi
+# 5. Install OpenGL & CLI Management Wrapper Script (~/.local/bin/fpshud)
+if [ -f "$TMP_DIR/fpshud" ]; then
+    cp -f "$TMP_DIR/fpshud" "$BIN_DIR/fpshud"
+elif [ -f "./scripts/fpshud.in" ]; then
+    sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "./scripts/fpshud.in" > "$BIN_DIR/fpshud"
+elif [ -f "$TMP_DIR/src/scripts/fpshud.in" ]; then
+    sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "$TMP_DIR/src/scripts/fpshud.in" > "$BIN_DIR/fpshud"
+elif [ -f "$TMP_DIR/scripts/fpshud.in" ]; then
+    sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "$TMP_DIR/scripts/fpshud.in" > "$BIN_DIR/fpshud"
+else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/fpshud.in" 2>/dev/null | \
+        sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" > "$BIN_DIR/fpshud" || true
 fi
-
-IS_ELF32=0
-if [ -f "\$TARGET_BIN" ] && [ -r "\$TARGET_BIN" ]; then
-    MAGIC_5="\$(od -An -tx1 -N5 "\$TARGET_BIN" 2>/dev/null | tr -d ' \n')"
-    if [ "\$MAGIC_5" = "7f454c4601" ]; then
-        IS_ELF32=1
-    fi
-fi
-
-if [ "\$IS_ELF32" -eq 1 ]; then
-    echo "[INFO] Target binary is 32-bit ELF (ELFCLASS32); skipping 64-bit FPSHUD overlay injection."
-    exec "\$@"
-fi
-
-# Launch game with LD_PRELOAD
-if [ -z "\$FPS_HUD" ]; then
-    export FPS_HUD=1
-fi
-export LD_LIBRARY_PATH="\$(dirname "\$LIB_SO")\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-export LD_PRELOAD="libfpshud.so\${LD_PRELOAD:+:\$LD_PRELOAD}"
-exec "\$@"
-EOF
 chmod +x "$BIN_DIR/fpshud"
 
 # ====================================================================
 # 6. Hardware Telemetry Permissions (RAM Speed, CPU Wattage & Wayland Hotkeys)
 # ====================================================================
-HAVE_SUDO=0
-SUDO_CMD="sudo"
-
 echo ""
 echo "=================================================================="
 echo "  Hardware Telemetry & Sensor Permissions Setup"
@@ -610,26 +391,26 @@ echo ""
 echo "Sudo access is STRONGLY RECOMMENDED to enable these sensors"
 echo "via lightweight, standard system udev rules."
 echo ""
-echo "Perhatian Keamanan / Security Notice:"
-echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
-echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
-echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat input"
-echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
+echo "Security Notice / Perhatian Keamanan:"
+echo "  1. Granting read access to RAPL CPU Wattage (MODE 0444) allows local"
+echo "     software to observe CPU power counters (side-channel CVE-2020-8694 Platypus trade-off)."
+echo "  2. Adding user to 'input' group grants access to raw input event nodes"
+echo "     (/dev/input/event*), which can observe system keystrokes."
 echo "=================================================================="
 
 USER_CONFIRM=0
-if [ "${FORCE_SETUP:-0}" = "1" ] || [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
+if [ "${FORCE_SETUP:-0}" = "1" ] || [ "$FORCE_OPT" -eq 1 ]; then
     USER_CONFIRM=1
 elif [ -n "${CI:-}" ]; then
     USER_CONFIRM=0
 elif [ -t 0 ]; then
-    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm || confirm="n"
+    read -r -p "Proceed with sudo hardware sensor setup? / Lanjutkan konfigurasi sensor via sudo? [y/N] " confirm || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
 elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    read -r -p "Lanjutkan konfigurasi izin sensor hardware via sudo? / Proceed? [y/N] " confirm < /dev/tty || confirm="n"
+    read -r -p "Proceed with sudo hardware sensor setup? / Lanjutkan konfigurasi sensor via sudo? [y/N] " confirm < /dev/tty || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
@@ -641,163 +422,16 @@ else
 fi
 
 if [ "$USER_CONFIRM" -eq 1 ]; then
-    if [ "$EUID" -eq 0 ]; then
-        HAVE_SUDO=1
-        SUDO_CMD=""
-    elif command -v sudo >/dev/null 2>&1 && [ -z "$FPSHUD_NO_SUDO" ] && [ -z "$CI" ]; then
-        if sudo -n true 2>/dev/null; then
-            HAVE_SUDO=1
-            SUDO_CMD="sudo"
-        elif [ -e /dev/tty ]; then
-            echo ""
-            echo "[*] Requesting sudo permission to configure hardware sensors permanently..."
-            if sudo </dev/tty -v; then
-                HAVE_SUDO=1
-                SUDO_CMD="sudo"
-            else
-                echo "[!] Sudo permission skipped or failed. Non-privileged sensors will continue to function."
-            fi
-        fi
+    if [ -x "$BIN_DIR/fpshud" ]; then
+        FORCE_SETUP=1 "$BIN_DIR/fpshud" --setup || echo "[!] Sudo configuration incomplete. You can retry anytime via: ~/.local/bin/fpshud --setup"
     fi
-fi
-
-if [ "$HAVE_SUDO" -eq 0 ]; then
+else
     echo ""
-    echo "[!] Sudo permission skipped."
+    echo "[!] Sudo configuration skipped."
     echo "    Core overlay, FPS, and GPU sensors will function normally."
-    echo "    To enable CPU Wattage, RAM Speed, and Wayland hotkeys later,"
-    echo "    simply run at any time:"
+    echo "    To enable CPU Wattage, RAM Speed, and Wayland hotkeys later, run at any time:"
+    echo "        ~/.local/bin/fpshud --setup"
     echo ""
-    echo "        fpshud --setup"
-    echo ""
-fi
-
-RAM_INFO_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/fpshud/ram_info"
-RAM_PY='
-import glob, struct, os, re, subprocess
-
-types = {
-    0x12: "DDR", 0x13: "DDR2", 0x18: "DDR3", 0x1A: "DDR4",
-    0x1B: "LPDDR", 0x1C: "LPDDR2", 0x1D: "LPDDR3", 0x1E: "LPDDR4",
-    0x22: "DDR5", 0x23: "LPDDR5"
-}
-
-speed = 0
-ram_type = "RAM"
-modules = 0
-
-for raw_path in glob.glob("/sys/firmware/dmi/entries/17-*/raw"):
-    try:
-        with open(raw_path, "rb") as f:
-            b = f.read()
-        if len(b) < 0x17 or b[0] != 17:
-            continue
-        length = min(b[1], len(b))
-        size = struct.unpack_from("<H", b, 0x0C)[0]
-        if size == 0 or size == 0xFFFF:
-            continue
-        modules += 1
-        if length > 0x12 and ram_type == "RAM":
-            t = types.get(b[0x12])
-            if t: ram_type = t
-        rated = struct.unpack_from("<H", b, 0x15)[0] if length > 0x16 else 0
-        conf = struct.unpack_from("<H", b, 0x20)[0] if length > 0x21 else 0
-        if rated == 0xFFFF and length >= 0x58:
-            rated = struct.unpack_from("<I", b, 0x54)[0]
-        if conf == 0xFFFF and length >= 0x5C:
-            conf = struct.unpack_from("<I", b, 0x58)[0]
-        eff = conf if conf > 0 else rated
-        if eff > speed:
-            speed = eff
-    except Exception:
-        pass
-
-if speed == 0:
-    for cmd in ["/usr/sbin/dmidecode", "/usr/bin/dmidecode", "dmidecode"]:
-        try:
-            out = subprocess.check_output([cmd, "-t", "memory"], text=True, stderr=subprocess.DEVNULL)
-            for block in out.split("Memory Device"):
-                m_size = re.search(r"Size:\s+(\d+)\s+([MG]B)", block)
-                if not m_size or "No Module Installed" in block:
-                    continue
-                modules += 1
-                m_type = re.search(r"Type:\s+([A-Za-z0-9\-]+)", block)
-                if m_type and ram_type == "RAM":
-                    ram_type = m_type.group(1).replace("-", "")
-                m_conf = re.search(r"Configured Memory Speed:\s+(\d+)\s+MT/s", block) or \
-                         re.search(r"Configured Clock Speed:\s+(\d+)\s+MHz", block)
-                m_speed = re.search(r"Speed:\s+(\d+)\s+(?:MT/s|MHz)", block)
-                sp = int(m_conf.group(1)) if m_conf else (int(m_speed.group(1)) if m_speed else 0)
-                if sp > speed:
-                    speed = sp
-            break
-        except Exception:
-            pass
-
-print(f"type={ram_type}")
-print(f"speed_mts={speed}")
-print(f"rated_mts={speed}")
-print(f"modules={modules}")
-'
-
-if command -v python3 >/dev/null 2>&1; then
-    TMP_RAM="$TMP_DIR/ram_info"
-    if [ "$HAVE_SUDO" -eq 1 ]; then
-        $SUDO_CMD python3 -c "$RAM_PY" > "$TMP_RAM" 2>/dev/null || true
-    else
-        python3 -c "$RAM_PY" > "$TMP_RAM" 2>/dev/null || true
-    fi
-    if [ -s "$TMP_RAM" ]; then
-        cp -f "$TMP_RAM" "$RAM_INFO_FILE"
-        chmod 644 "$RAM_INFO_FILE" 2>/dev/null || true
-        if [ "$HAVE_SUDO" -eq 1 ]; then
-            $SUDO_CMD mkdir -p /etc/fpshud 2>/dev/null || true
-            $SUDO_CMD cp -f "$TMP_RAM" /etc/fpshud/ram_info 2>/dev/null || true
-            $SUDO_CMD chmod 644 /etc/fpshud/ram_info 2>/dev/null || true
-        fi
-    fi
-fi
-
-if [ "$HAVE_SUDO" -eq 1 ]; then
-    echo "[*] Configuring system udev rules for full sensor access..."
-    # 1. RAPL CPU Wattage Rule
-    $SUDO_CMD mkdir -p /etc/udev/rules.d 2>/dev/null || true
-    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "UDEV_EOF"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", MODE="0444"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", MODE="0444"
-UDEV_EOF'
-    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
-    $SUDO_CMD chmod a+r /sys/class/powercap/*rapl*/energy_uj /sys/class/powercap/*rapl*/*/energy_uj 2>/dev/null || true
-
-    # 2. Wayland Hotkeys & Mouse Input Rule
-    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "UDEV_EOF"
-KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input"
-UDEV_EOF'
-    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
-    TARGET_USER="${SUDO_USER:-$USER}"
-    if [ -n "$TARGET_USER" ] && id -u "$TARGET_USER" >/dev/null 2>&1; then
-        $SUDO_CMD usermod -a -G input "$TARGET_USER" 2>/dev/null || true
-    fi
-
-    # Reload udev rules
-    $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
-    echo "[✓] Full hardware permissions configured successfully!"
-fi
-
-# 7. Flatpak Steam Setup
-FLATPAK_STEAM_DIR="$HOME/.var/app/com.valvesoftware.Steam"
-if [ -d "$FLATPAK_STEAM_DIR" ]; then
-    echo "[*] Flatpak Steam detected ($FLATPAK_STEAM_DIR)..."
-    if command -v flatpak >/dev/null 2>&1; then
-        flatpak override --user --filesystem="$HOME/.local/lib/fpshud:ro" --filesystem=xdg-config/fpshud:create --filesystem=xdg-data/fpshud:ro com.valvesoftware.Steam 2>/dev/null || true
-    fi
-    mkdir -p "$FLATPAK_STEAM_DIR/data/vulkan/implicit_layer.d"
-    if [ -f "$VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json" ]; then
-        cp -f "$VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json" "$FLATPAK_STEAM_DIR/data/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
-    fi
-    echo "[✓] Flatpak Steam permissions and Vulkan layer configured successfully!"
 fi
 
 echo ""
@@ -806,9 +440,10 @@ echo "  FPSHUD Successfully Installed!"
 echo "=================================================================="
 echo "  - Overlay Library       : $LIB_DIR/libfpshud.so"
 echo "  - Vulkan Implicit Layer : $VULKAN_LAYER_DIR/VkLayer_FPSHUD_overlay.json"
-echo "  - OpenGL Wrapper Script : $BIN_DIR/fpshud"
-echo "  - Diagnostic CLI Tool   : $BIN_DIR/fpshud_test"
-echo "  - Screen Recorder Helper: $BIN_DIR/fpshud_recorder"
+echo "  - OpenGL & CLI Wrapper  : $BIN_DIR/fpshud"
+if [ -f "$BIN_DIR/fpshud_recorder" ]; then
+echo "  - Screen Recorder Daemon: $BIN_DIR/fpshud_recorder"
+fi
 echo ""
 echo "  Quick Start:"
 echo "  - Steam Launch Options  : FPS_HUD=1 %command%"
@@ -820,6 +455,5 @@ echo "  - Screen Recording      : Press [F7] (Start/Stop Recording)"
 echo ""
 echo "  Hardware Sensors & Permissions:"
 echo "  - Check permission state: ~/.local/bin/fpshud --status"
-echo "  - Tip: If CPU Wattage or RAM Speed shows 0, run:"
-echo "        ~/.local/bin/fpshud --setup"
+echo "  - Configure permissions : ~/.local/bin/fpshud --setup"
 echo "=================================================================="

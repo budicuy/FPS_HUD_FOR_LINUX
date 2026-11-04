@@ -4,6 +4,15 @@
 # ====================================================================
 
 LIB_SO="@FPSHUD_LIB_PATH@"
+if [ ! -f "$LIB_SO" ]; then
+    if [ -f "$HOME/.local/lib/fpshud/libfpshud.so" ]; then
+        LIB_SO="$HOME/.local/lib/fpshud/libfpshud.so"
+    elif [ -f "/usr/local/lib/fpshud/libfpshud.so" ]; then
+        LIB_SO="/usr/local/lib/fpshud/libfpshud.so"
+    elif [ -f "/usr/lib/fpshud/libfpshud.so" ]; then
+        LIB_SO="/usr/lib/fpshud/libfpshud.so"
+    fi
+fi
 RAM_CACHE_USER="${XDG_DATA_HOME:-$HOME/.local/share}/fpshud/ram_info"
 RAM_CACHE_SYS="/etc/fpshud/ram_info"
 
@@ -99,12 +108,24 @@ run_setup() {
     echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
     echo "--------------------------------------------------------------------"
 
-    if [ -t 0 ] && [ "${FORCE_SETUP:-0}" != "1" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--yes" ]; then
-        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm
+    local user_consent=0
+    if [ "${FORCE_SETUP:-0}" = "1" ] || [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
+        user_consent=1
+    elif [ -t 0 ]; then
+        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm || confirm="n"
         case "$confirm" in
-            [yY][eE][sS]|[yY]) ;;
+            [yY][eE][sS]|[yY]) user_consent=1 ;;
             *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
         esac
+    elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm < /dev/tty || confirm="n"
+        case "$confirm" in
+            [yY][eE][sS]|[yY]) user_consent=1 ;;
+            *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
+        esac
+    else
+        echo "[!] Non-interactive environment detected without TTY. To run setup, use: fpshud --setup -y"
+        return 1
     fi
 
     local SUDO_CMD="sudo"
