@@ -138,7 +138,7 @@ jobs:
 
   publish-release:
     needs: [build-test-release, distro-compatibility-matrix, sanitizer-verification]
-    if: success() && github.event_name == 'push'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
