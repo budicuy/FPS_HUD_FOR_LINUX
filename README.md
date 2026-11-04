@@ -389,7 +389,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 | Requirement | Minimum Version / Specification | Purpose |
 | :--- | :--- | :--- |
-| **C++ Compiler** | **Clang 18+** (Clang 23 recommended) or **GCC 14+** | ISO C++26 (`-std=c++26` / `-std=c++2c`) with included internal polyfills |
+| **C++ Compiler** | **Clang 19+** (Clang 23 recommended) or **GCC 15+** | Pure ISO C++26 (`-std=c++26`) native implementation |
 | **Build System** | **CMake >= 3.25** & **Ninja** | Fast multi-threaded build orchestration |
 | **Linker** | **LLD (`lld`)** | Fast linking with ThinLTO (`-flto=thin`) optimization |
 | **Graphics APIs** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Swapchain presentation hooking |
@@ -399,9 +399,9 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 | **Asset Generator** | **Python 3.8+** | Generates embedded font C++ headers from TTF assets |
 
 > [!NOTE]
-> **C++26 Language Features & Compatibility Architecture:**
-> - **Native Standard Library Support:** Native `std::inplace_vector` and language Pack Indexing (`Types...[N]`) require Clang 19+ / GCC 15+.
-> - **Portability Polyfills Included:** To ensure FPSHUD builds cleanly across today's stable Linux distributions with Clang 18+ or GCC 14+, the codebase includes zero-overhead internal polyfills (`inplace_vec.hpp` and `pack_indexing.hpp`) that automatically activate if native compiler macros are absent.
+> **Pure Native ISO C++26 Architecture:**
+> - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ or GCC 15+.
+> - **Zero Polyfills & Shims:** Zero polyfills or legacy standard fallbacks. Enforced via CMake `FATAL_ERROR` gates to ensure modern language standards and strict compile-time verification.
 > - **Why C++26?** Guarantees zero heap allocation churn in the per-frame render loop via fixed inline vector storage and compile-time metric layout serialization.
 
 ### 2. Clone, Compile & Run Multi-Device Verification Suite
@@ -444,7 +444,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── test_e2e_install.sh              # Sandbox end-to-end install & uninstall lifecycle verification
 │   └── test_vulkan_headless.sh          # Headless Mesa Lavapipe Vulkan rendering & swapchain verification
 ├── src/
-│   ├── core/                            # Config manager, INI parser, inplace_vec & pack_indexing
+│   ├── core/                            # Config manager, INI parser, native C++26 pack_indexing
 │   ├── input/                           # Linux evdev + X11 input polling & EVIOCGRAB mouse lock
 │   ├── layer/                           # Vulkan Implicit Layer & OpenGL GLX/EGL swapchain hooks
 │   ├── recorder/                        # FFmpeg screen recorder daemon, IPC & container launcher

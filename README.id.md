@@ -389,7 +389,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 | Kebutuhan | Versi Minimum / Spesifikasi | Fungsi |
 | :--- | :--- | :--- |
-| **Kompiler C++** | **Clang 18+** (Direkomendasikan Clang 23) atau **GCC 14+** | ISO C++26 (`-std=c++26` / `-std=c++2c`) dengan polyfill internal yang disertakan |
+| **Kompiler C++** | **Clang 19+** (Direkomendasikan Clang 23) atau **GCC 15+** | Implementasi murni native ISO C++26 (`-std=c++26`) |
 | **Sistem Build** | **CMake >= 3.25** & **Ninja** | Orkestrasi kompilasi multi-threaded cepat |
 | **Linker** | **LLD (`lld`)** | Fast linking dengan optimasi ThinLTO (`-flto=thin`) |
 | **API Grafis** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Intersepsi swapchain presentasi frame |
@@ -399,9 +399,9 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 | **Peralatan Asset** | **Python 3.8+** | Menghasilkan header C++ font tertanam dari berkas TTF |
 
 > [!NOTE]
-> **Fitur Bahasa C++26 & Arsitektur Kompatibilitas:**
-> - **Dukungan Standar Native:** `std::inplace_vector` bawaan dan Pack Indexing (`Types...[N]`) membutuhkan Clang 19+ / GCC 15+.
-> - **Polyfill Portabilitas Disertakan:** Agar FPSHUD dapat dikompilasi pada distro Linux saat ini yang menggunakan Clang 18+ atau GCC 14+, codebase menyertakan polyfill zero-overhead (`inplace_vec.hpp` dan `pack_indexing.hpp`) yang aktif secara otomatis bila macro fitur native belum tersedia.
+> **Arsitektur Murni Native ISO C++26:**
+> - **Dukungan Standar Library Native:** Menggunakan murni native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) dan Pack Indexing bahasa (`Types...[N]` dan `args...[N]`), membutuhkan Clang 19+ atau GCC 15+.
+> - **Nol Polyfill & Shim:** Bebas dari polyfill atau fallback standar lama. Ditegakkan melalui gerbang `FATAL_ERROR` CMake untuk menjamin standar bahasa modern dan verifikasi waktu kompilasi yang ketat.
 > - **Mengapa C++26?** Menjamin nol alokasi heap (*zero-heap churn*) di loop render per frame melalui penyimpanan vektor inline dan ekspansi pack saat kompilasi.
 
 ### 2. Clone, Compile & Jalankan Pengujian Simulasi 5 Perangkat
@@ -444,7 +444,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── test_e2e_install.sh              # Pengujian end-to-end siklus hidup instalasi & uninstalasi sandbox
 │   └── test_vulkan_headless.sh          # Pengujian rendering Vulkan headless & swapchain Mesa Lavapipe
 ├── src/
-│   ├── core/                            # Pengelola konfigurasi, parser INI, inplace_vec & pack_indexing
+│   ├── core/                            # Pengelola konfigurasi, parser INI, pack_indexing native C++26
 │   ├── input/                           # Pembaca input Linux evdev + X11 & pengunci mouse EVIOCGRAB
 │   ├── layer/                           # Hook swapchain Vulkan Implicit Layer & OpenGL GLX/EGL
 │   ├── recorder/                        # Daemon perekam FFmpeg, IPC & peluncur ramah container
