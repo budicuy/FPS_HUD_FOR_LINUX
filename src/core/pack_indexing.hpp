@@ -10,10 +10,13 @@ template <std::size_t N, typename... Types>
 using PackType = Types...[N];
 
 template <std::size_t N, typename... Args>
-constexpr PackType<N, Args...> pack_element(Args&&... args) noexcept(
-    std::is_nothrow_constructible_v<PackType<N, Args...>, PackType<N, Args...>&&>) {
+constexpr decltype(auto) pack_element(Args&&... args) noexcept {
   static_assert(N < sizeof...(Args), "pack_element index out of range");
-  return static_cast<Args...[N]&&>(args...[N]);
+  if constexpr (std::is_rvalue_reference_v<decltype(args...[N])>) {
+    return static_cast<PackType<N, Args...>>(std::move(args...[N]));
+  } else {
+    return static_cast<PackType<N, Args...>&&>(args...[N]);
+  }
 }
 
 }  // namespace fpshud
