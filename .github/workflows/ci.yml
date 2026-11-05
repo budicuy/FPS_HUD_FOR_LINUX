@@ -200,36 +200,43 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Force Update Git Tag 'latest' to Current Commit
+        run: |
+          git tag -fa latest -m "FPSHUD Latest Portable Release" ${{ github.sha }}
+          git push --force origin refs/tags/latest
+
       - name: Download Portable Build Artifact
         uses: actions/download-artifact@v4
         with:
           name: fpshud-linux-x86_64
           path: release_pkg
 
-      - name: Publish Portable Binary to GitHub Releases (on main / tags)
+      - name: Publish Portable Binary to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          tag_name: "latest"
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           name: "FPSHUD Latest Portable Release (Linux x86_64)"
           body: |
-            Automated portable ISO C++26 binary build of **FPSHUD** (`libfpshud.so` + `fpshud_test` + `fpshud_recorder`, `GLIBC <= 2.35`, baseline `x86-64` with runtime AVX2 dispatch).
+            ### Cara Installasi (1-Command Install)
 
-            ✅ **Multi-Distro Compatibility Verified (64/64 Checks Passed):**
-            - 🐧 **Arch Linux** (Rolling Release / Steam Deck OS)
-            - 🎩 **Fedora Latest** (RPM Ecosystem)
-            - 🌀 **Debian 12** (Bookworm)
-            - 🟠 **Ubuntu 22.04 LTS** (Jammy - GLIBC 2.35 Floor)
-            - 🟣 **Ubuntu 24.04 LTS** (Noble)
-            - 🦎 **openSUSE Tumbleweed** (Rolling SUSE)
-
-            🛡️ **Quality, Safety & Rendering Gates Verified:**
-            - 🛡️ **Memory Safety & Hardening**: 0 Leaks, 0 Buffer Overflows, 0 UB (AddressSanitizer + UBSan)
-            - 🎮 **Real Vulkan Hook & Rendering**: 120-frame swapchain overlay verification via Mesa Lavapipe CPU rasterizer
-            - 📦 **Zero-Residue Lifecycle**: Clean sandboxed `install.sh` and `uninstall.sh` lifecycle verification
-
-            Install with one command:
             ```bash
             curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
+            ```
+
+            ### Cara Hapus (1-Command Uninstall)
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+            ```
+
+            *Atau melalui terminal jika sudah terpasang:*
+            ```bash
+            ~/.local/bin/fpshud --uninstall
             ```
           files: |
             release_pkg/fpshud-linux-x86_64.tar.gz
