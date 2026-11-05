@@ -39,12 +39,10 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
   <img src="preview/menu-ui.png" alt="FPSHUD In-Game GUI Menu" width="100%" />
 </p>
 
-### 🎬 Video Demo Gameplay
+### 🎬 Demo Gameplay
 
 <p align="center">
   <img src="preview/preview.gif" alt="FPSHUD Gameplay Demo" width="100%" />
-  <br>
-  <i>🎬 Demo Gameplay & In-Game Overlay — <a href="preview/preview.mp4">Tonton atau unduh video MP4 lengkap</a></i>
 </p>
 
 ---
