@@ -5,10 +5,7 @@
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
 
-namespace fpshud {
-InputManager::~InputManager() = default;
-}
-
+#include <linux/input.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
@@ -1500,38 +1497,21 @@ void run_elf_and_layer_abi_suite() {
 
   // 7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance
   {
-    // A. InputManager Wayland Hotkey Restriction Check
+    // A. InputManager Zero-Sudo In-Process Wayland Keyboard & Hotkey Check
     fpshud::InputManager im;
-    const char* orig_wayland = std::getenv("WAYLAND_DISPLAY");
-    std::string saved_wayland = orig_wayland ? orig_wayland : "";
-
-    // Case 1: WAYLAND_DISPLAY not set -> false
-    ::unsetenv("WAYLAND_DISPLAY");
-    im.set_wayland_restricted_state_for_test(true, true, true, nullptr);
-    bool res_nowayland = im.is_wayland_hotkey_restricted();
-
-    // Case 2: WAYLAND_DISPLAY set, but evdev accessible -> false
-    ::setenv("WAYLAND_DISPLAY", "wayland-0", 1);
-    im.set_wayland_restricted_state_for_test(true, false, true, nullptr);
-    bool res_evdev_ok = im.is_wayland_hotkey_restricted();
-
-    // Case 3: WAYLAND_DISPLAY set, evdev empty, but X11 fallback succeeded -> false
-    int dummy_display = 1;
-    im.set_wayland_restricted_state_for_test(true, true, true, &dummy_display);
-    bool res_x11_ok = im.is_wayland_hotkey_restricted();
-
-    // Case 4: Pure Wayland (WAYLAND_DISPLAY set, evdev empty, x11 attempted but null) -> true
-    im.set_wayland_restricted_state_for_test(true, true, true, nullptr);
-    bool res_pure_wayland = im.is_wayland_hotkey_restricted();
-
-    // Restore env
-    if (!saved_wayland.empty()) {
-      ::setenv("WAYLAND_DISPLAY", saved_wayland.c_str(), 1);
-    } else {
-      ::unsetenv("WAYLAND_DISPLAY");
-    }
-
-    bool wayland_test_ok = (!res_nowayland && !res_evdev_ok && !res_x11_ok && res_pure_wayland);
+    fpshud::HudConfig test_hotkey_cfg;
+    test_hotkey_cfg.enabled = true;
+    test_hotkey_cfg.key_toggle_gui = 0; // F12 / Insert
+    test_hotkey_cfg.gui_open = false;
+    im.handle_key_event(KEY_F12, true, test_hotkey_cfg, 1920.0f, 1080.0f);
+    bool in_proc_f12_ok = test_hotkey_cfg.gui_open;
+    im.handle_key_event(KEY_ESC, true, test_hotkey_cfg, 1920.0f, 1080.0f);
+    bool in_proc_esc_ok = !test_hotkey_cfg.gui_open;
+    im.attach_wayland_display(reinterpret_cast<void*>(0x5678));
+    bool wayland_attach_ok = im.has_wayland_display();
+    im.detach_wayland_display(reinterpret_cast<void*>(0x5678));
+    bool wayland_detach_ok = !im.has_wayland_display();
+    bool wayland_test_ok = (in_proc_f12_ok && in_proc_esc_ok && wayland_attach_ok && wayland_detach_ok);
 
     // B. scripts/install.sh Parity Check (must forward to ../install.sh, not package_release.sh)
     bool scripts_install_ok = false;

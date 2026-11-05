@@ -9,6 +9,7 @@
 
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_wayland.h>
 
 #include <cstring>
 #include <memory>
@@ -176,7 +177,9 @@ bool is_instance_level_function(const char* name) {
   return std::strncmp(name, "vkGetPhysicalDevice", 19) == 0 ||
          std::strncmp(name, "vkEnumerate", 11) == 0 || std::strcmp(name, "vkCreateInstance") == 0 ||
          std::strcmp(name, "vkDestroyInstance") == 0 ||
-         std::strcmp(name, "vkDestroySurfaceKHR") == 0 || std::strcmp(name, "vkCreateDevice") == 0;
+         std::strcmp(name, "vkDestroySurfaceKHR") == 0 ||
+         std::strcmp(name, "vkCreateWaylandSurfaceKHR") == 0 ||
+         std::strcmp(name, "vkCreateDevice") == 0;
 }
 
 PFN_vkVoidFunction imgui_vk_loader(const char* function_name, void* user_data) {
@@ -647,6 +650,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* p
 VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
                                                 const VkAllocationCallbacks* pAllocator) {
   try {
+    fpshud::get_input_manager().detach_wayland_display(nullptr);
     if (!instance) return;
 
     InstanceData* id = nullptr;
@@ -1079,6 +1083,40 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
   }
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateWaylandSurfaceKHR(
+    VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
+    const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
+  try {
+    if (pCreateInfo && pCreateInfo->display) {
+      fpshud::get_input_manager().attach_wayland_display(pCreateInfo->display);
+    }
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->GetInstanceProcAddr) return VK_ERROR_INITIALIZATION_FAILED;
+    auto fpCreateWaylandSurfaceKHR = reinterpret_cast<PFN_vkCreateWaylandSurfaceKHR>(
+        id->GetInstanceProcAddr(instance, "vkCreateWaylandSurfaceKHR"));
+    if (!fpCreateWaylandSurfaceKHR) return VK_ERROR_EXTENSION_NOT_PRESENT;
+    return fpCreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
+  } catch (...) {
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+}
+
+VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(
+    VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) {
+  try {
+    fpshud::get_input_manager().detach_wayland_display(nullptr);
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (id && id->GetInstanceProcAddr) {
+      auto fpDestroySurfaceKHR = reinterpret_cast<PFN_vkDestroySurfaceKHR>(
+          id->GetInstanceProcAddr(instance, "vkDestroySurfaceKHR"));
+      if (fpDestroySurfaceKHR) {
+        fpDestroySurfaceKHR(instance, surface, pAllocator);
+      }
+    }
+  } catch (...) {
+  }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
                                                        const VkSwapchainCreateInfoKHR* pCreateInfo,
                                                        const VkAllocationCallbacks* pAllocator,
@@ -1479,6 +1517,10 @@ vkGetDeviceProcAddr(VkDevice device, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
     if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+    if (std::strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateWaylandSurfaceKHR);
+    if (std::strcmp(pName, "vkDestroySurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 
@@ -1524,6 +1566,10 @@ vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateSwapchainKHR);
     if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySwapchainKHR);
+    if (std::strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_CreateWaylandSurfaceKHR);
+    if (std::strcmp(pName, "vkDestroySurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
 

@@ -64,12 +64,46 @@ using PFN_glXGetProcAddress = __GLXextFuncPtr (*)(const GLubyte*);
 using PFN_glXGetProcAddressARB = __GLXextFuncPtr (*)(const GLubyte*);
 using PFN_eglSwapBuffers = EGLBoolean (*)(EGLDisplay, EGLSurface);
 using PFN_eglGetProcAddress = __eglMustCastToProperFunctionPointerType (*)(const char*);
+using PFN_eglGetPlatformDisplay = EGLDisplay (*)(EGLenum, void*, const intptr_t*);
+using PFN_eglGetPlatformDisplayEXT = EGLDisplay (*)(EGLenum, void*, const EGLint*);
 
 PFN_glXSwapBuffers real_glXSwapBuffers = nullptr;
 PFN_glXGetProcAddress real_glXGetProcAddress = nullptr;
 PFN_glXGetProcAddressARB real_glXGetProcAddressARB = nullptr;
 PFN_eglSwapBuffers real_eglSwapBuffers = nullptr;
 PFN_eglGetProcAddress real_eglGetProcAddress = nullptr;
+PFN_eglGetPlatformDisplay real_eglGetPlatformDisplay = nullptr;
+PFN_eglGetPlatformDisplayEXT real_eglGetPlatformDisplayEXT = nullptr;
+
+void ensure_egl_resolved();
+
+static EGLDisplay Hook_eglGetPlatformDisplay(EGLenum platform, void* native_display,
+                                            const intptr_t* attrib_list) {
+  try {
+    ensure_egl_resolved();
+    if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_KHR
+      fpshud::get_input_manager().attach_wayland_display(native_display);
+    }
+  } catch (...) {
+  }
+  return real_eglGetPlatformDisplay
+             ? real_eglGetPlatformDisplay(platform, native_display, attrib_list)
+             : EGL_NO_DISPLAY;
+}
+
+static EGLDisplay Hook_eglGetPlatformDisplayEXT(EGLenum platform, void* native_display,
+                                               const EGLint* attrib_list) {
+  try {
+    ensure_egl_resolved();
+    if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_EXT
+      fpshud::get_input_manager().attach_wayland_display(native_display);
+    }
+  } catch (...) {
+  }
+  return real_eglGetPlatformDisplayEXT
+             ? real_eglGetPlatformDisplayEXT(platform, native_display, attrib_list)
+             : EGL_NO_DISPLAY;
+}
 
 struct GlDispatchTable {
   using PFN_glGetString = const GLubyte* (*)(GLenum name);
@@ -269,6 +303,14 @@ void ensure_egl_resolved() {
     if (!g_gl.eglQuerySurface) {
       g_gl.eglQuerySurface =
           reinterpret_cast<GlDispatchTable::PFN_eglQuerySurface>(resolve_proc("eglQuerySurface"));
+    }
+    if (!real_eglGetPlatformDisplay) {
+      real_eglGetPlatformDisplay = reinterpret_cast<PFN_eglGetPlatformDisplay>(
+          resolve_proc("eglGetPlatformDisplay"));
+    }
+    if (!real_eglGetPlatformDisplayEXT) {
+      real_eglGetPlatformDisplayEXT = reinterpret_cast<PFN_eglGetPlatformDisplayEXT>(
+          resolve_proc("eglGetPlatformDisplayEXT"));
     }
   });
 }
@@ -635,8 +677,26 @@ __attribute__((visibility("default"))) __eglMustCastToProperFunctionPointerType
 eglGetProcAddress(const char* procName) {
   try {
     ensure_egl_resolved();
-    if (procName && std::strcmp(procName, "eglSwapBuffers") == 0) {
-      return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&eglSwapBuffers);
+    if (procName) {
+      if (std::strcmp(procName, "eglSwapBuffers") == 0) {
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&eglSwapBuffers);
+      }
+      if (std::strcmp(procName, "eglGetPlatformDisplay") == 0) {
+        if (!real_eglGetPlatformDisplay && real_eglGetProcAddress) {
+          real_eglGetPlatformDisplay = reinterpret_cast<PFN_eglGetPlatformDisplay>(
+              real_eglGetProcAddress("eglGetPlatformDisplay"));
+        }
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(
+            &Hook_eglGetPlatformDisplay);
+      }
+      if (std::strcmp(procName, "eglGetPlatformDisplayEXT") == 0) {
+        if (!real_eglGetPlatformDisplayEXT && real_eglGetProcAddress) {
+          real_eglGetPlatformDisplayEXT = reinterpret_cast<PFN_eglGetPlatformDisplayEXT>(
+              real_eglGetProcAddress("eglGetPlatformDisplayEXT"));
+        }
+        return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(
+            &Hook_eglGetPlatformDisplayEXT);
+      }
     }
     return real_eglGetProcAddress ? real_eglGetProcAddress(procName) : nullptr;
   } catch (...) {

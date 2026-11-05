@@ -260,7 +260,9 @@ add_executable(fpshud_test
     tests/test_cli.cpp
     src/core/config.cpp
     src/telemetry/telemetry.cpp
+    src/input/input_manager.cpp
     src/recorder/recorder_ipc.cpp
+    ${IMGUI_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
@@ -272,6 +274,8 @@ target_include_directories(fpshud_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
 )
 
 target_link_libraries(fpshud_test PRIVATE
