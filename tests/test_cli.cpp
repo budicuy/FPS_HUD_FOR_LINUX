@@ -1046,11 +1046,11 @@ void run_elf_and_layer_abi_suite() {
     } else {
       vk_shared_swapchain_ok = true;
     }
-    check_cond(vk_shared_swapchain_ok,
-               "3.3 Vulkan Swapchain Concurrency & Mutex Hardening",
-               vk_shared_swapchain_ok
-                   ? "SwapchainData managed via std::shared_ptr and guarded by sd->mutex"
-                   : "Failed: SwapchainData raw pointer or missing mutex synchronization in destroy");
+    check_cond(
+        vk_shared_swapchain_ok, "3.3 Vulkan Swapchain Concurrency & Mutex Hardening",
+        vk_shared_swapchain_ok
+            ? "SwapchainData managed via std::shared_ptr and guarded by sd->mutex"
+            : "Failed: SwapchainData raw pointer or missing mutex synchronization in destroy");
 
     // 4. Vulkan Multi-Device Lifecycle, Zero-Extent Swapchain & UAF-Free DestroyDevice
     bool lifecycle_ok = false;
@@ -2632,18 +2632,17 @@ void run_all_devices_and_features_suite() {
   fs::path rroot = find_repo_root();
   if (!rroot.empty()) {
     std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
-    // Verify cleanup_shm is called in spawn_helper_process failure and start_recording socket failure
+    // Verify cleanup_shm is called in spawn_helper_process failure and start_recording socket
+    // failure
     size_t pos_spawn = ipc_src.find("bool RecorderController::spawn_helper_process(");
     size_t pos_start = ipc_src.find("void RecorderController::start_recording(");
     if (pos_spawn != std::string::npos && pos_start != std::string::npos) {
       size_t spawn_end = ipc_src.find("void RecorderController::connect_socket", pos_spawn);
-      std::string spawn_body = (spawn_end != std::string::npos)
-                                   ? ipc_src.substr(pos_spawn, spawn_end - pos_spawn)
-                                   : "";
+      std::string spawn_body =
+          (spawn_end != std::string::npos) ? ipc_src.substr(pos_spawn, spawn_end - pos_spawn) : "";
       size_t start_end = ipc_src.find("void RecorderController::stop_recording", pos_start);
-      std::string start_body = (start_end != std::string::npos)
-                                   ? ipc_src.substr(pos_start, start_end - pos_start)
-                                   : "";
+      std::string start_body =
+          (start_end != std::string::npos) ? ipc_src.substr(pos_start, start_end - pos_start) : "";
       if (spawn_body.find("cleanup_shm();") != std::string::npos &&
           start_body.find("cleanup_shm();") != std::string::npos) {
         shm_cleanup_hardened = true;
@@ -2663,7 +2662,8 @@ void run_all_devices_and_features_suite() {
   {
     char* test_argv[] = {const_cast<char*>("true"), nullptr};
     pid_t test_pid = 0;
-    if (posix_spawnp(&test_pid, "true", nullptr, nullptr, test_argv, environ) == 0 && test_pid > 0) {
+    if (posix_spawnp(&test_pid, "true", nullptr, nullptr, test_argv, environ) == 0 &&
+        test_pid > 0) {
       std::thread([test_pid]() {
         int status = 0;
         ::waitpid(test_pid, &status, 0);
@@ -2687,17 +2687,19 @@ void run_all_devices_and_features_suite() {
     if (menu_src.find("open_system_folder") != std::string::npos) {
       size_t pos_fn = menu_src.find("void open_system_folder(");
       size_t end_fn = menu_src.find("void draw_section_header", pos_fn);
-      std::string fn_body = (end_fn != std::string::npos) ? menu_src.substr(pos_fn, end_fn - pos_fn) : "";
+      std::string fn_body =
+          (end_fn != std::string::npos) ? menu_src.substr(pos_fn, end_fn - pos_fn) : "";
       if (fn_body.find("waitpid(pid") == std::string::npos ||
           fn_body.find(".detach()") == std::string::npos) {
         zombie_reaping_ok = false;
       }
     }
   }
-  check_cond(zombie_reaping_ok, "4.2 Async Child Process Reaping (Anti-Zombie)",
-             zombie_reaping_ok
-                 ? "xdg-open child processes reaped via detached waitpid thread (no zombie processes)"
-                 : "Failed: Missing waitpid or detached reaper thread in open_system_folder");
+  check_cond(
+      zombie_reaping_ok, "4.2 Async Child Process Reaping (Anti-Zombie)",
+      zombie_reaping_ok
+          ? "xdg-open child processes reaped via detached waitpid thread (no zombie processes)"
+          : "Failed: Missing waitpid or detached reaper thread in open_system_folder");
 
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
