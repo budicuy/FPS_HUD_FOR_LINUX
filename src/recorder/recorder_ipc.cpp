@@ -189,8 +189,12 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   connect_socket();
   if (socket_fd_ < 0) {
     if (helper_pid_ > 0) {
-      kill(helper_pid_, SIGTERM);
-      waitpid(helper_pid_, nullptr, WNOHANG);
+      pid_t pid = helper_pid_;
+      kill(pid, SIGTERM);
+      std::thread([pid]() {
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+      }).detach();
       helper_pid_ = -1;
     }
     cleanup_shm();

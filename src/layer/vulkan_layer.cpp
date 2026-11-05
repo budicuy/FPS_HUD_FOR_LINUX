@@ -256,6 +256,7 @@ void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
     dd->DestroyRenderPass(dd->device, sd->render_pass, nullptr);
     sd->render_pass = VK_NULL_HANDLE;
   }
+  sd->device_data = nullptr;
 }
 
 bool init_swapchain_overlay(SwapchainData* sd) {

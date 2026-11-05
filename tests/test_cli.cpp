@@ -2644,7 +2644,9 @@ void run_all_devices_and_features_suite() {
       std::string start_body =
           (start_end != std::string::npos) ? ipc_src.substr(pos_start, start_end - pos_start) : "";
       if (spawn_body.find("cleanup_shm();") != std::string::npos &&
-          start_body.find("cleanup_shm();") != std::string::npos) {
+          start_body.find("cleanup_shm();") != std::string::npos &&
+          start_body.find("std::thread([pid]()") != std::string::npos &&
+          start_body.find(".detach()") != std::string::npos) {
         shm_cleanup_hardened = true;
       }
     }
