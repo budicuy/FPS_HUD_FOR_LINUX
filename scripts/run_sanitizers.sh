@@ -6,15 +6,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 if [ -z "${CXX:-}" ]; then
-    if command -v clang++ >/dev/null 2>&1; then
-        export CXX="clang++"
-        export CC="clang"
-    elif command -v g++-16 >/dev/null 2>&1; then
+    if command -v g++-16 >/dev/null 2>&1; then
         export CXX="g++-16"
         export CC="gcc-16"
+    elif command -v clang++-19 >/dev/null 2>&1; then
+        export CXX="clang++-19"
+        export CC="clang-19"
     elif command -v g++-15 >/dev/null 2>&1; then
         export CXX="g++-15"
         export CC="gcc-15"
+    elif command -v clang++ >/dev/null 2>&1; then
+        export CXX="clang++"
+        export CC="clang"
     else
         export CXX="g++"
         export CC="gcc"

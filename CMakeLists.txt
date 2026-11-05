@@ -13,6 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS "-std=c++26")
 check_cxx_source_compiles("
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"
@@ -36,6 +37,7 @@ int main() { return first(0, 1, 2); }
 if(NOT FPSHUD_HAS_CXX26_PACK_INDEXING)
     message(FATAL_ERROR "FPSHUD requires native ISO C++26 pack indexing (P2662R3). Toolchain does not support args...[N].")
 endif()
+unset(CMAKE_REQUIRED_FLAGS)
 
 add_compile_options(-Wno-deprecated-declarations)
 
