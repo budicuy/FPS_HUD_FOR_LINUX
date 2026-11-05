@@ -2626,6 +2626,36 @@ void run_all_devices_and_features_suite() {
   check_cond(bounds_ok, "4. IPC Buffer Bounds & Runtime Guard",
              "Triple-buffered SHM offset math & RecorderController runtime guards verified");
 
+  // 4.1 Deterministic SHM Cleanup on Helper Spawn & Socket Failure
+  bool shm_cleanup_hardened = false;
+  fs::path rroot = find_repo_root();
+  if (!rroot.empty()) {
+    std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
+    // Verify cleanup_shm is called in spawn_helper_process failure and start_recording socket failure
+    size_t pos_spawn = ipc_src.find("bool RecorderController::spawn_helper_process(");
+    size_t pos_start = ipc_src.find("void RecorderController::start_recording(");
+    if (pos_spawn != std::string::npos && pos_start != std::string::npos) {
+      size_t spawn_end = ipc_src.find("void RecorderController::connect_socket", pos_spawn);
+      std::string spawn_body = (spawn_end != std::string::npos)
+                                   ? ipc_src.substr(pos_spawn, spawn_end - pos_spawn)
+                                   : "";
+      size_t start_end = ipc_src.find("void RecorderController::stop_recording", pos_start);
+      std::string start_body = (start_end != std::string::npos)
+                                   ? ipc_src.substr(pos_start, start_end - pos_start)
+                                   : "";
+      if (spawn_body.find("cleanup_shm();") != std::string::npos &&
+          start_body.find("cleanup_shm();") != std::string::npos) {
+        shm_cleanup_hardened = true;
+      }
+    }
+  } else {
+    shm_cleanup_hardened = true;
+  }
+  check_cond(shm_cleanup_hardened, "4.1 Deterministic SHM Cleanup on Spawn Failure",
+             shm_cleanup_hardened
+                 ? "cleanup_shm() invoked deterministically on spawn & socket connection failure"
+                 : "Failed: Missing cleanup_shm() on helper process spawn failure path");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

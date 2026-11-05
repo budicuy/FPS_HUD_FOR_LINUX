@@ -180,6 +180,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   }
 
   if (!spawn_helper_process(cfg, display_w, display_h)) {
+    cleanup_shm();
     is_recording_.store(false, std::memory_order_relaxed);
     set_toast("[!] Gagal menjalankan fpshud_recorder binary.");
     return;
@@ -192,6 +193,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
       waitpid(helper_pid_, nullptr, WNOHANG);
       helper_pid_ = -1;
     }
+    cleanup_shm();
     is_recording_.store(false, std::memory_order_relaxed);
     set_toast("[!] Gagal menghubungkan ke recorder daemon.");
     return;
@@ -432,6 +434,7 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
       argv[0] = const_cast<char*>(fallback2.c_str());
       res = posix_spawnp(&pid, fallback2.c_str(), nullptr, nullptr, argv, envp.data());
       if (res != 0 || pid <= 0) {
+        cleanup_shm();
         return false;
       }
     }
