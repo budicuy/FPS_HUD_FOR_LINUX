@@ -1514,7 +1514,7 @@ void run_elf_and_layer_abi_suite() {
     bool wayland_test_ok =
         (in_proc_f12_ok && in_proc_esc_ok && wayland_attach_ok && wayland_detach_ok);
 
-    // B. scripts/install.sh Parity Check (must forward to ../install.sh, not package_release.sh)
+    // B. scripts/install.sh Check (local developer installer, not package_release.sh)
     bool scripts_install_ok = false;
     bool uninstall_ok = false;
     bool pkg_decoupled_ok = false;
@@ -1527,7 +1527,7 @@ void run_elf_and_layer_abi_suite() {
     fs::path repo_root = find_repo_root();
     if (!repo_root.empty()) {
       std::string scripts_install_content = read_text_file(repo_root / "scripts" / "install.sh");
-      if (scripts_install_content.find("../install.sh") != std::string::npos &&
+      if (scripts_install_content.find("libfpshud.so") != std::string::npos &&
           scripts_install_content.find("package_release.sh") == std::string::npos) {
         scripts_install_ok = true;
       }
