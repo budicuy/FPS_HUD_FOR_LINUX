@@ -27,6 +27,28 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
 
 ---
 
+## Pratinjau & Demo Tampilan
+
+<p align="center">
+  <b>Tampilan In-Game Performance Overlay</b><br>
+  <img src="preview/preview.png" alt="FPSHUD Overlay Preview" width="100%" />
+</p>
+
+<p align="center">
+  <b>Menu Pengaturan In-Game Interaktif</b><br>
+  <img src="preview/menu-ui.png" alt="FPSHUD In-Game GUI Menu" width="100%" />
+</p>
+
+### 🎬 Video Demo Gameplay
+
+<p align="center">
+  <video src="preview/preview.mp4" controls="controls" muted="muted" width="100%"></video>
+  <br>
+  <i>Video tidak dapat diputar otomatis? <a href="preview/preview.mp4">Klik di sini untuk menonton atau mengunduh video langsung</a>.</i>
+</p>
+
+---
+
 ## Gambaran Umum (Overview)
 
 ### Untuk apa aplikasi ini dibuat?
@@ -54,6 +76,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 
 ## Daftar Isi
 
+- [Pratinjau & Demo Tampilan](#pratinjau--demo-tampilan)
 1. [Fitur Utama](#1-fitur-utama)
 2. [Instalasi & Izin Akses Sensor](#2-instalasi--izin-akses-sensor)
 3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)

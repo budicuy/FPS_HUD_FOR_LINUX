@@ -27,6 +27,28 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
 
 ---
 
+## Showcase & Demo
+
+<p align="center">
+  <b>In-Game Performance Overlay</b><br>
+  <img src="preview/preview.png" alt="FPSHUD Overlay Preview" width="100%" />
+</p>
+
+<p align="center">
+  <b>Interactive In-Game GUI Configuration Menu</b><br>
+  <img src="preview/menu-ui.png" alt="FPSHUD In-Game GUI Menu" width="100%" />
+</p>
+
+### 🎬 Video Demo
+
+<p align="center">
+  <video src="preview/preview.mp4" controls="controls" muted="muted" width="100%"></video>
+  <br>
+  <i>Having trouble playing? <a href="preview/preview.mp4">Click here to watch or download the video directly</a>.</i>
+</p>
+
+---
+
 ## Overview
 
 ### What is FPSHUD for?
@@ -54,6 +76,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 
 ## Table of Contents
 
+- [Showcase & Demo](#showcase--demo)
 1. [Key Features](#1-key-features)
 2. [Installation & Sensor Permissions](#2-installation--sensor-permissions)
 3. [How to Use in Steam, Lutris, Heroic & Terminal](#3-how-to-use-in-steam-lutris-heroic--terminal)
