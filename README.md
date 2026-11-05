@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/unin
 ### 🎬 Video Demo
 
 <p align="center">
-  <video src="preview/preview.mp4" controls="controls" muted="muted" width="100%"></video>
+  <img src="preview/preview.gif" alt="FPSHUD Gameplay Demo" width="100%" />
   <br>
-  <i>Having trouble playing? <a href="preview/preview.mp4">Click here to watch or download the video directly</a>.</i>
+  <i>🎬 Live In-Game Overlay Demo (1080p, 60 FPS video source) — <a href="preview/preview.mp4">Watch or download full MP4 video</a></i>
 </p>
 
 ---
