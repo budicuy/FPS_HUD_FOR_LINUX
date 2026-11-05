@@ -192,11 +192,14 @@ if(Python3_Interpreter_FOUND)
     )
 endif()
 
-set(IMGUI_SOURCES
+set(IMGUI_CORE_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+)
+set(IMGUI_SOURCES
+    ${IMGUI_CORE_SOURCES}
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
@@ -262,7 +265,7 @@ add_executable(fpshud_test
     src/telemetry/telemetry.cpp
     src/input/input_manager.cpp
     src/recorder/recorder_ipc.cpp
-    ${IMGUI_SOURCES}
+    ${IMGUI_CORE_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
 )
 
