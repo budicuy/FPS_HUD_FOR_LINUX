@@ -611,7 +611,10 @@ void wl_kbd_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*
   if (!self) return;
   // Route key event through handle_key_event
   HudConfig& cfg = get_mutable_config();
-  self->handle_key_event(key, state == 1, cfg, 0.0f, 0.0f, nullptr);
+  self->handle_key_event(key, state == 1,
+                         self->current_cfg() ? *self->current_cfg() : cfg,
+                         self->current_width(), self->current_height(),
+                         self->current_io());
 }
 
 void wl_kbd_modifiers(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
@@ -633,14 +636,18 @@ void wl_ptr_motion(void* data, struct wl_pointer* /*pointer*/, uint32_t /*time*/
   if (!self) return;
   float x = static_cast<float>(sx) / 256.0f;
   float y = static_cast<float>(sy) / 256.0f;
-  self->handle_pointer_motion(x, y, get_global_config(), nullptr);
+  self->handle_pointer_motion(x, y,
+                              self->current_cfg() ? *self->current_cfg() : get_global_config(),
+                              self->current_io());
 }
 
 void wl_ptr_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
                    uint32_t /*time*/, uint32_t button, uint32_t state) {
   auto* self = static_cast<InputManager*>(data);
   if (!self) return;
-  self->handle_pointer_button(button, state == 1, get_global_config(), nullptr);
+  self->handle_pointer_button(button, state == 1,
+                              self->current_cfg() ? *self->current_cfg() : get_global_config(),
+                              self->current_io());
 }
 
 void wl_ptr_axis(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,

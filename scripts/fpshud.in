@@ -23,6 +23,7 @@ Penggunaan / Usage:
   fpshud <perintah/game> [args...] Launch OpenGL / Vulkan game with overlay
   fpshud --status, -c              Periksa status izin sensor hardware (RAPL CPU Power)
   fpshud --setup, -s               Konfigurasi izin sensor hardware RAPL CPU Power (Sudo opsional)
+  fpshud --uninstall               Hapus instalasi FPSHUD secara bersih dari sistem
   fpshud --help, -h                Tampilkan bantuan ini
 
 Contoh / Examples:
@@ -30,6 +31,7 @@ Contoh / Examples:
   fpshud %command%                 (Steam Launch Options untuk game OpenGL)
   fpshud --status                  (Periksa apakah CPU Watt terbaca)
   fpshud --setup                   (Beri izin sensor CPU Wattage kapan saja tanpa instal ulang)
+  fpshud --uninstall               (Hapus seluruh file overlay, layer, dan bin)
 ====================================================================
 EOF
 }
@@ -180,6 +182,21 @@ case "$1" in
     --setup|-s|setup)
         run_setup
         exit 0
+        ;;
+    --uninstall|uninstall)
+        UNINSTALL_SH="${HOME}/.local/lib/fpshud/uninstall.sh"
+        if [ -f "$UNINSTALL_SH" ]; then
+            exec bash "$UNINSTALL_SH"
+        fi
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$SCRIPT_DIR/uninstall.sh" ]; then
+            exec bash "$SCRIPT_DIR/uninstall.sh"
+        fi
+        if command -v curl >/dev/null 2>&1; then
+            exec bash -c 'curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash'
+        fi
+        echo "[!] ERROR: Uninstallation script not found and curl is unavailable." >&2
+        exit 1
         ;;
     *)
         if [ $# -eq 0 ]; then

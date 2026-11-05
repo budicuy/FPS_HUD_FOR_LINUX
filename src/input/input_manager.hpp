@@ -48,6 +48,11 @@ public:
 
   bool has_evdev_access() const { return !evdev_devices_.empty(); }
 
+  ImGuiIO* current_io() const noexcept { return current_io_; }
+  HudConfig* current_cfg() const noexcept { return current_cfg_; }
+  float current_width() const noexcept { return current_w_; }
+  float current_height() const noexcept { return current_h_; }
+
 private:
   void scan_evdev_devices();
   void close_evdev_devices();

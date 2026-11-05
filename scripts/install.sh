@@ -45,6 +45,11 @@ if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
 fi
 
+if [ -f "$PROJECT_DIR/uninstall.sh" ]; then
+    cp -f "$PROJECT_DIR/uninstall.sh" "$LIB_DIR/uninstall.sh"
+    chmod 755 "$LIB_DIR/uninstall.sh"
+fi
+
 sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "$SCRIPT_DIR/fpshud.in" > "$BIN_DIR/fpshud"
 chmod 755 "$BIN_DIR/fpshud"
 

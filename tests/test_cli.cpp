@@ -2680,18 +2680,18 @@ void run_all_devices_and_features_suite() {
 int main(int argc, char** argv) {
   using namespace fpshud;
 
-  const char* env_input = "1";
+  std::string env_input_str = "1";
   if (const char* env = std::getenv("FPS_HUD")) {
-    env_input = env;
+    env_input_str = env;
   } else if (argc > 1) {
-    env_input = argv[1];
+    env_input_str = argv[1];
   }
-  ::setenv("FPS_HUD", env_input, 1);
+  ::setenv("FPS_HUD", env_input_str.c_str(), 1);
 
-  HudConfig cfg = init_config_from_env(env_input);
+  HudConfig cfg = init_config_from_env(env_input_str.c_str());
 
   std::printf("=== FPSHUD Configuration & Multi-Device Feature Verification ===\n");
-  std::printf("FPS_HUD Env     : %s\n", env_input);
+  std::printf("FPS_HUD Env     : %s\n", env_input_str.c_str());
   std::printf("Enabled         : %s\n",
               cfg.enabled ? "YES (HUD + In-Game GUI Active)" : "NO (Disabled)");
   std::printf("Active Preset   : %s | Layout: %s | Arrangement: %s\n", cfg.active_preset.c_str(),

@@ -260,15 +260,26 @@ void RecorderController::stop_recording() {
 
   is_recording_.store(false, std::memory_order_relaxed);
 
-  // Reap child process with a brief timeout
+  // Reap child process with a brief timeout, fallback to detached worker thread (anti-zombie)
   if (helper_pid_ > 0) {
+    pid_t lingering_pid = helper_pid_;
     int status = 0;
+    bool reaped = false;
     for (int i = 0; i < 20; ++i) {
       pid_t p = waitpid(helper_pid_, &status, WNOHANG);
-      if (p == helper_pid_ || p == -1) break;
+      if (p == helper_pid_ || p == -1) {
+        reaped = true;
+        break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
     helper_pid_ = -1;
+    if (!reaped) {
+      std::thread([lingering_pid]() {
+        int st = 0;
+        ::waitpid(lingering_pid, &st, 0);
+      }).detach();
+    }
   }
 
   // Clean up socket and shared memory files

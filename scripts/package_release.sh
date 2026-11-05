@@ -13,9 +13,12 @@ echo "[*] Preparing portable fpshud wrapper script..."
 sed "s|@FPSHUD_LIB_PATH@|\$HOME/.local/lib/fpshud/libfpshud.so|g" "$PROJECT_DIR/scripts/fpshud.in" > "$BUILD_DIR/fpshud"
 chmod 755 "$BUILD_DIR/fpshud"
 
+cp "$PROJECT_DIR/uninstall.sh" "$BUILD_DIR/uninstall.sh"
+chmod 755 "$BUILD_DIR/uninstall.sh"
+
 STRIP_BIN="$(command -v llvm-strip || command -v strip || true)"
 STRIP_TARGETS=("$BUILD_DIR/libfpshud.so" "$BUILD_DIR/fpshud_test")
-TAR_FILES=("libfpshud.so" "fpshud" "fpshud_test")
+TAR_FILES=("libfpshud.so" "fpshud" "fpshud_test" "uninstall.sh")
 
 if [ -f "$BUILD_DIR/fpshud_recorder" ]; then
     STRIP_TARGETS+=("$BUILD_DIR/fpshud_recorder")

@@ -110,6 +110,11 @@ if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
     chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
 fi
 
+if [ -f "$TMP_DIR/uninstall.sh" ]; then
+    cp -f "$TMP_DIR/uninstall.sh" "$LIB_DIR/uninstall.sh"
+    chmod 755 "$LIB_DIR/uninstall.sh"
+fi
+
 # 3. Install CLI wrapper script
 if [ ! -f "$TMP_DIR/fpshud" ]; then
     echo "[!] ERROR: Downloaded archive is corrupted or missing fpshud wrapper." >&2
