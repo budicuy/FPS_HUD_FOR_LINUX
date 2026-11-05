@@ -29,7 +29,6 @@ enum class MetricType {
   GameRam,      // Resident memory used by the game process itself
   SwapRam,      // Swap / ZRAM usage
   MemPressure,  // Linux PSI memory pressure (stutter indicator)
-  RamSpeed,     // RAM type + speed (MT/s)
   EngineApi,
   SystemClock,
   Battery,   // Laptop / Handheld battery % & discharge power (W)
@@ -67,7 +66,7 @@ enum class FontFamily {
 constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
-constexpr std::size_t kTotalMetricCount = 25;
+constexpr std::size_t kTotalMetricCount = 24;
 constexpr std::size_t kMaxMetricsCapacity = 32;
 static_assert(kTotalMetricCount <= kMaxMetricsCapacity,
               "kMaxMetricsCapacity must accommodate all MetricType sensors");

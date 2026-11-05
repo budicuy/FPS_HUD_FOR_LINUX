@@ -20,13 +20,12 @@ namespace fpshud {
 namespace {
 
 constexpr MetricType kCanonicalMetricsOrder[] = {
-    MetricType::FPS,          MetricType::FpsAvg,   MetricType::Fps1Low,   MetricType::Fps01Low,
-    MetricType::FrameTimes,   MetricType::GpuLoad,  MetricType::GpuClock,  MetricType::GpuVram,
-    MetricType::GpuBandwidth, MetricType::GpuTemp,  MetricType::GpuFan,    MetricType::GpuWatt,
-    MetricType::CpuLoad,      MetricType::CpuClock, MetricType::CpuWatt,   MetricType::CpuTemp,
-    MetricType::CpuHybrid,    MetricType::Ram,      MetricType::GameRam,   MetricType::SwapRam,
-    MetricType::MemPressure,  MetricType::RamSpeed, MetricType::EngineApi, MetricType::SystemClock,
-    MetricType::Battery};
+    MetricType::FPS,          MetricType::FpsAvg,    MetricType::Fps1Low,     MetricType::Fps01Low,
+    MetricType::FrameTimes,   MetricType::GpuLoad,   MetricType::GpuClock,    MetricType::GpuVram,
+    MetricType::GpuBandwidth, MetricType::GpuTemp,   MetricType::GpuFan,      MetricType::GpuWatt,
+    MetricType::CpuLoad,      MetricType::CpuClock,  MetricType::CpuWatt,     MetricType::CpuTemp,
+    MetricType::CpuHybrid,    MetricType::Ram,       MetricType::GameRam,     MetricType::SwapRam,
+    MetricType::MemPressure,  MetricType::EngineApi, MetricType::SystemClock, MetricType::Battery};
 static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0]) ==
                   kTotalMetricCount,
               "kTotalMetricCount must match the number of MetricType entries");
@@ -102,8 +101,6 @@ const char* metric_id_key(MetricType m) {
       return "swap";
     case MetricType::MemPressure:
       return "mempsi";
-    case MetricType::RamSpeed:
-      return "ramspeed";
     case MetricType::EngineApi:
       return "api";
     case MetricType::SystemClock:
@@ -549,8 +546,6 @@ const char* metric_name(MetricType m) {
       return "SWAP";
     case MetricType::MemPressure:
       return "MEM.PSI";
-    case MetricType::RamSpeed:
-      return "RAM.SPD";
     case MetricType::EngineApi:
       return "API";
     case MetricType::SystemClock:

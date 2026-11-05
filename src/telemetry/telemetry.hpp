@@ -157,15 +157,12 @@ struct TelemetryData {
   float ram_total_gb = 0.0f;
   float ram_used_pct = 0.0f;
 
-  // Extended memory sensors
+  // Extended memory sensors (100% sudo-free via /proc)
   float game_ram_gb = 0.0f;    // Resident memory (VmRSS) of the hooked game process
   float swap_used_gb = 0.0f;   // Swap / ZRAM in use
   float swap_total_gb = 0.0f;  // 0 = no swap configured
   float mem_psi_some_pct =
-      -1.0f;                  // /proc/pressure/memory "some avg10" (-1 = kernel PSI unavailable)
-  int ram_speed_mts = 0;      // Effective RAM speed in MT/s (0 = unknown / permission missing)
-  int ram_modules = 0;        // Populated DIMM / memory device count
-  char ram_type[12] = "RAM";  // DDR4, DDR5, LPDDR5, ...
+      -1.0f;  // /proc/pressure/memory "some avg10" (-1 = kernel PSI unavailable)
 
   // Laptop & Handheld battery / power sensors
   bool battery_available = false;
@@ -247,9 +244,6 @@ private:
   void init_gpu_sensors_locked();
   bool init_intel_level_zero();
   void init_battery_sensors();
-  void init_ram_info();
-  bool load_ram_info_file(const std::string& path);
-  bool load_ram_info_dmi(const std::string& entries_dir);
   void shutdown_sensors();
   void shutdown_sensors_locked();
 

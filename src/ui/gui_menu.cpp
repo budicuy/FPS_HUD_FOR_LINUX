@@ -588,7 +588,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     char b_fps[24], b_avg[24], b_1l[24], b_01l[24], b_ft[24];
     char b_gload[24], b_gclk[24], b_gvram[24], b_gbw[24], b_gtmp[24], b_gfan[24], b_gpwr[24];
     char b_cload[24], b_cclk[24], b_cpwr[24], b_ctmp[24], b_ram[32], b_api[32];
-    char b_gram[24], b_swap[32], b_psi[24], b_rspd[32];
+    char b_gram[24], b_swap[32], b_psi[24];
 
     std::snprintf(b_fps, sizeof(b_fps), "%.0f", data.fps);
     std::snprintf(b_avg, sizeof(b_avg), "%.0f", data.fps_avg);
@@ -618,11 +618,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_psi, sizeof(b_psi), "%.1f%%", data.mem_psi_some_pct);
     } else {
       std::snprintf(b_psi, sizeof(b_psi), "N/A (kernel)");
-    }
-    if (data.ram_speed_mts > 0) {
-      std::snprintf(b_rspd, sizeof(b_rspd), "%s %d MT/s", data.ram_type, data.ram_speed_mts);
-    } else {
-      std::snprintf(b_rspd, sizeof(b_rspd), "N/A (run installer)");
     }
 
     char b_bat[48] = {0};
@@ -696,7 +691,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       draw_metric_checkbox_row(cfg, MetricType::GameRam, "Game RAM", b_gram);
       draw_metric_checkbox_row(cfg, MetricType::SwapRam, "Swap / ZRAM", b_swap);
       draw_metric_checkbox_row(cfg, MetricType::MemPressure, "Mem Pressure", b_psi);
-      draw_metric_checkbox_row(cfg, MetricType::RamSpeed, "RAM Speed", b_rspd);
 
       ImGui::EndTable();
     }

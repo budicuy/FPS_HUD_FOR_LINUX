@@ -76,7 +76,6 @@ GroupCategory get_metric_category(MetricType m) noexcept {
     case MetricType::GameRam:
     case MetricType::SwapRam:
     case MetricType::MemPressure:
-    case MetricType::RamSpeed:
       return GroupCategory::RAM;
     case MetricType::EngineApi:
     case MetricType::SystemClock:
@@ -265,15 +264,6 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       } else {
         std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.mem_psi_some_pct);
         std::snprintf(sv.unit, sizeof(sv.unit), "%%");
-      }
-      return;
-    case MetricType::RamSpeed:
-      std::snprintf(sv.prefix, sizeof(sv.prefix), "%s:", d.ram_type);
-      if (d.ram_speed_mts <= 0) {
-        std::snprintf(sv.number, sizeof(sv.number), "N/A");
-      } else {
-        std::snprintf(sv.number, sizeof(sv.number), "%d", d.ram_speed_mts);
-        std::snprintf(sv.unit, sizeof(sv.unit), "MT/s");
       }
       return;
     case MetricType::EngineApi:
@@ -758,18 +748,6 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
     std::string toast_msg;
     if (RecorderController::instance().get_recent_toast(toast_msg)) {
       draw_crisp_text(toast_msg.c_str(), IM_COL32(60, 245, 120, fg_alpha), cfg);
-    }
-
-    // Show Wayland hotkey restriction notice banner for the first 10.0 seconds
-    if (get_input_manager().is_wayland_hotkey_restricted()) {
-      static const auto hud_start_time = std::chrono::steady_clock::now();
-      auto now = std::chrono::steady_clock::now();
-      double elapsed = std::chrono::duration<double>(now - hud_start_time).count();
-      if (elapsed < 10.0) {
-        draw_crisp_text(
-            "[INFO] Hotkey Wayland terkunci: jalankan 'fpshud --setup' untuk mengaktifkan GUI",
-            IM_COL32(255, 210, 80, fg_alpha), cfg);
-      }
     }
 
     // Optional Mini Frametime Graph directly on HUD
