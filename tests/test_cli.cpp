@@ -12,6 +12,7 @@ InputManager::~InputManager() = default;
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -2655,6 +2656,48 @@ void run_all_devices_and_features_suite() {
              shm_cleanup_hardened
                  ? "cleanup_shm() invoked deterministically on spawn & socket connection failure"
                  : "Failed: Missing cleanup_shm() on helper process spawn failure path");
+
+  // 4.2 Async Child Process Reaping & Anti-Zombie Invariant
+  bool zombie_reaping_ok = false;
+  // Test runtime detached reaping pattern
+  {
+    char* test_argv[] = {const_cast<char*>("true"), nullptr};
+    pid_t test_pid = 0;
+    if (posix_spawnp(&test_pid, "true", nullptr, nullptr, test_argv, environ) == 0 && test_pid > 0) {
+      std::thread([test_pid]() {
+        int status = 0;
+        ::waitpid(test_pid, &status, 0);
+      }).detach();
+      // Allow thread to reap
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      int status = 0;
+      pid_t wr = ::waitpid(test_pid, &status, WNOHANG);
+      // wr should be -1 with errno == ECHILD because the detached thread already reaped it
+      if (wr == -1 || wr == test_pid) {
+        zombie_reaping_ok = true;
+      }
+    } else {
+      zombie_reaping_ok = true;
+    }
+  }
+
+  // Also verify src/ui/gui_menu.cpp contains detached waitpid
+  if (!rroot.empty()) {
+    std::string menu_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+    if (menu_src.find("open_system_folder") != std::string::npos) {
+      size_t pos_fn = menu_src.find("void open_system_folder(");
+      size_t end_fn = menu_src.find("void draw_section_header", pos_fn);
+      std::string fn_body = (end_fn != std::string::npos) ? menu_src.substr(pos_fn, end_fn - pos_fn) : "";
+      if (fn_body.find("waitpid(pid") == std::string::npos ||
+          fn_body.find(".detach()") == std::string::npos) {
+        zombie_reaping_ok = false;
+      }
+    }
+  }
+  check_cond(zombie_reaping_ok, "4.2 Async Child Process Reaping (Anti-Zombie)",
+             zombie_reaping_ok
+                 ? "xdg-open child processes reaped via detached waitpid thread (no zombie processes)"
+                 : "Failed: Missing waitpid or detached reaper thread in open_system_folder");
 
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;

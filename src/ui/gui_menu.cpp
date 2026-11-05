@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fpshud {
@@ -46,7 +47,13 @@ void open_system_folder(const std::string& path) {
 
   char* argv[] = {const_cast<char*>("xdg-open"), const_cast<char*>(path.c_str()), nullptr};
   pid_t pid = 0;
-  posix_spawnp(&pid, "xdg-open", nullptr, nullptr, argv, envp.data());
+  int res = posix_spawnp(&pid, "xdg-open", nullptr, nullptr, argv, envp.data());
+  if (res == 0 && pid > 0) {
+    std::thread([pid]() {
+      int status = 0;
+      ::waitpid(pid, &status, 0);
+    }).detach();
+  }
 }
 
 void draw_section_header(const char* title,
