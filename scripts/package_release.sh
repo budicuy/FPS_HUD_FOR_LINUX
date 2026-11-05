@@ -75,7 +75,7 @@ echo "[✓] Generated cryptographic checksum: $DIST_DIR/fpshud-linux-x86_64.tar.
 
 cd "$PROJECT_DIR"
 if [ "${1:-}" = "--install" ] || [ "${FPSHUD_INSTALL_AFTER_PACKAGE:-0}" = "1" ]; then
-    bash "$PROJECT_DIR/install.sh"
+    bash "$PROJECT_DIR/scripts/install.sh"
 else
     echo "[i] Skipped automatic developer installation. Run with --install or FPSHUD_INSTALL_AFTER_PACKAGE=1 to install to ~/.local."
 fi
