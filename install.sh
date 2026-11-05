@@ -373,26 +373,20 @@ fi
 chmod +x "$BIN_DIR/fpshud"
 
 # ====================================================================
-# 6. Hardware Telemetry Permissions (RAM Speed, CPU Wattage & Wayland Hotkeys)
+# 6. Hardware Telemetry Permissions (Optional RAPL CPU Wattage)
 # ====================================================================
 echo ""
 echo "=================================================================="
 echo "  Hardware Telemetry & Sensor Permissions Setup"
 echo "=================================================================="
-echo "FPSHUD works out-of-the-box for FPS, Frametimes, and GPU sensors."
-echo "However, Linux kernel security policies restrict:"
-echo "  • CPU Package Power (Watts via RAPL energy counters)"
-echo "  • RAM Speed (MT/s) & Memory Generation (DDR4 / DDR5 via SMBIOS)"
-echo "  • In-game GUI menu & hotkeys on Wayland compositors"
-echo ""
-echo "Sudo access is STRONGLY RECOMMENDED to enable these sensors"
-echo "via lightweight, standard system udev rules."
+echo "FPSHUD works out-of-the-box (sudo-free) for FPS, Frametimes, GPU"
+echo "sensors, RAM usage/swap/PSI, and in-game GUI/hotkeys on Wayland & X11."
+echo "Only privileged CPU Package Power (Watts via RAPL counters) requires"
+echo "an optional system udev rule."
 echo ""
 echo "Security Notice / Perhatian Keamanan:"
-echo "  1. Granting read access to RAPL CPU Wattage (MODE 0444) allows local"
-echo "     software to observe CPU power counters (side-channel CVE-2020-8694 Platypus trade-off)."
-echo "  2. Adding user to 'input' group grants access to raw input event nodes"
-echo "     (/dev/input/event*), which can observe system keystrokes."
+echo "  Granting read access to RAPL CPU Wattage (MODE 0444) allows local"
+echo "  software to observe CPU power counters (side-channel CVE-2020-8694 Platypus trade-off)."
 echo "=================================================================="
 
 USER_CONFIRM=0
@@ -401,20 +395,20 @@ if [ "${FORCE_SETUP:-0}" = "1" ] || [ "$FORCE_OPT" -eq 1 ]; then
 elif [ -n "${CI:-}" ]; then
     USER_CONFIRM=0
 elif [ -t 0 ]; then
-    read -r -p "Proceed with sudo hardware sensor setup? / Lanjutkan konfigurasi sensor via sudo? [y/N] " confirm || confirm="n"
+    read -r -p "Proceed with sudo RAPL sensor setup? / Konfigurasi sensor CPU Watt via sudo? [y/N] " confirm || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
 elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    read -r -p "Proceed with sudo hardware sensor setup? / Lanjutkan konfigurasi sensor via sudo? [y/N] " confirm < /dev/tty || confirm="n"
+    read -r -p "Proceed with sudo RAPL sensor setup? / Konfigurasi sensor CPU Watt via sudo? [y/N] " confirm < /dev/tty || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
 else
     echo "[*] Non-interactive environment detected without TTY. Skipping sudo configuration."
-    echo "    (Core overlay will install cleanly; to enable privileged sensors later, run: ~/.local/bin/fpshud --setup)"
+    echo "    (Core overlay will install cleanly; to enable RAPL power sensor later, run: ~/.local/bin/fpshud --setup)"
     USER_CONFIRM=0
 fi
 
@@ -425,8 +419,8 @@ if [ "$USER_CONFIRM" -eq 1 ]; then
 else
     echo ""
     echo "[!] Sudo configuration skipped."
-    echo "    Core overlay, FPS, and GPU sensors will function normally."
-    echo "    To enable CPU Wattage, RAM Speed, and Wayland hotkeys later, run at any time:"
+    echo "    Core overlay, FPS, GPU sensors, RAM, and Hotkeys function 100% normally."
+    echo "    To enable CPU Wattage later, run at any time:"
     echo "        ~/.local/bin/fpshud --setup"
     echo ""
 fi

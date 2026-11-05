@@ -129,23 +129,23 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
 ### Izin Akses Perangkat Keras, Model Keamanan & Trade-off
+> [!NOTE]
+> **Arsitektur Bebas Sudo untuk Overlay, Input & RAM:**
+> FPSHUD dapat langsung berjalan **100% bebas sudo** tanpa hak akses khusus:
+> - **Shortcut Keyboard & Navigasi GUI In-Game**: Ditangani langsung secara in-process melalui hooked event queue Wayland display (`wl_keyboard` / `wl_pointer`) dan X11 tanpa memerlukan grup `input` atau akses root `/dev/input/event*`.
+> - **Metrik RAM**: Kapasitas memori dinamis, konsumsi game resident (VmRSS), Swap/ZRAM, dan memory stall pressure (PSI) dibaca secara aman langsung dari `/proc/meminfo`, `/proc/self/status`, dan `/proc/pressure/memory` (100% world-readable).
+> - **Telemetri Grafis**: FPS, frametimes, dan sensor GPU (NVIDIA NVML, AMD sysfs, Intel Level Zero / DRM) beroperasi tanpa hak root.
+
 > [!IMPORTANT]
-> Saat penginstal meminta **izin akses `sudo`**, langkah ini bertujuan mendaftarkan aturan udev untuk pemantauan perangkat keras tanpa privilege root. Pahami trade-off keamanan berikut:
+> **Sensor Opsional RAPL CPU Wattage (Trade-off Celah Platypus CVE-2020-8694):**
+> Satu-satunya sensor yang memerlukan pengaturan izin istimewa adalah pembacaan daya paket CPU (Watts).
+> Kebijakan keamanan kernel Linux membatasi `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`) guna memitigasi serangan side-channel **Platypus** (CVE-2020-8694), di mana proses tanpa privilege pada sistem bersama berpotensi menebak kunci kriptografis dari fluktuasi mikroskopis daya CPU. Pemasangan aturan udev (`/etc/udev/rules.d/99-fpshud-rapl.rules`) mengatur hak baca `0444` (read-only untuk semua pengguna lokal). Ini adalah trade-off eksplisit pengguna: kenyamanan memantau konsumsi Watt CPU berbanding mitigasi serangan side-channel pada sistem multi-user atau server sensitif.
 >
-> 1. **Daya CPU / Konsumsi Listrik (Watt via RAPL & Trade-off Celah Platypus CVE-2020-8694)**:
->    Kebijakan keamanan kernel Linux membatasi `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`) guna memitigasi serangan side-channel **Platypus** (CVE-2020-8694), di mana proses tanpa privilege pada sistem bersama berpotensi menebak kunci kriptografis dari fluktuasi mikroskopis daya CPU. Pemasangan aturan udev (`/etc/udev/rules.d/99-fpshud-rapl.rules`) mengatur hak baca `0444` (read-only untuk semua pengguna lokal). Ini adalah trade-off eksplisit pengguna: kenyamanan memantau konsumsi Watt CPU berbanding mitigasi serangan side-channel pada sistem multi-user atau server sensitif.
-> 2. **Kecepatan & Generasi RAM (Deteksi SMBIOS DMI)**:
->    Tabel raw SMBIOS DMI pada `/sys/firmware/dmi/entries/` dibatasi untuk root. Setup menjalankan deteksi statis read-only satu kali dan menyimpan ringkasan tipe memori ke `~/.local/share/fpshud/ram_info` (sepenuhnya milik akun user biasa Anda).
-> 3. **Shortcut Keyboard Wayland & Batasan Keamanan Grup Input**:
->    Pada sesi desktop Wayland (GNOME, KDE Plasma Wayland, Hyprland, Sway), batas isolasi keamanan mencegah aplikasi mengintip tombol keyboard lintas jendela. FPSHUD membaca penekanan tombol toggle in-game via antarmuka kernel Linux evdev (`/dev/input/event*`). Setup menambahkan aturan udev khusus serta memasukkan akun Anda ke grup standar `input`.
->    > [!WARNING]
->    > Setiap proses yang dijalankan oleh akun pengguna di dalam grup `input` dapat membaca event perangkat input evdev. Jangan masukkan akun user yang tidak dipercaya ke grup ini, dan **jangan pernah menjalankan `chmod a+r /dev/input/event*`** (karena akan membuka celah keylogger bagi semua pengguna di mesin).
->
-> Jika Anda memilih tidak memberikan akses sudo, FPSHUD tetap dapat berjalan normal tanpa pemantauan Watt RAPL, info RAM SMBIOS, atau shortcut latar belakang Wayland (input in-game Vulkan/OpenGL tetap berfungsi normal).
+> Jika Anda memilih tidak memberikan akses sudo, FPSHUD tetap dapat berjalan sempurna dengan 23 metrik lainnya tetap aktif.
 
 > [!NOTE]
 > **Konfigurasi atau Periksa Izin Kapan Saja:**
-> Anda dapat mengonfigurasi izin sensor hardware kapan saja tanpa perlu menginstal ulang:
+> Anda dapat mengonfigurasi izin sensor RAPL kapan saja tanpa perlu menginstal ulang:
 > ```bash
 > fpshud --setup
 > ```
@@ -290,10 +290,10 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 | **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) dengan `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
 | **CPU Intel** | Intel Core & Core Ultra (Hybrid & Standar) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
-| **Memori RAM** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
+| **Memori RAM** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory` (100% bebas sudo) |
 | **Baterai & Daya** | Standar ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (otomatis disabled di Desktop PC) |
 
-### Daftar Lengkap 25 Sensor
+### Daftar Lengkap 24 Sensor
 
 | # | Nama Sensor | Grup | Informasi yang Ditampilkan | Contoh di HUD |
 | :--- | :--- | :--- | :--- | :--- |
@@ -318,10 +318,9 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 | `19` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
 | `20` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
 | `21` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
-| `22` | **RAM Speed** | `RAM` | Kecepatan transfer efektif & generasi RAM | `DDR5: 6000 MT/s` |
-| `23` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
-| `24` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
-| `25` | **Battery & Power** | `SYS` | Persentase baterai, daya Watt, dan status cas (otomatis disabled di PC Desktop) | `BAT: 82% (16.5W+)` |
+| `22` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
+| `23` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+| `24` | **Battery & Power** | `SYS` | Persentase baterai, daya Watt, dan status cas (otomatis disabled di PC Desktop) | `BAT: 82% (16.5W+)` |
 
 ---
 
@@ -332,7 +331,7 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 | **Bahasa & Build** | **C++26**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | Arsitektur ISO C++26 zero-heap inline storage (`std::inplace_vector`), Pack Indexing, analitik frametime SIMD, ThinLTO, `-fno-plt`, stack canaries, deteksi bug ASan/UBSan & static libstdc++. |
 | **Intersepsi Grafis** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Menangkap fungsi `vkQueuePresentKHR`, `glXSwapBuffers`, dan `eglSwapBuffers`. |
 | **Antarmuka UI** | **Dear ImGui (`v1.91.6`)** | Renderer teks dua warna dengan *outline/shadow* & dashboard 3-Column Split View tanpa tab. |
-| **Penangkap Input** | **Linux `evdev` + Fallback `X11`** | Pembacaan `/dev/input/event*` non-blocking dengan pengunci kursor `EVIOCGRAB`. |
+| **Penangkap Input** | **In-Process Wayland & X11 Hooks + `evdev`** | Zero-sudo in-process Wayland `wl_keyboard`/`wl_pointer` hooking & pembacaan `evdev` non-blocking dengan `EVIOCGRAB`. |
 | **Mesin Sensor** | **Thread Pekerja Asinkron (500ms)** | Nol alokasi memori per frame; pembacaan data ke layar bebas hambatan (*lock-free*). |
 | **Perekam Layar** | **POSIX SHM IPC + FFmpeg (libavcodec)** | Perekaman HEVC/H.264 terakselerasi hardware triple-buffered & audio PulseAudio/PipeWire. |
 

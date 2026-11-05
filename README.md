@@ -129,23 +129,23 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
 ### Hardware Permissions, Security Model & Trade-offs
+> [!NOTE]
+> **Zero Sudo Architecture for Overlay, Input & RAM:**
+> FPSHUD runs **100% sudo-free** out-of-the-box for all core features:
+> - **In-Game Hotkeys & GUI Navigation**: Handled directly in-process via hooked Wayland display event queues (`wl_keyboard` / `wl_pointer`) and X11 events without requiring the `input` group or `/dev/input/event*` root access.
+> - **RAM Metrics**: Dynamic capacity, resident game memory, Swap/ZRAM, and memory stall pressure (PSI) are parsed cleanly from world-readable `/proc/meminfo`, `/proc/self/status`, and `/proc/pressure/memory`.
+> - **Graphics Telemetry**: FPS, frametimes, and GPU sensors (NVIDIA NVML, AMD sysfs, Intel Level Zero / DRM) operate without root privileges.
+
 > [!IMPORTANT]
-> When the installer prompts for **`sudo` access**, it configures udev rules for unprivileged hardware monitoring. Please review the security trade-offs below:
+> **Optional RAPL CPU Power Monitoring (Watts & CVE-2020-8694 Platypus Trade-off):**
+> The only sensor that requires elevated setup is privileged CPU Package Power.
+> The Linux kernel restricts `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`) to mitigate the **Platypus side-channel attack** (CVE-2020-8694), where an unprivileged attacker on a shared system could infer cryptographic operations from micro-fluctuations in CPU power consumption. Installing the optional udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) sets mode `0444` (read-only for all users). This is an explicit user trade-off: package power monitoring convenience versus cryptographic side-channel mitigation on multi-user or sensitive systems.
 >
-> 1. **CPU Package Power (Watts via RAPL & CVE-2020-8694 Platypus Trade-off)**:
->    The Linux kernel restricts `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`) to mitigate the **Platypus side-channel attack** (CVE-2020-8694), where an unprivileged attacker on a shared system could infer cryptographic operations from micro-fluctuations in CPU power consumption. Installing the udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) sets mode `0444` (read-only for all users). This is an explicit user trade-off: package power monitoring convenience versus cryptographic side-channel mitigation on multi-user or sensitive systems.
-> 2. **RAM Speed & Generation (SMBIOS DMI Probe)**:
->    Raw SMBIOS DMI tables in `/sys/firmware/dmi/entries/` are restricted to root. Setup runs a quick, read-only one-time probe and caches the static memory metadata to `~/.local/share/fpshud/ram_info` (owned exclusively by your regular user account).
-> 3. **Wayland Hotkeys & Input Group Security**:
->    On Wayland compositors (GNOME, KDE Plasma Wayland, Hyprland, Sway), security boundaries isolate windows from global hotkey sniffing. FPSHUD reads raw keyboard toggle events via Linux evdev (`/dev/input/event*`). Setup adds a dedicated udev rule and adds your user to the standard `input` group.
->    > [!WARNING]
->    > Any process executed under an account in the `input` group can read evdev events. Do not add untrusted users to this group, and **never run `chmod a+r /dev/input/event*`** (which would make keystrokes readable by every user on the system).
->
-> If you prefer not to grant sudo, FPSHUD continues to run without RAPL CPU wattage, SMBIOS RAM speed, or Wayland background hotkeys (Vulkan/OpenGL in-game inputs still work).
+> If you prefer not to grant sudo, FPSHUD continues to run perfectly with all other 23 metrics active.
 
 > [!NOTE]
 > **Configure or Verify Permissions Anytime:**
-> You can configure sensor permissions at any time without reinstalling:
+> You can configure optional RAPL sensor permissions at any time without reinstalling:
 > ```bash
 > fpshud --setup
 > ```
@@ -290,10 +290,10 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) with `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
 | **Intel CPUs** | Intel Core & Core Ultra (Hybrid & Standard) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
 | **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
-| **System Memory** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory`, SMBIOS 17 |
+| **System Memory** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory` (100% sudo-free) |
 | **Battery & Power** | Standard ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (auto-disabled on Desktop PCs) |
 
-### All 25 Available Sensors
+### All 24 Available Sensors
 
 | # | Sensor Name | Group | What It Shows | Example |
 | :--- | :--- | :--- | :--- | :--- |
@@ -318,10 +318,9 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | `19` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
 | `20` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
 | `21` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
-| `22` | **RAM Speed** | `RAM` | Effective memory transfer speed and generation | `DDR5: 6000 MT/s` |
-| `23` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
-| `24` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
-| `25` | **Battery & Power** | `SYS` | Battery percentage, power draw (W), and charging state (auto-disabled on Desktop PCs) | `BAT: 82% (16.5W+)` |
+| `22` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
+| `23` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+| `24` | **Battery & Power** | `SYS` | Battery percentage, power draw (W), and charging state (auto-disabled on Desktop PCs) | `BAT: 82% (16.5W+)` |
 
 ---
 
@@ -332,7 +331,7 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | **Language & Build** | **C++26**, **Clang/LLVM 23 + LLD**, **ThinLTO (`-O3`)** | ISO C++26 zero-heap inline storage (`std::inplace_vector`), Pack Indexing, SIMD frametime analytics, ThinLTO, `-fno-plt`, stack canaries, ASan/UBSan diagnostics & static libstdc++. |
 | **Graphics Hooks** | **Vulkan Layer (`1.3`)** + **GLX/EGL Hook** | Hooks `vkQueuePresentKHR`, `glXSwapBuffers`, and `eglSwapBuffers`. |
 | **UI Framework** | **Dear ImGui (`v1.91.6`)** | Custom vertex-shaded outline/drop-shadow text & 3-Column Split View dashboard. |
-| **Input Capture** | **Linux `evdev` + `X11` Fallback** | Non-blocking `/dev/input/event*` polling with `EVIOCGRAB` cursor lock. |
+| **Input Capture** | **In-Process Wayland & X11 Hooks + `evdev`** | Zero-sudo in-process Wayland `wl_keyboard`/`wl_pointer` hooking & non-blocking `evdev` with `EVIOCGRAB`. |
 | **Telemetry Engine** | **Async 500ms Worker Thread** | Zero heap allocations per frame; lock-free atomic snapshot reads. |
 | **Screen Recorder** | **POSIX SHM IPC + FFmpeg (libavcodec)** | Triple-buffered hardware-accelerated HEVC/H.264 capture & PulseAudio/PipeWire audio. |
 

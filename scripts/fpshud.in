@@ -13,8 +13,6 @@ if [ ! -f "$LIB_SO" ]; then
         LIB_SO="/usr/lib/fpshud/libfpshud.so"
     fi
 fi
-RAM_CACHE_USER="${XDG_DATA_HOME:-$HOME/.local/share}/fpshud/ram_info"
-RAM_CACHE_SYS="/etc/fpshud/ram_info"
 
 show_help() {
     cat <<'EOF'
@@ -23,15 +21,15 @@ show_help() {
 ====================================================================
 Penggunaan / Usage:
   fpshud <perintah/game> [args...] Launch OpenGL / Vulkan game with overlay
-  fpshud --status, -c              Periksa status izin sensor hardware
-  fpshud --setup, -s               Konfigurasi izin sensor hardware (Sudo)
+  fpshud --status, -c              Periksa status izin sensor hardware (RAPL CPU Power)
+  fpshud --setup, -s               Konfigurasi izin sensor hardware RAPL CPU Power (Sudo opsional)
   fpshud --help, -h                Tampilkan bantuan ini
 
 Contoh / Examples:
   fpshud glxgears
   fpshud %command%                 (Steam Launch Options untuk game OpenGL)
-  fpshud --status                  (Periksa apakah CPU Watt & RAM terbaca)
-  fpshud --setup                   (Beri izin sensor kapan saja tanpa instal ulang)
+  fpshud --status                  (Periksa apakah CPU Watt terbaca)
+  fpshud --setup                   (Beri izin sensor CPU Wattage kapan saja tanpa instal ulang)
 ====================================================================
 EOF
 }
@@ -42,8 +40,6 @@ check_status() {
     echo "===================================================================="
 
     local rapl_ok=0
-    local input_ok=0
-    local ram_ok=0
 
     # 1. RAPL CPU Wattage
     for r in /sys/class/powercap/*rapl*/*/energy_uj /sys/class/powercap/*rapl*/energy_uj; do
@@ -53,42 +49,21 @@ check_status() {
         fi
     done
 
-    # 2. Wayland Input / Evdev
-    if groups 2>/dev/null | grep -qw "input" || [ -r /dev/input/event0 ] 2>/dev/null; then
-        input_ok=1
-    fi
-
-    # 3. RAM Cache
-    if [ -f "$RAM_CACHE_USER" ] || [ -f "$RAM_CACHE_SYS" ]; then
-        ram_ok=1
-    fi
-
     echo -n "  [+] CPU Package Power (RAPL / Watt)   : "
     if [ "$rapl_ok" -eq 1 ]; then
         echo -e "\033[32mAKTIF (Dapat dibaca)\033[0m"
     else
-        echo -e "\033[33mTERBATAS (Perlu izin udev / sudo)\033[0m"
+        echo -e "\033[33mTERBATAS (Perlu izin udev / sudo opsional)\033[0m"
     fi
 
-    echo -n "  [+] RAM Speed (MT/s) & DDR Type       : "
-    if [ "$ram_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Cache tersedia)\033[0m"
-    else
-        echo -e "\033[33mTERBATAS (Cache belum dibuat)\033[0m"
-    fi
-
-    echo -n "  [+] Wayland Hotkeys & Mouse Capture   : "
-    if [ "$input_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Grup input terdeteksi)\033[0m"
-    else
-        echo -e "\033[33mTERBATAS (User belum di grup input)\033[0m"
-    fi
+    echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAKTIF (Bebas Sudo)\033[0m"
+    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAKTIF (In-Process Hook, Bebas Sudo)\033[0m"
 
     echo "--------------------------------------------------------------------"
-    if [ "$rapl_ok" -eq 1 ] && [ "$ram_ok" -eq 1 ] && [ "$input_ok" -eq 1 ]; then
+    if [ "$rapl_ok" -eq 1 ]; then
         echo -e "\033[32mSemua izin sensor hardware lengkap dan siap digunakan!\033[0m"
     else
-        echo -e "\033[33mSebagian sensor belum aktif. Untuk mengaktifkannya, jalankan:\033[0m"
+        echo -e "\033[33mInput & RAM 100% aktif tanpa sudo. Untuk mengaktifkan sensor CPU Wattage (RAPL), jalankan:\033[0m"
         echo "    fpshud --setup"
     fi
     echo "===================================================================="
@@ -96,16 +71,15 @@ check_status() {
 
 run_setup() {
     echo "===================================================================="
-    echo "  FPSHUD — Konfigurasi Izin Sensor Hardware (CPU, RAM & Wayland)"
+    echo "  FPSHUD — Konfigurasi Izin Sensor Hardware (RAPL CPU Wattage)"
     echo "===================================================================="
-    echo "Mengonfigurasi aturan udev standar Linux & cache SMBIOS agar sensor"
+    echo "Mengonfigurasi aturan udev standar Linux agar sensor CPU Wattage (RAPL)"
     echo "dapat dibaca oleh user biasa tanpa hak root saat bermain game."
     echo ""
     echo "Perhatian Keamanan / Security Notice (I6):"
     echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
     echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
-    echo "  2. Menambahkan pengguna ke grup 'input' memberi izin membaca perangkat input"
-    echo "     mentah (/dev/input/event*) yang dapat membaca ketukan tombol pada sistem."
+    echo "  2. Input hotkeys & RAM telah bebas sudo dan tidak memerlukan izin tambahan."
     echo "--------------------------------------------------------------------"
 
     local user_consent=0
@@ -151,122 +125,18 @@ SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!
 EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
-    # 2. Wayland Input udev rule & Group
-    echo "[*] Memasang udev rule untuk Wayland Hotkeys (/etc/udev/rules.d/99-fpshud-input.rules)..."
-    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "EOF"
-KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input"
-EOF'
-    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
+    # 2. Reload udev rules
+    echo "[*] Me-reload aturan udev sistem..."
+    $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
 
-    # Add user to input group
-    TARGET_USER="${SUDO_USER:-$USER}"
-    if [ -n "$TARGET_USER" ] && id -u "$TARGET_USER" >/dev/null 2>&1; then
-        echo "[*] Menambahkan pengguna '$TARGET_USER' ke grup input..."
-        $SUDO_CMD usermod -a -G input "$TARGET_USER" 2>/dev/null || true
-    fi
-
-    # 3. Generate RAM Info Cache
-    echo "[*] Mendeteksi informasi RAM (Kecepatan MT/s & Tipe DDR via SMBIOS)..."
+    # 3. Flatpak Steam configuration
     TARGET_HOME="${HOME}"
+    TARGET_USER="${SUDO_USER:-$USER}"
     if [ -n "$SUDO_USER" ]; then
         USER_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
         [ -n "$USER_HOME" ] && TARGET_HOME="$USER_HOME"
     fi
-    TARGET_RAM_FILE="${XDG_DATA_HOME:-$TARGET_HOME/.local/share}/fpshud/ram_info"
-    mkdir -p "$(dirname "$TARGET_RAM_FILE")"
-
-    if command -v python3 >/dev/null 2>&1; then
-        $SUDO_CMD python3 -c '
-import glob, struct, os, re, subprocess
-
-types = {
-    0x12: "DDR", 0x13: "DDR2", 0x18: "DDR3", 0x1A: "DDR4",
-    0x1B: "LPDDR", 0x1C: "LPDDR2", 0x1D: "LPDDR3", 0x1E: "LPDDR4",
-    0x22: "DDR5", 0x23: "LPDDR5"
-}
-
-speed = 0
-ram_type = "RAM"
-modules = 0
-
-for raw_path in glob.glob("/sys/firmware/dmi/entries/17-*/raw"):
-    try:
-        with open(raw_path, "rb") as f:
-            b = f.read()
-        if len(b) < 0x17 or b[0] != 17:
-            continue
-        length = min(b[1], len(b))
-        size = struct.unpack_from("<H", b, 0x0C)[0]
-        if size == 0 or size == 0xFFFF:
-            continue
-        modules += 1
-        if length > 0x12 and ram_type == "RAM":
-            t = types.get(b[0x12])
-            if t: ram_type = t
-        rated = struct.unpack_from("<H", b, 0x15)[0] if length > 0x16 else 0
-        conf = struct.unpack_from("<H", b, 0x20)[0] if length > 0x21 else 0
-        if rated == 0xFFFF and length >= 0x58:
-            rated = struct.unpack_from("<I", b, 0x54)[0]
-        if conf == 0xFFFF and length >= 0x5C:
-            conf = struct.unpack_from("<I", b, 0x58)[0]
-        eff = conf if conf > 0 else rated
-        if eff > speed:
-            speed = eff
-    except Exception:
-        pass
-
-if speed == 0:
-    for cmd in ["/usr/sbin/dmidecode", "/usr/bin/dmidecode", "dmidecode"]:
-        try:
-            out = subprocess.check_output([cmd, "-t", "memory"], text=True, stderr=subprocess.DEVNULL)
-            for block in out.split("Memory Device"):
-                m_size = re.search(r"Size:\s+(\d+)\s+([MG]B)", block)
-                if not m_size or "No Module Installed" in block:
-                    continue
-                modules += 1
-                m_type = re.search(r"Type:\s+([A-Za-z0-9\-]+)", block)
-                if m_type and ram_type == "RAM":
-                    ram_type = m_type.group(1).replace("-", "")
-                m_conf = re.search(r"Configured Memory Speed:\s+(\d+)\s+MT/s", block) or \
-                         re.search(r"Configured Clock Speed:\s+(\d+)\s+MHz", block)
-                m_speed = re.search(r"Speed:\s+(\d+)\s+(?:MT/s|MHz)", block)
-                sp = int(m_conf.group(1)) if m_conf else (int(m_speed.group(1)) if m_speed else 0)
-                if sp > speed:
-                    speed = sp
-            break
-        except Exception:
-            pass
-
-target_file = "'"$TARGET_RAM_FILE"'"
-if speed > 0:
-    with open(target_file, "w") as f:
-        f.write(f"type={ram_type}\nspeed_mts={speed}\nmodules={modules}\n")
-    os.chmod(target_file, 0o644)
-    print(f"    [+] Deteksi RAM Sukses: {ram_type} {speed} MT/s ({modules} modul)")
-' 2>/dev/null || true
-    else
-        echo "    [!] python3 tidak ditemukan, pembacaan SMBIOS RAM dilewati."
-    fi
-
-    # Fix ownership if created under sudo
-    if [ -n "$TARGET_USER" ] && [ -f "$TARGET_RAM_FILE" ]; then
-        $SUDO_CMD chown -R "$TARGET_USER:" "$(dirname "$TARGET_RAM_FILE")" 2>/dev/null || true
-    fi
-
-    # System-wide copy
-    $SUDO_CMD mkdir -p /etc/fpshud 2>/dev/null || true
-    if [ -f "$TARGET_RAM_FILE" ]; then
-        $SUDO_CMD cp "$TARGET_RAM_FILE" /etc/fpshud/ram_info 2>/dev/null || true
-        $SUDO_CMD chmod 644 /etc/fpshud/ram_info 2>/dev/null || true
-    fi
-
-    # 4. Reload udev rules
-    echo "[*] Me-reload aturan udev sistem..."
-    $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
-
-    # 5. Flatpak Steam configuration
     FLATPAK_STEAM_DIR="$TARGET_HOME/.var/app/com.valvesoftware.Steam"
     if [ -d "$FLATPAK_STEAM_DIR" ]; then
         echo "[*] Mendeteksi direktori Flatpak Steam: $FLATPAK_STEAM_DIR"
@@ -293,8 +163,8 @@ if speed > 0:
     echo "===================================================================="
     echo "  [✓] Konfigurasi Izin Sensor Berhasil Selesai!"
     echo "===================================================================="
-    echo "Catatan: Jika Anda baru ditambahkan ke grup 'input', silakan relogin"
-    echo "atau jalankan 'newgrp input' agar hotkey Wayland langsung aktif."
+    echo "Catatan: Sensor CPU Wattage (RAPL) telah aktif."
+    echo "Input dan RAM bekerja 100% tanpa hak akses khusus (sudo-free)."
     echo "===================================================================="
 }
 
