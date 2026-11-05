@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -136,7 +137,7 @@ struct SwapchainData {
 std::mutex g_map_mutex;
 std::unordered_map<void*, InstanceData*> g_instance_map;
 std::unordered_map<void*, DeviceData*> g_device_map;
-std::unordered_map<VkSwapchainKHR, SwapchainData*> g_swapchain_map;
+std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainData>> g_swapchain_map;
 
 InstanceData* find_instance_data(void* key) {
   std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -204,8 +205,10 @@ PFN_vkVoidFunction imgui_vk_loader(const char* function_name, void* user_data) {
   return nullptr;
 }
 
-void destroy_swapchain_data(SwapchainData* sd) {
-  if (!sd || !sd->device_data) return;
+void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
+  if (!sd) return;
+  std::lock_guard<std::mutex> lock(sd->mutex);
+  if (!sd->device_data) return;
   DeviceData* dd = sd->device_data;
 
   if (dd->DeviceWaitIdle) {
@@ -253,8 +256,6 @@ void destroy_swapchain_data(SwapchainData* sd) {
     dd->DestroyRenderPass(dd->device, sd->render_pass, nullptr);
     sd->render_pass = VK_NULL_HANDLE;
   }
-
-  delete sd;
 }
 
 bool init_swapchain_overlay(SwapchainData* sd) {
@@ -979,7 +980,7 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device,
     if (!device) return;
 
     DeviceData* dd = nullptr;
-    std::vector<SwapchainData*> swapchains_to_destroy;
+    std::vector<std::shared_ptr<SwapchainData>> swapchains_to_destroy;
 
     {
       std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -1018,7 +1019,7 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device,
     }
 
     // 3. Destroy swapchains OUTSIDE g_map_mutex to avoid deadlocks
-    for (auto* sd : swapchains_to_destroy) {
+    for (const auto& sd : swapchains_to_destroy) {
       destroy_swapchain_data(sd);
     }
 
@@ -1088,7 +1089,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
     }
 
     if (pCreateInfo->oldSwapchain != VK_NULL_HANDLE) {
-      SwapchainData* old_sd = nullptr;
+      std::shared_ptr<SwapchainData> old_sd = nullptr;
       {
         std::lock_guard<std::mutex> lock(g_map_mutex);
         auto it = g_swapchain_map.find(pCreateInfo->oldSwapchain);
@@ -1123,14 +1124,14 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
       }
     }
 
-    auto* sd = new SwapchainData();
+    auto sd = std::make_shared<SwapchainData>();
     sd->swapchain = *pSwapchain;
     sd->device_data = dd;
     sd->extent = pCreateInfo->imageExtent;
     sd->format = pCreateInfo->imageFormat;
     sd->supports_transfer_src = supports_transfer;
 
-    if (init_swapchain_overlay(sd)) {
+    if (init_swapchain_overlay(sd.get())) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
       g_swapchain_map[*pSwapchain] = sd;
     } else {
@@ -1151,7 +1152,7 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(VkDevice device, VkSwapchain
                                                     const VkAllocationCallbacks* pAllocator) {
   try {
     DeviceData* dd = find_device_data(get_dispatch_key(device));
-    SwapchainData* sd = nullptr;
+    std::shared_ptr<SwapchainData> sd = nullptr;
     {
       std::lock_guard<std::mutex> lock(g_map_mutex);
       auto sit = g_swapchain_map.find(swapchain);
@@ -1236,18 +1237,21 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[0];
     uint32_t image_idx = pPresentInfo->pImageIndices[0];
 
-    SwapchainData* sd = nullptr;
+    std::shared_ptr<SwapchainData> sd;
     {
       std::lock_guard<std::mutex> lock(g_map_mutex);
       auto it = g_swapchain_map.find(swapchain);
       if (it != g_swapchain_map.end()) sd = it->second;
     }
 
-    if (!sd || !sd->imgui_initialized || image_idx >= sd->frames.size()) {
+    if (!sd) {
       return dd->QueuePresentKHR(queue, pPresentInfo);
     }
 
     std::lock_guard<std::mutex> render_lock(sd->mutex);
+    if (!sd->imgui_initialized || image_idx >= sd->frames.size()) {
+      return dd->QueuePresentKHR(queue, pPresentInfo);
+    }
     FrameResources& frame = sd->frames[image_idx];
 
     // Bounded fence wait (2 seconds) to guarantee the game's render thread never deadlocks
@@ -1331,7 +1335,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       }
     }
 
-    if (should_capture_frame && ensure_frame_capture_buffer(dd, sd, frame)) {
+    if (should_capture_frame && ensure_frame_capture_buffer(dd, sd.get(), frame)) {
       VkImageMemoryBarrier b1{};
       b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
       b1.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;

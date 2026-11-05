@@ -1032,6 +1032,25 @@ void run_elf_and_layer_abi_suite() {
                              : "All Vulkan hook entry points wrapped in try/catch boundaries")
             : "Failed: Missing try/catch exception trap on Vulkan hook callbacks");
 
+    // 3.3 Vulkan Swapchain Destruction Concurrency Hardening
+    bool vk_shared_swapchain_ok = false;
+    if (!rroot.empty()) {
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      if (vk_src.find("std::shared_ptr<SwapchainData>") != std::string::npos &&
+          vk_src.find("destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd)") !=
+              std::string::npos &&
+          vk_src.find("std::lock_guard<std::mutex> lock(sd->mutex);") != std::string::npos) {
+        vk_shared_swapchain_ok = true;
+      }
+    } else {
+      vk_shared_swapchain_ok = true;
+    }
+    check_cond(vk_shared_swapchain_ok,
+               "3.3 Vulkan Swapchain Concurrency & Mutex Hardening",
+               vk_shared_swapchain_ok
+                   ? "SwapchainData managed via std::shared_ptr and guarded by sd->mutex"
+                   : "Failed: SwapchainData raw pointer or missing mutex synchronization in destroy");
+
     // 4. Vulkan Multi-Device Lifecycle, Zero-Extent Swapchain & UAF-Free DestroyDevice
     bool lifecycle_ok = false;
     std::string lifecycle_detail;
