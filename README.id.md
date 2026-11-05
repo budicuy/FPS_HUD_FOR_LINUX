@@ -431,7 +431,6 @@ FPS_HUD_FOR_LINUX/
 ├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat, matriks multi-distro & rilis GitHub
 ├── .clang-tidy                          # Aturan analisis statis memori & keamanan kode C++
 ├── CMakeLists.txt                       # Konfigurasi build C++26 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
-├── dist/fpshud-linux-x86_64.tar.gz      # Paket biner portabel siap pakai untuk instalasi 1-perintah curl
 ├── install.sh / uninstall.sh            # Skrip instalasi & uninstalasi instan curl
 ├── manifest/
 │   ├── libfpshud.version                # Peta ekspor simbol (menyembunyikan simbol internal dari game)

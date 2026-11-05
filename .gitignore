@@ -14,9 +14,9 @@ fpshud_test
 
 # Generated files
 VkLayer_FPSHUD_overlay.json
-dist/*
-!dist/fpshud-linux-x86_64.tar.gz
-!dist/fpshud-linux-x86_64.tar.gz.sha256
+# Generated release artifacts and documentation scratch/plans
+dist/
+docs/
 
 # IDE & Editor files
 .vscode/

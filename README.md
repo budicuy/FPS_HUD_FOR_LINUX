@@ -431,7 +431,6 @@ FPS_HUD_FOR_LINUX/
 ├── .github/workflows/ci.yml             # Automated CI build, 5-device test, multi-distro matrix & GitHub Release
 ├── .clang-tidy                          # Automated static code analysis rules for C++ memory safety
 ├── CMakeLists.txt                       # C++26 build config with ThinLTO, LLD, ASan/UBSan & static libstdc++
-├── dist/fpshud-linux-x86_64.tar.gz      # Prebuilt portable binary package for 1-command curl install
 ├── install.sh / uninstall.sh            # 1-command curl installer & uninstaller
 ├── manifest/
 │   ├── libfpshud.version                # Export symbol map (hides internal symbols from game process)
