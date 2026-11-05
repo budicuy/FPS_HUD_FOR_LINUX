@@ -108,6 +108,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 ## 2. Instalasi & Izin Akses Sensor
 
 ### Instalasi 1 Perintah (Instalasi Cepat Otomatis)
+Penginstal mengunduh paket rilis biner portabel siap pakai langsung dari GitHub Releases dan memverifikasi integritas hash SHA256 secara kriptografis sebelum ekstraksi (tanpa perlu kompilasi atau toolchain apa pun):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
@@ -411,13 +412,16 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 61 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
+# 2. Jalankan 64 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
 
-# 3. (Opsional) Jalankan pendeteksi bug AddressSanitizer + LeakSanitizer + UBSan:
+# 3. (Opsional) Instal build lokal langsung ke ~/.local (offline / tanpa download):
+./scripts/install.sh
+
+# 4. (Opsional) Jalankan pendeteksi bug AddressSanitizer + LeakSanitizer + UBSan:
 ./scripts/run_sanitizers.sh
 
-# 4. (Opsional) Jalankan analisis kode statis otomatis Clang-Tidy:
+# 5. (Opsional) Jalankan analisis kode statis otomatis Clang-Tidy:
 ninja -C build clang-tidy
 ```
 
@@ -437,7 +441,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── build_clang.sh                   # Skrip kompilasi Clang 23 + LLD + ThinLTO
 │   ├── fpshud.in                        # Skrip pembungkus CLI manajemen & LD_PRELOAD OpenGL
 │   ├── gen_embedded_fonts.py            # Konversi file font TTF menjadi C++ byte array
-│   ├── install.sh / uninstall.sh        # Skrip penerus instalasi & uninstalasi build lokal
+│   ├── install.sh / uninstall.sh        # Skrip instalasi & uninstalasi build lokal pengembang
 │   ├── package_release.sh               # Pembuat paket rilis standalone untuk distribusi portabel
 │   ├── run_sanitizers.sh                # Skrip pengujian AddressSanitizer, LeakSanitizer & UBSan
 │   ├── test_e2e_install.sh              # Pengujian end-to-end siklus hidup instalasi & uninstalasi sandbox

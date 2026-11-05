@@ -108,6 +108,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 ## 2. Installation & Sensor Permissions
 
 ### 1-Command Installation (Recommended for Fast Setup)
+The installer downloads the prebuilt portable binary package directly from GitHub Releases and cryptographically verifies its SHA256 checksum before extracting (zero compilation or toolchains required):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
 ```
@@ -411,13 +412,16 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 61-check verification suite across 5 simulated device profiles + memory safety:
+# 2. Run the automated 64-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
 
-# 3. (Optional) Run AddressSanitizer + LeakSanitizer + UBSan diagnostic bug detection:
+# 3. (Optional) Install local build directly to ~/.local (offline / no download):
+./scripts/install.sh
+
+# 4. (Optional) Run AddressSanitizer + LeakSanitizer + UBSan diagnostic bug detection:
 ./scripts/run_sanitizers.sh
 
-# 4. (Optional) Run automated Clang-Tidy static code analysis:
+# 5. (Optional) Run automated Clang-Tidy static code analysis:
 ninja -C build clang-tidy
 ```
 
@@ -437,7 +441,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── build_clang.sh                   # Clang 23 + LLD + ThinLTO build script
 │   ├── fpshud.in                        # Management CLI & OpenGL LD_PRELOAD wrapper script
 │   ├── gen_embedded_fonts.py            # Converts TTF fonts into C++ byte arrays
-│   ├── install.sh / uninstall.sh        # Local build installer & uninstaller forwarders
+│   ├── install.sh / uninstall.sh        # Local developer build installer & uninstaller
 │   ├── package_release.sh               # Standalone release packager for portable distribution
 │   ├── run_sanitizers.sh                # AddressSanitizer, LeakSanitizer & UBSan test runner
 │   ├── test_e2e_install.sh              # Sandbox end-to-end install & uninstall lifecycle verification
