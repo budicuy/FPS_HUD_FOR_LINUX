@@ -61,7 +61,7 @@ fi
 YMM_COUNT="$(objdump -d "$BUILD_DIR/libfpshud.so" | grep -c '%ymm' || true)"
 if [ "$YMM_COUNT" -gt 32 ]; then
     echo "[i] Note: Host static libstdc++.a contains AVX/AVX2 instructions ($YMM_COUNT %ymm ops)."
-    echo "    install.sh includes automatic pre-AVX2 CPU detection & source fallback; GitHub Actions CI builds pure x86-64 baseline releases."
+    echo "    GitHub Actions CI builds pure x86-64 baseline releases for universal compatibility."
 else
     echo "[✓] ISA baseline gate PASSED ($YMM_COUNT %ymm ops, restricted to runtime-dispatched AVX2 kernel)."
 fi

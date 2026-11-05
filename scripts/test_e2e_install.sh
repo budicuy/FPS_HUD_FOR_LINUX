@@ -39,7 +39,7 @@ grep -q "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" "${TEST_HOME}/.local/share
 # Verify wrapper execution
 "${TEST_HOME}/.local/bin/fpshud" --help >/dev/null || { echo "FAIL: fpshud --help failed"; exit 1; }
 
-echo "[3/5] Testing negative security case (corrupted/tampered SHA256 hash)..."
+echo "[3/5] Testing negative security cases (tampered hash & corrupted archive)..."
 BAD_HASH_FILE="$(mktemp /tmp/fpshud_bad_hash.XXXXXX)"
 echo "0000000000000000000000000000000000000000000000000000000000000000  fpshud.tar.gz" > "$BAD_HASH_FILE"
 SECURITY_FAILED=0
@@ -49,11 +49,30 @@ if [ "$SECURITY_FAILED" -ne 1 ]; then
     echo "FAIL: install.sh should have aborted on invalid SHA256 checksum!"
     exit 1
 fi
-echo "[✓] Security check passed: Tampered checksum successfully caught and aborted."
 
-echo "[4/5] Testing developer installer (scripts/install.sh from local build)..."
+# Verify root install.sh contains zero unverified raw git curls or local script probes
+if grep -q -E '(raw\.githubusercontent\.com.*scripts/fpshud\.in|\./scripts/fpshud\.in)' "${ROOT_DIR}/install.sh"; then
+    echo "FAIL: install.sh contains unverified raw GitHub script curls or local script probes!"
+    exit 1
+fi
+echo "[✓] Security check passed: Tampered checksum and unverified raw download exclusions verified."
+
+echo "[4/5] Testing developer installer (scripts/install.sh from local build with clean sandbox)..."
+# Clean sandbox ~/.local to ensure complete phase isolation
+rm -rf "${TEST_HOME}/.local"
 (cd "${ROOT_DIR}" && ./scripts/install.sh >/dev/null)
-test -x "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: dev install failed"; exit 1; }
+test -x "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: dev install lib missing"; exit 1; }
+test -x "${TEST_HOME}/.local/bin/fpshud" || { echo "FAIL: dev install wrapper missing"; exit 1; }
+
+# Verify dev wrapper references sandbox library path and does not leak build tree path
+grep -q "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" "${TEST_HOME}/.local/bin/fpshud" || {
+    echo "FAIL: dev install wrapper does not reference sandbox lib directory!"
+    exit 1
+}
+if grep -q "/build/libfpshud.so" "${TEST_HOME}/.local/bin/fpshud"; then
+    echo "FAIL: dev install wrapper leaked temporary build directory path!"
+    exit 1
+fi
 "${TEST_HOME}/.local/bin/fpshud" --help >/dev/null || { echo "FAIL: dev installed fpshud --help failed"; exit 1; }
 
 echo "[5/5] Running uninstall.sh in sandbox home..."

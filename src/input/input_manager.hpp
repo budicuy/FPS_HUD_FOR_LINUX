@@ -82,7 +82,7 @@ private:
   bool prev_x11_f7_ = false;
 
   // Dynamic Wayland client state (100% sudo-free in-process)
-  mutable std::mutex wayland_mutex_;
+  mutable std::recursive_mutex wayland_mutex_;
   void* wayland_lib_ = nullptr;
   void* wayland_display_ = nullptr;
   void* wayland_queue_ = nullptr;

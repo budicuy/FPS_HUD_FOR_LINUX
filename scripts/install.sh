@@ -45,11 +45,7 @@ if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
 fi
 
-if [ -f "$BUILD_DIR/fpshud" ]; then
-    cp -f "$BUILD_DIR/fpshud" "$BIN_DIR/fpshud"
-else
-    sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "$SCRIPT_DIR/fpshud.in" > "$BIN_DIR/fpshud"
-fi
+sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "$SCRIPT_DIR/fpshud.in" > "$BIN_DIR/fpshud"
 chmod 755 "$BIN_DIR/fpshud"
 
 # Copy optional system fonts if available

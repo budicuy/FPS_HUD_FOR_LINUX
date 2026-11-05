@@ -34,9 +34,6 @@ for arg in "$@"; do
     esac
 done
 
-mkdir -p "$LIB_DIR" "$BIN_DIR" "$VULKAN_LAYER_DIR" "$FONT_DIR"
-rm -f "$BIN_DIR/fpshud_test"
-
 TMP_DIR="$(mktemp -d /tmp/fpshud-install.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -44,7 +41,7 @@ verify_sha256() {
     local target_file="$1"
     local sha_file="$2"
     local expected_hash actual_hash
-    expected_hash="$(grep -oE '[a-fA-F0-9]{64}' "$sha_file" 2>/dev/null | head -n 1 || true)"
+    expected_hash="$(grep -oE '[a-fA-F0-9]{64}' "$sha_file" 2>/dev/null | head -n 1 | tr '[:upper:]' '[:lower:]' || true)"
     if [ -z "$expected_hash" ]; then
         echo "[!] ERROR: Checksum hash not found in $sha_file" >&2
         return 1
@@ -82,6 +79,9 @@ fi
 
 verify_sha256 "$TMP_DIR/fpshud.tar.gz" "$TMP_DIR/fpshud.tar.gz.sha256"
 
+mkdir -p "$LIB_DIR" "$BIN_DIR" "$VULKAN_LAYER_DIR" "$FONT_DIR"
+rm -f "$BIN_DIR/fpshud_test"
+
 # 2. Extract portable binaries
 echo "[*] Extracting portable binaries..."
 tar -xzf "$TMP_DIR/fpshud.tar.gz" -C "$TMP_DIR"
@@ -111,14 +111,11 @@ if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
 fi
 
 # 3. Install CLI wrapper script
-if [ -f "$TMP_DIR/fpshud" ]; then
-    cp -f "$TMP_DIR/fpshud" "$BIN_DIR/fpshud"
-elif [ -f "./scripts/fpshud.in" ]; then
-    sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" "./scripts/fpshud.in" > "$BIN_DIR/fpshud"
-else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/fpshud.in" 2>/dev/null | \
-        sed "s|@FPSHUD_LIB_PATH@|$LIB_DIR/libfpshud.so|g" > "$BIN_DIR/fpshud" || true
+if [ ! -f "$TMP_DIR/fpshud" ]; then
+    echo "[!] ERROR: Downloaded archive is corrupted or missing fpshud wrapper." >&2
+    exit 1
 fi
+cp -f "$TMP_DIR/fpshud" "$BIN_DIR/fpshud"
 chmod 755 "$BIN_DIR/fpshud"
 
 # 4. Copy optional system fonts if available
@@ -188,7 +185,7 @@ elif [ -t 0 ]; then
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
-elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+elif ( : < /dev/tty ) 2>/dev/null; then
     read -r -p "Proceed with sudo RAPL sensor setup? / Konfigurasi sensor CPU Watt via sudo? [y/N] " confirm < /dev/tty || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;

@@ -259,7 +259,7 @@ InputManager::~InputManager() {
   set_mouse_grab(false);
   close_evdev_devices();
   {
-    std::lock_guard<std::mutex> lock(wayland_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
     teardown_wayland_locked();
     if (wayland_lib_) {
       dlclose(wayland_lib_);
@@ -279,7 +279,7 @@ InputManager::~InputManager() {
 }
 
 bool InputManager::has_wayland_display() const noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   return wayland_attached_;
 }
 
@@ -352,7 +352,7 @@ void InputManager::teardown_wayland_locked() noexcept {
 
 void InputManager::attach_wayland_display(void* display) noexcept {
   if (!display) return;
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (wayland_display_ == display) return;
 
   teardown_wayland_locked();
@@ -397,7 +397,7 @@ void InputManager::attach_wayland_display(void* display) noexcept {
 }
 
 void InputManager::detach_wayland_display(void* display) noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (display && wayland_display_ != display) return;
   teardown_wayland_locked();
 }
@@ -486,7 +486,7 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
 }
 
 void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!seat || !wayland_queue_) return;
   wayland_seat_ = seat;
   wayland_seat_id_ = id;
@@ -501,7 +501,7 @@ void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
 }
 
 void InputManager::register_wayland_keyboard(void* seat) noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!seat || !wayland_queue_ || wayland_keyboard_ || !g_wl.keyboard_interface) return;
   if (!g_wl.fn_marshal_constructor) return;
 
@@ -519,7 +519,7 @@ void InputManager::register_wayland_keyboard(void* seat) noexcept {
 }
 
 void InputManager::register_wayland_pointer(void* seat) noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!seat || !wayland_queue_ || wayland_pointer_ || !g_wl.pointer_interface) return;
   if (!g_wl.fn_marshal_constructor) return;
 
@@ -538,7 +538,7 @@ void InputManager::register_wayland_pointer(void* seat) noexcept {
 
 void InputManager::poll_wayland(ImGuiIO& io, HudConfig& cfg, float display_width,
                                 float display_height) noexcept {
-  std::lock_guard<std::mutex> lock(wayland_mutex_);
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!wayland_display_ || !wayland_queue_ || !g_wl.fn_display_dispatch_queue_pending) {
     return;
   }

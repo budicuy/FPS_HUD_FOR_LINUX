@@ -58,15 +58,20 @@ export FPS_HUD=1
 FRAME_COUNT=120
 echo "[*] Running vkcube for ${FRAME_COUNT} frames under FPSHUD layer..."
 
+RUN_CMD="vkcube --c ${FRAME_COUNT}"
+if command -v timeout >/dev/null 2>&1; then
+    RUN_CMD="timeout --kill-after=5 30 vkcube --c ${FRAME_COUNT}"
+fi
+
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
     if ! command -v xvfb-run >/dev/null 2>&1; then
         echo "[!] No DISPLAY / WAYLAND_DISPLAY and xvfb-run not found. Cannot run headless vkcube."
         exit 1
     fi
     echo "[*] Launching with xvfb-run virtual display..."
-    xvfb-run -a vkcube --c "${FRAME_COUNT}"
+    xvfb-run -a $RUN_CMD
 else
-    vkcube --c "${FRAME_COUNT}"
+    $RUN_CMD
 fi
 
 echo "=========================================================="
