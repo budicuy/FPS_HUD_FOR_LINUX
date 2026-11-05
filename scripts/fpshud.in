@@ -346,18 +346,31 @@ fi
 # before any instrumented shared objects or application binaries.
 ASAN_RT=""
 if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
-    if readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
-        if command -v clang >/dev/null 2>&1; then
-            ASAN_RT="$(clang -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)"
-        fi
-        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
-            if command -v gcc >/dev/null 2>&1; then
-                ASAN_RT="$(gcc -print-file-name=libasan.so 2>/dev/null || true)"
+    if readelf -d "$LIB_SO" 2>/dev/null | grep -E "NEEDED.*libasan\.so" >/dev/null 2>&1; then
+        # Built with GCC AddressSanitizer
+        NEEDED_ASAN="$(readelf -d "$LIB_SO" 2>/dev/null | grep NEEDED | grep -o -E 'libasan\.so(\.[0-9]+)?' | head -n1 || true)"
+        for CC_BIN in "${CC:-}" "${CXX:-}" gcc-16 gcc-15 gcc; do
+            if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1; then
+                [ -n "$NEEDED_ASAN" ] && ASAN_RT="$("$CC_BIN" -print-file-name="$NEEDED_ASAN" 2>/dev/null || true)"
+                [ -f "$ASAN_RT" ] && break
+                ASAN_RT="$("$CC_BIN" -print-file-name=libasan.so 2>/dev/null || true)"
+                [ -f "$ASAN_RT" ] && break
             fi
+        done
+        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
+            ASAN_RT="$(ldconfig -p 2>/dev/null | grep -E 'libasan\.so(\.[0-9]+)?' | grep -v 'lib32' | awk '{print $NF}' | head -n1 || true)"
         fi
         if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
-            ASAN_RT="$(ldconfig -p 2>/dev/null | grep 'libasan\.so' | awk '{print $NF}' | head -n1 || true)"
+            ASAN_RT="${NEEDED_ASAN:-libasan.so}"
         fi
+    elif readelf -d "$LIB_SO" 2>/dev/null | grep -E "NEEDED.*libclang_rt\.asan" >/dev/null 2>&1 || readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
+        # Built with Clang AddressSanitizer
+        for CC_BIN in "${CC:-}" "${CXX:-}" clang-19 clang; do
+            if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1; then
+                ASAN_RT="$("$CC_BIN" -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)"
+                [ -f "$ASAN_RT" ] && break
+            fi
+        done
     fi
 fi
 

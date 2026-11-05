@@ -1631,6 +1631,7 @@ void run_elf_and_layer_abi_suite() {
     bool elf32_detected_ok = false;
     bool elf32_no_ldso_error = true;
     bool elf64_runs_ok = false;
+    std::string elf64_err;
 
     std::string mock_elf32_path = "/tmp/fpshud_mock_elf32_" + std::to_string(::getpid());
     {
@@ -1652,6 +1653,11 @@ void run_elf_and_layer_abi_suite() {
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
             out_true.find("ELFCLASS32") == std::string::npos) {
           elf64_runs_ok = true;
+        } else {
+          elf64_err = out_true;
+          while (!elf64_err.empty() && (elf64_err.back() == '\n' || elf64_err.back() == '\r')) {
+            elf64_err.pop_back();
+          }
         }
       }
 
@@ -1689,6 +1695,7 @@ void run_elf_and_layer_abi_suite() {
                          ", scripts_install_ok=" + std::to_string(scripts_install_ok) +
                          ", uninstall_ok=" + std::to_string(uninstall_ok) +
                          ", elf64_ok=" + std::to_string(elf64_runs_ok) +
+                         (elf64_runs_ok || elf64_err.empty() ? "" : " (err: " + elf64_err + ")") +
                          ", elf32_detected=" + std::to_string(elf32_detected_ok) +
                          ", elf32_no_ldso_err=" + std::to_string(elf32_no_ldso_error) +
                          ", pkg_decoupled=" + std::to_string(pkg_decoupled_ok) +
