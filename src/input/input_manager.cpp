@@ -95,10 +95,11 @@ struct WaylandClientApi {
   using PFN_proxy_set_queue = void (*)(struct wl_proxy*, struct wl_event_queue*);
   using PFN_proxy_destroy = void (*)(struct wl_proxy*);
   using PFN_proxy_add_listener = int (*)(struct wl_proxy*, void (**)(void), void*);
-  using PFN_proxy_marshal_constructor =
-      struct wl_proxy* (*)(struct wl_proxy*, uint32_t, const struct wl_interface*, ...);
-  using PFN_proxy_marshal_constructor_versioned =
-      struct wl_proxy* (*)(struct wl_proxy*, uint32_t, const struct wl_interface*, uint32_t, ...);
+  using PFN_proxy_marshal_constructor = struct wl_proxy* (*)(struct wl_proxy*, uint32_t,
+                                                             const struct wl_interface*, ...);
+  using PFN_proxy_marshal_constructor_versioned = struct wl_proxy* (*)(struct wl_proxy*, uint32_t,
+                                                                       const struct wl_interface*,
+                                                                       uint32_t, ...);
 
   PFN_create_queue fn_display_create_queue = nullptr;
   PFN_destroy_queue fn_event_queue_destroy = nullptr;
@@ -235,8 +236,7 @@ struct wl_seat_listener g_seat_listener = {
 };
 
 struct wl_keyboard_listener g_keyboard_listener = {
-    wl_kbd_keymap,      wl_kbd_enter,       wl_kbd_leave,
-    wl_kbd_key,         wl_kbd_modifiers,   wl_kbd_repeat_info,
+    wl_kbd_keymap, wl_kbd_enter, wl_kbd_leave, wl_kbd_key, wl_kbd_modifiers, wl_kbd_repeat_info,
 };
 
 struct wl_pointer_listener g_pointer_listener = {
@@ -458,7 +458,7 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
 }
 
 void InputManager::handle_pointer_motion(float x, float y, const HudConfig& cfg,
-                                        ImGuiIO* io) noexcept {
+                                         ImGuiIO* io) noexcept {
   cursor_x_ = x;
   cursor_y_ = y;
   if (io && cfg.gui_open) {
@@ -467,7 +467,7 @@ void InputManager::handle_pointer_motion(float x, float y, const HudConfig& cfg,
 }
 
 void InputManager::handle_pointer_button(uint32_t button, bool down, const HudConfig& cfg,
-                                        ImGuiIO* io) noexcept {
+                                         ImGuiIO* io) noexcept {
   int btn_idx = -1;
   // Linux evdev BTN_LEFT=0x110 (272), BTN_RIGHT=0x111 (273), BTN_MIDDLE=0x112 (274)
   if (button == BTN_LEFT)
@@ -548,9 +548,8 @@ void InputManager::poll_wayland(ImGuiIO& io, HudConfig& cfg, float display_width
   current_w_ = display_width;
   current_h_ = display_height;
 
-  g_wl.fn_display_dispatch_queue_pending(
-      static_cast<struct wl_display*>(wayland_display_),
-      static_cast<struct wl_event_queue*>(wayland_queue_));
+  g_wl.fn_display_dispatch_queue_pending(static_cast<struct wl_display*>(wayland_display_),
+                                         static_cast<struct wl_event_queue*>(wayland_queue_));
 
   current_io_ = nullptr;
   current_cfg_ = nullptr;

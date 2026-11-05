@@ -78,7 +78,7 @@ PFN_eglGetPlatformDisplayEXT real_eglGetPlatformDisplayEXT = nullptr;
 void ensure_egl_resolved();
 
 static EGLDisplay Hook_eglGetPlatformDisplay(EGLenum platform, void* native_display,
-                                            const intptr_t* attrib_list) {
+                                             const intptr_t* attrib_list) {
   try {
     ensure_egl_resolved();
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_KHR
@@ -92,7 +92,7 @@ static EGLDisplay Hook_eglGetPlatformDisplay(EGLenum platform, void* native_disp
 }
 
 static EGLDisplay Hook_eglGetPlatformDisplayEXT(EGLenum platform, void* native_display,
-                                               const EGLint* attrib_list) {
+                                                const EGLint* attrib_list) {
   try {
     ensure_egl_resolved();
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_EXT
@@ -305,12 +305,12 @@ void ensure_egl_resolved() {
           reinterpret_cast<GlDispatchTable::PFN_eglQuerySurface>(resolve_proc("eglQuerySurface"));
     }
     if (!real_eglGetPlatformDisplay) {
-      real_eglGetPlatformDisplay = reinterpret_cast<PFN_eglGetPlatformDisplay>(
-          resolve_proc("eglGetPlatformDisplay"));
+      real_eglGetPlatformDisplay =
+          reinterpret_cast<PFN_eglGetPlatformDisplay>(resolve_proc("eglGetPlatformDisplay"));
     }
     if (!real_eglGetPlatformDisplayEXT) {
-      real_eglGetPlatformDisplayEXT = reinterpret_cast<PFN_eglGetPlatformDisplayEXT>(
-          resolve_proc("eglGetPlatformDisplayEXT"));
+      real_eglGetPlatformDisplayEXT =
+          reinterpret_cast<PFN_eglGetPlatformDisplayEXT>(resolve_proc("eglGetPlatformDisplayEXT"));
     }
   });
 }

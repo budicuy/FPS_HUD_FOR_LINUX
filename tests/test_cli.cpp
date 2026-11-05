@@ -1501,7 +1501,7 @@ void run_elf_and_layer_abi_suite() {
     fpshud::InputManager im;
     fpshud::HudConfig test_hotkey_cfg;
     test_hotkey_cfg.enabled = true;
-    test_hotkey_cfg.key_toggle_gui = 0; // F12 / Insert
+    test_hotkey_cfg.key_toggle_gui = 0;  // F12 / Insert
     test_hotkey_cfg.gui_open = false;
     im.handle_key_event(KEY_F12, true, test_hotkey_cfg, 1920.0f, 1080.0f);
     bool in_proc_f12_ok = test_hotkey_cfg.gui_open;
@@ -1511,7 +1511,8 @@ void run_elf_and_layer_abi_suite() {
     bool wayland_attach_ok = im.has_wayland_display();
     im.detach_wayland_display(reinterpret_cast<void*>(0x5678));
     bool wayland_detach_ok = !im.has_wayland_display();
-    bool wayland_test_ok = (in_proc_f12_ok && in_proc_esc_ok && wayland_attach_ok && wayland_detach_ok);
+    bool wayland_test_ok =
+        (in_proc_f12_ok && in_proc_esc_ok && wayland_attach_ok && wayland_detach_ok);
 
     // B. scripts/install.sh Parity Check (must forward to ../install.sh, not package_release.sh)
     bool scripts_install_ok = false;

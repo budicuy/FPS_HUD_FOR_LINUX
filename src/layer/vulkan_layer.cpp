@@ -1083,9 +1083,9 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
   }
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateWaylandSurfaceKHR(
-    VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
-    const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
+                             const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
   try {
     if (pCreateInfo && pCreateInfo->display) {
       fpshud::get_input_manager().attach_wayland_display(pCreateInfo->display);
@@ -1101,8 +1101,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateWaylandSurfaceKHR(
   }
 }
 
-VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(
-    VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) {
+VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
+                                                  const VkAllocationCallbacks* pAllocator) {
   try {
     fpshud::get_input_manager().detach_wayland_display(nullptr);
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
