@@ -38,9 +38,9 @@ Pada aplikasi overlay Linux kebanyakan, jika kamu ingin mengubah posisi teks, me
 FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline storage* (`std::inplace_vector`), Pack Indexing, dan analitik frametime SIMD yang sangat kencang, hemat memori, dan bebas alokasi dinamis saat bermain game. Menggunakan **Dear ImGui** untuk menggambar teks HUD sekaligus menu pengaturan di dalam game, serta berjalan langsung di jalur grafis **Vulkan Layer** dan **OpenGL** (`LD_PRELOAD`). Font huruf juga sudah ditanamkan langsung di dalam file program, sehingga tampilan teks dijamin selalu tajam meskipun dijalankan di dalam container Steam Linux Runtime / Proton.
 
 ### Fitur apa saja yang ada di dalamnya?
-- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 25 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
+- **Dashboard 3-Column Split View In-Game (`Insert` / `F12` / `F10`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font & Warna | Tengah: 24 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware & Benchmark).
 - **Perekam Layar Hardware Ringan (`F7`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang berjalan di luar proses game, mendukung codec HEVC (H.265) dan H.264 dengan Adaptive CQP (16–30), tombol rekam 1-klik, dan perekaman audio (Game, Mic, atau Campuran).
-- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 25 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
+- **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 24 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA**, **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Peringatan Suhu Panas**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (**Kuning saat `>= 72°C`** dan **Merah saat `>= 82°C`**).
 - **1% Low FPS Akurat & Perekam Benchmark ke CSV (`F9`)**: Menghitung rata-rata frame terendah secara akurat (otomatis mengabaikan jeda saat layar *loading*) dan bisa merekam laporan performa ke file `.csv` kapan saja dengan menekan `F9`.
@@ -59,7 +59,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 3. [Cara Pakai di Steam, Lutris, Heroic & Terminal](#3-cara-pakai-di-steam-lutris-heroic--terminal)
 4. [Panduan Menu In-Game GUI & Tombol Shortcut](#4-panduan-menu-in-game-gui--tombol-shortcut)
 5. [Perekam Layar Hardware](#5-perekam-layar-hardware)
-6. [Dukungan Perangkat Keras & Daftar 25 Sensor](#6-dukungan-perangkat-keras--daftar-25-sensor)
+6. [Dukungan Perangkat Keras & Daftar 24 Sensor](#6-dukungan-perangkat-keras--daftar-24-sensor)
 7. [Tech Stack & Arsitektur Sistem](#7-tech-stack--arsitektur-sistem)
 8. [Panduan Pengembang (Build dari Source, Sanitizers & Pengujian)](#8-panduan-pengembang-build-dari-source-sanitizers--pengujian)
 9. [Troubleshooting & Tanya Jawab (FAQ)](#9-troubleshooting--tanya-jawab-faq)
@@ -71,9 +71,9 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 
 - **Aktivasi Simpel (`FPS_HUD=1` / `FPS_HUD=0`)**:
   - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, dan menu In-Game GUI Configurator.
-  - `FPS_HUD=0` (atau dikosongkan): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
+  - `FPS_HUD=0` (atau dikosongkan/dihapus dari launch options): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
-  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 25 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
+  - Tekan **`Insert`**, **`F12`**, atau **`F10`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Shortcut | Tengah: 24 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini`.
 - **Perekam Layar Hardware Terpisah**:
@@ -99,7 +99,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 | Aspek | **MangoHud** | **FPSHUD** |
 | :--- | :--- | :--- |
 | **Filosofi Utama** | Overlay standar industri Linux dengan opsi konfigurasi berbasis berkas teks yang sangat mendalam. | Pengalaman modern serba-ada di dalam game dengan konfigurasi visual langsung (*live*). |
-| **Alur Konfigurasi** | Memerlukan keluar dari game dan mengedit berkas teks konfigurasi (`~/.config/MangoHud/MangoHud.conf`) atau memanfaatkan aplikasi GUI eksternal seperti GOverlay. | **In-game 3-Column GUI (`Insert` / `F12` / `F10`)**: ubah posisi, tata letak, 25 sensor, font, warna, dan tombol pintas langsung di layar tanpa keluar dari permainan. |
+| **Alur Konfigurasi** | Memerlukan keluar dari game dan mengedit berkas teks konfigurasi (`~/.config/MangoHud/MangoHud.conf`) atau memanfaatkan aplikasi GUI eksternal seperti GOverlay. | **In-game 3-Column GUI (`Insert` / `F12` / `F10`)**: ubah posisi, tata letak, 24 sensor, font, warna, dan tombol pintas langsung di layar tanpa keluar dari permainan. |
 | **Perekaman Layar** | Membutuhkan perangkat lunak capture eksternal terpisah (OBS Studio, GPU Screen Recorder, ReplaySorcery). | **Built-in companion daemon perekam (`fpshud_recorder`)** dengan tombol rekam 1-klik (`F7`), HEVC/H.264 CQP terakselerasi hardware, dan mixing audio. |
 | **Maturitas & Ekosistem** | Sangat matang, diadopsi luas di berbagai distro Linux, menjadi overlay standar di SteamOS GameScope. | Alternatif modern dan ramping bagi gamer yang menginginkan kustomisasi visual instan dan perekam klip terintegrasi. |
 
@@ -172,7 +172,7 @@ Klik kanan game di Steam -> **Properties** -> **General** -> **Launch Options**:
 ```bash
 FPS_HUD=1 %command%
 ```
-*(Untuk mematikan sementara, cukup ubah menjadi `FPS_HUD=0 %command%`)*
+*(Untuk mematikan sementara tanpa menghapus teksnya, cukup ubah menjadi `FPS_HUD=0 %command%`. Untuk mematikan secara bersih dan menyeluruh, cukup hapus variabel environment tersebut dari Launch Options hingga hanya tersisa `%command%` atau dikosongkan).*
 
 > [!NOTE]
 > Seluruh game Windows yang berjalan melalui Proton, DXVK, serta game native Linux berbasis Vulkan modern cukup menggunakan opsi ini.
@@ -203,7 +203,7 @@ FPS_HUD=1 ./nama_game
 > Sebagaimana MangoHud, OBS Game Capture, dan ReShade, FPSHUD beroperasi dengan menyisipkan hook ke pipeline rendering game via Vulkan Implicit Layer atau `LD_PRELOAD`.
 > Meskipun overlay murni bersifat diagnostik performa, sistem anti-cheat ketat pada game multiplayer kompetitif (seperti Easy Anti-Cheat, BattlEye, Valve Anti-Cheat, atau Ricochet) dapat mendeteksi injeksi pustaka pihak ketiga sebagai pelanggaran integritas biner, yang berisiko membuat game gagal terbuka atau memicu sanksi akun.
 >
-> **Praktik Terbaik:** Saat memainkan game online multiplayer kompetitif dengan proteksi anti-cheat, nonaktifkan overlay dengan menambahkan `FPS_HUD=0 %command%` pada Launch Options.
+> **Praktik Terbaik:** Saat memainkan game online multiplayer kompetitif dengan proteksi anti-cheat, nonaktifkan overlay sementara dengan menyetel `FPS_HUD=0 %command%` pada Launch Options, atau hapus variabel environment `FPS_HUD` sepenuhnya dari Launch Options agar layer sama sekali tidak disentuh oleh loader sistem.
 
 ### Kompatibilitas Game 32-Bit
 > [!NOTE]
@@ -230,7 +230,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 ### 4 Pilihan Preset di Dalam GUI
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
 - **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
-- **`Advance`**: Menampilkan lengkap **25 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 5 sensor `CPU` termasuk `P/E Core Load`, 5 sensor `RAM/Memori`, `Render API`, `Local Clock`, dan `Battery & Power`).
+- **`Advance`**: Menampilkan lengkap **24 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 5 sensor `CPU` termasuk `P/E Core Load`, 4 sensor `RAM/Memori`, `Render API`, `Local Clock`, dan `Battery & Power`).
 - **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
 
 ### Peringatan Suhu Panas & Ambang Batas
@@ -279,7 +279,7 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 
 ---
 
-## 6. Dukungan Perangkat Keras & Daftar 25 Sensor
+## 6. Dukungan Perangkat Keras & Daftar 24 Sensor
 
 ### Matriks Kompatibilitas Perangkat Keras
 
@@ -361,7 +361,7 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 | :--- | :---: | :--- |
 | **Render HUD (Minimal: 2 Sensor)** | **1,97 μs** (0,002 ms) / frame | **0,01%** dari 1 core CPU @ 60 FPS (0,03% @ 144 FPS) |
 | **Render HUD (Standard: 9 Sensor)** | **4,43 μs** (0,004 ms) / frame | **0,03%** dari 1 core CPU @ 60 FPS (0,06% @ 144 FPS) |
-| **Render HUD (Advance: 25 Sensor)** | **7,67 μs** (0,008 ms) / frame | **0,05%** dari 1 core CPU @ 60 FPS (0,11% @ 144 FPS) |
+| **Render HUD (Advance: 24 Sensor)** | **7,67 μs** (0,008 ms) / frame | **0,05%** dari 1 core CPU @ 60 FPS (0,11% @ 144 FPS) |
 | **Menu GUI In-Game (3-Kolom)** | **64,71 μs** (0,065 ms) / frame | **0,39%** dari 1 core CPU @ 60 FPS (0,93% @ 144 FPS) |
 | **Thread Telemetri Latar Belakang** | **226,77 μs** (0,22 ms) / poll | **0,045%** dari 1 core CPU (membaca NVML, RAPL, procfs tiap 500ms) |
 | **Struktur Data Core C++** | **8,66 KB** (8.864 byte) | Total gabungan `TelemetryCollector`, `HudConfig`, & state core |
@@ -459,13 +459,13 @@ FPS_HUD_FOR_LINUX/
 ## 9. Troubleshooting & Tanya Jawab (FAQ)
 
 1. **Menekan `Insert` / `F12` tidak membuka menu GUI atau klik mouse tembus ke dalam game:**
-   - Jalankan `fpshud --setup` untuk memasang aturan udev yang sesuai, atau tambahkan akun user Anda ke grup standar `input`: `sudo usermod -aG input $USER` (kemudian logout dan login ulang). **Jangan pernah menjalankan `chmod a+r /dev/input/event*`**, karena membuka hak baca raw event input untuk seluruh user membawa risiko keamanan keylogging yang fatal.
+   - Pada Wayland maupun X11, FPSHUD menangkap tombol keyboard dan kursor mouse secara in-process langsung dari dalam proses game tanpa memerlukan grup input atau sudo. Pastikan jendela game sedang aktif (terfokus), atau gunakan tombol alternatif (`F10` atau `Insert`).
 2. **Daya CPU menampilkan `0 W`:**
    - Jalankan `fpshud --setup` untuk memasang aturan udev read-only RAPL (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) untuk penjelasan trade-off keamanan Platypus).
 3. **Bagaimana cara mengembalikan semua pengaturan ke kondisi awal (Reset)?**
    - Buka menu GUI di dalam game (`Insert` / `F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
 4. **Apakah FPSHUD aman digunakan dengan Anti-Cheat di game online?**
-   - Baca [Peringatan Terkait Anti-Cheat](#peringatan-terkait-anti-cheat-eac-battleye-vac-ricochet). Untuk game kompetitif online dengan proteksi EAC, BattlEye, VAC, atau Ricochet, kami sangat menyarankan menonaktifkan overlay dengan `FPS_HUD=0`.
+   - Baca [Peringatan Terkait Anti-Cheat](#peringatan-terkait-anti-cheat-eac-battleye-vac-ricochet). Untuk game kompetitif online dengan proteksi EAC, BattlEye, VAC, atau Ricochet, kami sangat menyarankan menonaktifkan overlay sementara dengan `FPS_HUD=0 %command%` atau menghapus variabel environment `FPS_HUD` secara bersih dari launch options.
 5. **Apakah FPSHUD mendukung game jadul berbasis 32-bit?**
    - FPSHUD menargetkan game 64-bit (`x86_64`). Saat game 32-bit lama dijalankan, loader sistem secara otomatis melewati layer 64-bit ini tanpa kendala, namun HUD tidak akan tampil.
 
