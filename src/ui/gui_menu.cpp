@@ -846,22 +846,25 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::SliderInt("##RecordCQ", &cfg.record_cq_level, 16, 28, "CQ %d (18=Ultra, 22=Bal)");
-      } else {
-        ImGui::Text("Bitrate");
+
+        // Max Bitrate Cap for CQP mode to prevent bloated file sizes
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Max Bitrate");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-1.0f);
-        const char* br_items[] = {"8 Mbps (Low)", "18 Mbps (Medium)", "32 Mbps (High)",
-                                  "50 Mbps (Ultra)"};
-        int current_br_idx = (cfg.record_bitrate_kbps <= 8000)
-                                 ? 0
-                                 : ((cfg.record_bitrate_kbps <= 18000)
-                                        ? 1
-                                        : ((cfg.record_bitrate_kbps <= 32000) ? 2 : 3));
-        if (ImGui::Combo("##RecordBitrate", &current_br_idx, br_items, IM_ARRAYSIZE(br_items))) {
-          cfg.record_bitrate_kbps =
-              (current_br_idx == 0)
-                  ? 8000
-                  : ((current_br_idx == 1) ? 18000 : ((current_br_idx == 2) ? 32000 : 50000));
+        int br_mbps = std::clamp(cfg.record_bitrate_kbps / 1000, 4, 80);
+        if (ImGui::SliderInt("##RecordBitrateCQP", &br_mbps, 4, 80, "%d Mbps (Cap)")) {
+          cfg.record_bitrate_kbps = br_mbps * 1000;
+        }
+      } else {
+        ImGui::Text("Target Bitrate");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1.0f);
+        int br_mbps = std::clamp(cfg.record_bitrate_kbps / 1000, 4, 80);
+        if (ImGui::SliderInt("##RecordBitrateVBR", &br_mbps, 4, 80, "%d Mbps")) {
+          cfg.record_bitrate_kbps = br_mbps * 1000;
         }
       }
 

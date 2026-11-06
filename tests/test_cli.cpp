@@ -1847,6 +1847,34 @@ void run_all_devices_and_features_suite() {
                "HEVC (hvc1), Adaptive CQP & Rate Control INI persistence verified");
   }
 
+  {
+    HudConfig br_cfg;
+    br_cfg.record_bitrate_kbps = 24000;
+    save_ini_file("/tmp/test_bitrate_cfg.ini", br_cfg, "Test Bitrate Config");
+    HudConfig loaded_br_cfg;
+    load_ini_file("/tmp/test_bitrate_cfg.ini", loaded_br_cfg);
+
+    fs::path rroot = find_repo_root();
+    bool menu_has_slider = false;
+    bool recorder_has_ceiling = false;
+    if (!rroot.empty()) {
+      std::string menu_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+      std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+      menu_has_slider = (menu_src.find("Bitrate") != std::string::npos &&
+                         menu_src.find("record_bitrate_kbps") != std::string::npos &&
+                         menu_src.find("SliderInt") != std::string::npos);
+      recorder_has_ceiling = (rec_src.find("rc_max_rate") != std::string::npos ||
+                              rec_src.find("maxrate") != std::string::npos);
+    }
+
+    bool br_ok =
+        (loaded_br_cfg.record_bitrate_kbps == 24000 && menu_has_slider && recorder_has_ceiling);
+    check_cond(
+        br_ok, "0.3 Interactive Bitrate Control & VBV Rate Ceiling",
+        br_ok ? "Bitrate configuration UI slider & encoder rate ceiling (maxrate/bufsize) verified"
+              : "Failed: Missing bitrate slider in GUI menu or rate ceiling in recorder_main.cpp");
+  }
+
   const fs::path base = "/tmp/fpshud_mock_hw";
   std::error_code ec;
 

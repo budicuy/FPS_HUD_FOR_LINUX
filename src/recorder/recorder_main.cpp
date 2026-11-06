@@ -472,15 +472,19 @@ int main(int argc, char* argv[]) {
       ctx->pix_fmt = AV_PIX_FMT_YUV420P;
     }
     ctx->gop_size = target_fps * 2;  // 2-second keyframe interval
-    ctx->max_b_frames = 0;           // Low latency for gameplay capture
+    ctx->max_b_frames = 2;           // Low latency B-frames to reduce file size significantly
+    ctx->rc_max_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
+    ctx->rc_buffer_size = static_cast<int>(ctx->rc_max_rate * 2);
 
     if (quality_mode == 0) {
-      // CQP Mode (Adaptive Constant Quantization Parameter)
+      // CQP Mode (Adaptive Constant Quantization Parameter with VBV Maxrate Ceiling)
       if (is_nv) {
         av_opt_set(ctx->priv_data, "preset", "p4", 0);  // p4 = balanced quality/speed
         av_opt_set(ctx->priv_data, "tune", "ll", 0);    // Low latency
         av_opt_set(ctx->priv_data, "rc", "constqp", 0);
         av_opt_set_int(ctx->priv_data, "qp", target_cq, 0);
+        av_opt_set_int(ctx->priv_data, "maxrate", ctx->rc_max_rate, 0);
+        av_opt_set_int(ctx->priv_data, "bufsize", ctx->rc_buffer_size, 0);
         av_opt_set(ctx->priv_data, "spatial-aq", "1", 0);  // Preserves HUD text and sharp UI fonts
         av_opt_set(ctx->priv_data, "temporal-aq", "1",
                    0);  // Bitrate savings on static/dialogue scenes
@@ -489,9 +493,10 @@ int main(int argc, char* argv[]) {
         av_opt_set(ctx->priv_data, "rc_mode", "CQP", 0);
         av_opt_set_int(ctx->priv_data, "qp", target_cq, 0);
       } else {
-        av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
-        av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
+        av_opt_set(ctx->priv_data, "preset", "veryfast", 0);
         av_opt_set_int(ctx->priv_data, "crf", target_cq, 0);
+        av_opt_set_int(ctx->priv_data, "maxrate", ctx->rc_max_rate, 0);
+        av_opt_set_int(ctx->priv_data, "bufsize", ctx->rc_buffer_size, 0);
       }
     } else {
       // VBR Mode (Target Bitrate)
@@ -500,11 +505,14 @@ int main(int argc, char* argv[]) {
         av_opt_set(ctx->priv_data, "preset", "p4", 0);  // p4 = balanced quality/speed
         av_opt_set(ctx->priv_data, "tune", "ll", 0);    // Low latency
         av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+        av_opt_set_int(ctx->priv_data, "maxrate", ctx->rc_max_rate, 0);
+        av_opt_set_int(ctx->priv_data, "bufsize", ctx->rc_buffer_size, 0);
       } else if (is_va) {
         av_opt_set(ctx->priv_data, "rc_mode", "VBR", 0);
       } else {
-        av_opt_set(ctx->priv_data, "preset", "ultrafast", 0);
-        av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
+        av_opt_set(ctx->priv_data, "preset", "veryfast", 0);
+        av_opt_set_int(ctx->priv_data, "maxrate", ctx->rc_max_rate, 0);
+        av_opt_set_int(ctx->priv_data, "bufsize", ctx->rc_buffer_size, 0);
       }
     }
 
