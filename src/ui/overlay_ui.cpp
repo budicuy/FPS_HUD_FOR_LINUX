@@ -649,6 +649,15 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
         std::snprintf(rec_buf, sizeof(rec_buf), "[REC %.1fs]", data.benchmark_elapsed_sec);
         draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
       }
+      if (RecorderController::instance().is_recording()) {
+        ImGui::SameLine(0.0f, 10.0f * ui_ratio);
+        float rec_sec = RecorderController::instance().get_recording_duration();
+        int mins = static_cast<int>(rec_sec) / 60;
+        int secs = static_cast<int>(rec_sec) % 60;
+        char rec_tag[64];
+        std::snprintf(rec_tag, sizeof(rec_tag), "[REC %02d:%02d]", mins, secs);
+        draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
+      }
     } else if (cfg.arrangement == ArrangementMode::Double) {
       ImGuiTableFlags tflags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX;
       ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(7.0f * ui_ratio, 3.0f * ui_ratio));
@@ -734,13 +743,14 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
       }
     }
 
-    // Show video recording badge on HUD
-    if (RecorderController::instance().is_recording()) {
+    // Show video recording badge on HUD (stacked/double layouts only)
+    if (cfg.arrangement != ArrangementMode::Linear &&
+        RecorderController::instance().is_recording()) {
       float rec_sec = RecorderController::instance().get_recording_duration();
       int mins = static_cast<int>(rec_sec) / 60;
       int secs = static_cast<int>(rec_sec) % 60;
       char rec_tag[64];
-      std::snprintf(rec_tag, sizeof(rec_tag), "[● REC %02d:%02d]", mins, secs);
+      std::snprintf(rec_tag, sizeof(rec_tag), "[REC %02d:%02d]", mins, secs);
       draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
     }
 

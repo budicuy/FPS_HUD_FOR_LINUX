@@ -2647,6 +2647,38 @@ void run_all_devices_and_features_suite() {
           ? "xdg-open child processes reaped via detached waitpid thread (no zombie processes)"
           : "Failed: Missing waitpid or detached reaper thread in open_system_folder");
 
+  // 4.3 Linear Recording Badge & Pure ASCII Glyph Safety (No '?' fallback)
+  bool ascii_badge_ok = false;
+  if (!rroot.empty()) {
+    std::string ui_src = read_text_file(rroot / "src" / "ui" / "overlay_ui.cpp");
+    std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
+    // Verify pure ASCII (no UTF-8 black circle \xe2\x97\x8f) in rec_tag and toast_msg
+    bool no_black_circle = (ui_src.find("\xe2\x97\x8f") == std::string::npos &&
+                            ipc_src.find("\xe2\x97\x8f") == std::string::npos);
+    // Verify linear arrangement renders rec_tag inline with SameLine
+    bool linear_same_line = (ui_src.find("ArrangementMode::Linear") != std::string::npos &&
+                             ui_src.find("is_recording()") != std::string::npos);
+    size_t pos_lin = ui_src.find("if (cfg.arrangement == ArrangementMode::Linear)");
+    size_t pos_double =
+        ui_src.find("else if (cfg.arrangement == ArrangementMode::Double)", pos_lin);
+    if (pos_lin != std::string::npos && pos_double != std::string::npos) {
+      std::string lin_body = ui_src.substr(pos_lin, pos_double - pos_lin);
+      if (lin_body.find("is_recording()") != std::string::npos &&
+          lin_body.find("SameLine") != std::string::npos) {
+        linear_same_line = true;
+      } else {
+        linear_same_line = false;
+      }
+    } else {
+      linear_same_line = false;
+    }
+    ascii_badge_ok = no_black_circle && linear_same_line;
+  }
+  check_cond(ascii_badge_ok, "4.3 Linear Badge & ASCII Glyph Invariant",
+             ascii_badge_ok
+                 ? "Pure ASCII [REC mm:ss] badge with inline SameLine in Linear layout"
+                 : "Failed: Found non-ASCII glyph or missing inline SameLine in Linear layout");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

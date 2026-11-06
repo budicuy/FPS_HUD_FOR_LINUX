@@ -227,7 +227,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   elapsed_sec_.store(0.0f, std::memory_order_relaxed);
   recorded_frames_.store(0, std::memory_order_relaxed);
 
-  toast_msg_ = "[● REC] Perekaman dimulai (F7 untuk berhenti)";
+  toast_msg_ = "[REC] Perekaman dimulai (F7 untuk berhenti)";
   toast_time_ = std::chrono::steady_clock::now();
 }
 
