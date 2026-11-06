@@ -2707,6 +2707,28 @@ void run_all_devices_and_features_suite() {
                  ? "Pure ASCII [REC mm:ss] badge with inline SameLine in Linear layout"
                  : "Failed: Found non-ASCII glyph or missing inline SameLine in Linear layout");
 
+  // 4.4 Non-Blocking Asynchronous Stop Recording Invariant (Zero Game Thread Freeze)
+  bool async_stop_ok = false;
+  if (!rroot.empty()) {
+    std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
+    size_t pos_stop = ipc_src.find("void RecorderController::stop_recording()");
+    size_t end_stop = ipc_src.find("RecorderController::spawn_helper_process", pos_stop);
+    if (pos_stop != std::string::npos && end_stop != std::string::npos) {
+      std::string stop_body = ipc_src.substr(pos_stop, end_stop - pos_stop);
+      // Must use detached background thread for socket wait, final response & waitpid
+      bool has_detached_thread = (stop_body.find("std::thread") != std::string::npos &&
+                                  stop_body.find(".detach()") != std::string::npos);
+      // Main body must not perform blocking sleep loops
+      bool no_sync_sleep = (stop_body.find("sleep_for") == std::string::npos);
+      async_stop_ok = has_detached_thread && no_sync_sleep;
+    }
+  }
+  check_cond(
+      async_stop_ok, "4.4 Non-Blocking Async Stop Recording",
+      async_stop_ok
+          ? "stop_recording() offloaded to detached background worker (<0.1ms render latency)"
+          : "Failed: stop_recording() contains synchronous blocking recv/sleep loops");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

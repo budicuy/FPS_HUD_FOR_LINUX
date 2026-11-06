@@ -237,63 +237,64 @@ void RecorderController::stop_recording() {
     return;
   }
 
-  if (socket_fd_ >= 0) {
-    // Enforce 5.0s socket timeout so the game render thread NEVER freezes
-    // while accommodating large MP4 FastStart moov atom atom remuxing
-    struct timeval tv{};
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
-    setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    send_command(RecorderCommand::StopRecord, nullptr, 0);
-
-    // Read response with final saved file name
-    IpcStatusResponse resp{};
-    ssize_t n = recv(socket_fd_, &resp, sizeof(resp), 0);
-    if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic) {
-      if (resp.last_saved_file[0] != '\0') {
-        last_saved_file_ = resp.last_saved_file;
-      }
-    }
-    disconnect_socket();
-  }
-
   is_recording_.store(false, std::memory_order_relaxed);
 
-  // Reap child process with a brief timeout, fallback to detached worker thread (anti-zombie)
-  if (helper_pid_ > 0) {
-    pid_t lingering_pid = helper_pid_;
-    int status = 0;
-    bool reaped = false;
-    for (int i = 0; i < 20; ++i) {
-      pid_t p = waitpid(helper_pid_, &status, WNOHANG);
-      if (p == helper_pid_ || p == -1) {
-        reaped = true;
-        break;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    }
-    helper_pid_ = -1;
-    if (!reaped) {
-      std::thread([lingering_pid]() {
-        int st = 0;
-        ::waitpid(lingering_pid, &st, 0);
-      }).detach();
-    }
-  }
+  int sfd = socket_fd_;
+  socket_fd_ = -1;
+  pid_t lingering_pid = helper_pid_;
+  helper_pid_ = -1;
+  std::string s_path = socket_path_;
+  socket_path_.clear();
 
-  // Clean up socket and shared memory files
-  if (!socket_path_.empty()) {
-    unlink(socket_path_.c_str());
-  }
-  cleanup_shm();
-
-  if (!last_saved_file_.empty()) {
-    toast_msg_ = "[✓] Video tersimpan: " + last_saved_file_;
-  } else {
-    toast_msg_ = "[✓] Perekaman dihentikan.";
-  }
+  // Show immediate non-blocking toast indicating background save in progress
+  toast_msg_ = "[REC] Menyimpan video di latar belakang...";
   toast_time_ = std::chrono::steady_clock::now();
+
+  // Offload final socket communication, disk remuxing wait, and child process reaping
+  // to a detached background worker thread so the game render thread NEVER freezes.
+  std::thread([this, sfd, lingering_pid, s_path]() {
+    std::string saved_path;
+    if (sfd >= 0) {
+      struct timeval tv{};
+      tv.tv_sec = 10;
+      tv.tv_usec = 0;
+      setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+      IpcPacketHeader stop_hdr{};
+      stop_hdr.magic = kRecorderIpcMagic;
+      stop_hdr.command = static_cast<uint32_t>(RecorderCommand::StopRecord);
+      stop_hdr.payload_size = 0;
+      ::send(sfd, &stop_hdr, sizeof(stop_hdr), MSG_NOSIGNAL);
+
+      IpcStatusResponse resp{};
+      ssize_t n = ::recv(sfd, &resp, sizeof(resp), 0);
+      if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic) {
+        if (resp.last_saved_file[0] != '\0') {
+          saved_path = resp.last_saved_file;
+        }
+      }
+      ::close(sfd);
+    }
+
+    if (lingering_pid > 0) {
+      int status = 0;
+      ::waitpid(lingering_pid, &status, 0);
+    }
+
+    if (!s_path.empty()) {
+      ::unlink(s_path.c_str());
+    }
+
+    if (!saved_path.empty()) {
+      std::lock_guard<std::recursive_mutex> lk(this->mutex_);
+      this->last_saved_file_ = saved_path;
+      this->toast_msg_ = "[✓] Video tersimpan: " + saved_path;
+      this->toast_time_ = std::chrono::steady_clock::now();
+    }
+  }).detach();
+
+  // Clean up shared memory in the game process immediately
+  cleanup_shm();
 }
 
 bool build_container_host_env_paths(const std::string& root_prefix, std::string& out_ld_path,
