@@ -753,12 +753,10 @@ int main(int argc, char* argv[]) {
         pa_stream_drop(pulse.stream);
       }
 
-      // A/V Sync Guard (I1): Discard or buffer audio samples until the first game video frame
-      // arrives
+      // A/V Sync Guard (I1): Discard pre-roll audio samples until the first game video frame
+      // arrives so audio starts in exact lockstep with video PTS at 0.0s
       if (!g_has_received_game_frame.load(std::memory_order_relaxed)) {
-        if (pcm_ring.size() > static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
-          pcm_ring.erase(pcm_ring.begin(), pcm_ring.end() - (kAudioSamplesPerFrame * 2));
-        }
+        pcm_ring.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
       }
@@ -811,6 +809,7 @@ int main(int argc, char* argv[]) {
   AVPacket* v_pkt = av_packet_alloc();
   auto session_start = std::chrono::steady_clock::now();
   bool has_received_game_frame = false;
+  bool has_new_frame = false;
   AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
   int last_src_w = 0, last_src_h = 0;
 
@@ -822,9 +821,10 @@ int main(int argc, char* argv[]) {
     struct timeval sel_tv{};
     if (has_received_game_frame) {
       auto now = std::chrono::steady_clock::now();
-      if (next_frame_time > now) {
+      auto wait_deadline = has_new_frame ? next_frame_time : (next_frame_time + frame_interval / 4);
+      if (wait_deadline > now) {
         auto diff =
-            std::chrono::duration_cast<std::chrono::microseconds>(next_frame_time - now).count();
+            std::chrono::duration_cast<std::chrono::microseconds>(wait_deadline - now).count();
         sel_tv.tv_sec = static_cast<long>(diff / 1000000);
         sel_tv.tv_usec = static_cast<long>(diff % 1000000);
       } else {
@@ -913,6 +913,7 @@ int main(int argc, char* argv[]) {
                             vframe->linesize);
                 }
 
+                has_new_frame = true;
                 if (!has_received_game_frame) {
                   has_received_game_frame = true;
                   g_has_received_game_frame.store(true, std::memory_order_relaxed);
@@ -939,13 +940,21 @@ int main(int argc, char* argv[]) {
     // Emit frames locked to exact wall-clock intervals
     if (has_received_game_frame) {
       auto cur_time = std::chrono::steady_clock::now();
-      // Cap lag catch-up if game was paused or loading (> 4 frame intervals) to avoid massive burst
+      // Cap lag catch-up if game was paused or loading (> 4 frame intervals) to avoid massive
+      // burst, and advance next_pts by missed_frames so video PTS stays locked 1:1 with real time
+      // and audio!
       if (cur_time - next_frame_time > frame_interval * 4) {
-        next_frame_time = cur_time;
+        int64_t missed_frames =
+            std::chrono::duration_cast<std::chrono::microseconds>(cur_time - next_frame_time)
+                .count() /
+            frame_interval.count();
+        next_pts += missed_frames;
+        next_frame_time += missed_frames * frame_interval;
       }
       while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
         vframe->pts = next_pts++;
         video_frame_idx.store(next_pts, std::memory_order_relaxed);
+        has_new_frame = false;
 
         if (is_vaapi_encoder && hw_frame) {
           if (av_hwframe_get_buffer(vctx->hw_frames_ctx, hw_frame, 0) >= 0) {
