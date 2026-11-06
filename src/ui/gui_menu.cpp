@@ -732,7 +732,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
       if (ImGui::Button(stop_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
         RecorderController::instance().stop_recording();
-        set_status_message("Video berhasil disimpan!");
+        set_status_message("Menyimpan video di latar belakang...");
       }
       ImGui::PopStyleColor(2);
     }

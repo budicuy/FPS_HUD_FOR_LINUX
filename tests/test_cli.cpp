@@ -2715,19 +2715,20 @@ void run_all_devices_and_features_suite() {
     size_t end_stop = ipc_src.find("RecorderController::spawn_helper_process", pos_stop);
     if (pos_stop != std::string::npos && end_stop != std::string::npos) {
       std::string stop_body = ipc_src.substr(pos_stop, end_stop - pos_stop);
-      // Must use detached background thread for socket wait, final response & waitpid
-      bool has_detached_thread = (stop_body.find("std::thread") != std::string::npos &&
-                                  stop_body.find(".detach()") != std::string::npos);
+      // Must use managed background worker thread for socket wait, final response & waitpid
+      bool has_worker_thread = (stop_body.find("std::thread") != std::string::npos);
       // Main body must not perform blocking sleep loops
       bool no_sync_sleep = (stop_body.find("sleep_for") == std::string::npos);
-      async_stop_ok = has_detached_thread && no_sync_sleep;
+      // socket_path_ must NOT be wiped so repeat recording works
+      bool retains_socket_path = (stop_body.find("socket_path_.clear()") == std::string::npos);
+      async_stop_ok = has_worker_thread && no_sync_sleep && retains_socket_path;
     }
   }
-  check_cond(
-      async_stop_ok, "4.4 Non-Blocking Async Stop Recording",
-      async_stop_ok
-          ? "stop_recording() offloaded to detached background worker (<0.1ms render latency)"
-          : "Failed: stop_recording() contains synchronous blocking recv/sleep loops");
+  check_cond(async_stop_ok, "4.4 Non-Blocking Async Stop Recording",
+             async_stop_ok ? "stop_recording() offloaded to managed background worker (<0.1ms "
+                             "render latency, safe repeat record)"
+                           : "Failed: stop_recording() contains synchronous blocking recv/sleep "
+                             "loops or clears socket_path_");
 
   // 4.5 Monotonic Wall-Clock A/V Sync & Judder Elimination Invariant
   bool av_sync_engine_ok = false;

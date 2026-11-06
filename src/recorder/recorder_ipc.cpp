@@ -123,6 +123,9 @@ RecorderController::RecorderController() {
 
 RecorderController::~RecorderController() {
   stop_recording();
+  if (save_thread_.joinable()) {
+    save_thread_.join();
+  }
   cleanup_shm();
 }
 
@@ -178,6 +181,13 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   if (is_recording_.load(std::memory_order_relaxed)) {
     return;
   }
+
+  // If a background save thread is currently finalizing the previous recording,
+  // wait for it to cleanly finish before starting a new session (prevents socket/SHM collision)
+  if (save_thread_.joinable()) {
+    save_thread_.join();
+  }
+  is_finalizing_.store(false, std::memory_order_relaxed);
 
   if (!spawn_helper_process(cfg, display_w, display_h)) {
     cleanup_shm();
@@ -238,21 +248,27 @@ void RecorderController::stop_recording() {
   }
 
   is_recording_.store(false, std::memory_order_relaxed);
+  is_finalizing_.store(true, std::memory_order_relaxed);
 
   int sfd = socket_fd_;
   socket_fd_ = -1;
   pid_t lingering_pid = helper_pid_;
   helper_pid_ = -1;
   std::string s_path = socket_path_;
-  socket_path_.clear();
+  // Note: socket_path_ is intentionally preserved so subsequent recordings can reuse it!
 
   // Show immediate non-blocking toast indicating background save in progress
   toast_msg_ = "[REC] Menyimpan video di latar belakang...";
   toast_time_ = std::chrono::steady_clock::now();
 
+  // If previous save thread is still active, join it before launching a new save thread
+  if (save_thread_.joinable()) {
+    save_thread_.join();
+  }
+
   // Offload final socket communication, disk remuxing wait, and child process reaping
-  // to a detached background worker thread so the game render thread NEVER freezes.
-  std::thread([this, sfd, lingering_pid, s_path]() {
+  // to a managed background worker thread so the game render thread NEVER freezes.
+  save_thread_ = std::thread([this, sfd, lingering_pid, s_path]() {
     std::string saved_path;
     if (sfd >= 0) {
       struct timeval tv{};
@@ -285,13 +301,16 @@ void RecorderController::stop_recording() {
       ::unlink(s_path.c_str());
     }
 
-    if (!saved_path.empty()) {
+    {
       std::lock_guard<std::recursive_mutex> lk(this->mutex_);
-      this->last_saved_file_ = saved_path;
-      this->toast_msg_ = "[✓] Video tersimpan: " + saved_path;
-      this->toast_time_ = std::chrono::steady_clock::now();
+      if (!saved_path.empty()) {
+        this->last_saved_file_ = saved_path;
+        this->toast_msg_ = "[✓] Video tersimpan: " + saved_path;
+        this->toast_time_ = std::chrono::steady_clock::now();
+      }
+      this->is_finalizing_.store(false, std::memory_order_relaxed);
     }
-  }).detach();
+  });
 
   // Clean up shared memory in the game process immediately
   cleanup_shm();
@@ -360,6 +379,15 @@ bool RecorderController::spawn_helper_process(const HudConfig& cfg, float displa
       return true;
     }
     helper_pid_ = -1;
+  }
+
+  if (socket_path_.empty()) {
+    std::string rdir = get_secure_runtime_dir();
+    socket_path_ = rdir + "/fpshud_rec_" + std::to_string(getpid()) + ".sock";
+  }
+  if (shm_path_.empty()) {
+    std::string rdir = get_secure_runtime_dir();
+    shm_path_ = rdir + "/fpshud_rec_shm_" + std::to_string(getpid());
   }
 
   std::string bin_path = get_helper_binary_path();

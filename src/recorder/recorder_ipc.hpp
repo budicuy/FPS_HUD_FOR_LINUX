@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fpshud {
@@ -159,6 +160,10 @@ private:
   pid_t helper_pid_ = -1;
   std::string socket_path_;
   std::chrono::steady_clock::time_point record_start_time_{};
+
+  // Background save thread state
+  std::thread save_thread_;
+  std::atomic<bool> is_finalizing_{false};
 
   // Shared Memory state
   std::string shm_path_;
