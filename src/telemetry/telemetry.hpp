@@ -178,6 +178,14 @@ struct TelemetryData {
   bool battery_charging = false;
   char battery_status[16] = "Discharging";
 
+  // Storage & Network sensors (100% sudo-free via /proc and /sys/class/hwmon)
+  float disk_read_mbs = 0.0f;
+  float disk_write_mbs = 0.0f;
+  int disk_temp_c = 0;
+  bool disk_temp_available = false;
+  float net_rx_mbs = 0.0f;
+  float net_tx_mbs = 0.0f;
+
   const char* render_api = "VULKAN";
   char cpu_name[48] = "CPU";
   char gpu_name[48] = "GPU";
@@ -251,6 +259,7 @@ private:
   void init_gpu_sensors_locked();
   bool init_intel_level_zero();
   void init_battery_sensors();
+  void init_storage_sensors();
   void shutdown_sensors();
   void shutdown_sensors_locked();
 
@@ -263,6 +272,9 @@ private:
   void poll_mem_pressure();
   void poll_gpu();
   void poll_battery();
+  void poll_disk_io();
+  void poll_disk_temp();
+  void poll_net_speed();
   void poll_nvidia_gpu();
   void poll_intel_level_zero_gpu();
   void poll_drm_sysfs_gpu();
@@ -355,6 +367,15 @@ private:
   std::string battery_current_ua_path_;
   std::string battery_voltage_uv_path_;
   bool battery_discovered_ = false;
+
+  // Storage & Network state
+  std::string disk_temp_path_;
+  uint64_t prev_disk_read_sectors_ = 0;
+  uint64_t prev_disk_write_sectors_ = 0;
+  std::chrono::steady_clock::time_point prev_disk_poll_time_{};
+  uint64_t prev_net_rx_bytes_ = 0;
+  uint64_t prev_net_tx_bytes_ = 0;
+  std::chrono::steady_clock::time_point prev_net_poll_time_{};
 
   // Intel Hybrid P-Core vs E-Core CPU discovery & delta tracking
   bool hybrid_cpu_ = false;

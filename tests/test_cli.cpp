@@ -3165,6 +3165,68 @@ void run_all_devices_and_features_suite() {
                "TakeScreenshot keybind capture");
   }
 
+  // 5.3 Sudo-Free Storage & Network Hardware Telemetry (DiskIo, DiskTemp, NetSpeed)
+  {
+    std::string mock_root = "/tmp/fpshud_mock_storage_net";
+    fs::remove_all(mock_root);
+    fs::create_directories(mock_root + "/proc");
+    fs::create_directories(mock_root + "/sys/class/hwmon/hwmon4");
+
+    write_mock_file(mock_root + "/sys/class/hwmon/hwmon4/name", "nvme\n");
+    write_mock_file(mock_root + "/sys/class/hwmon/hwmon4/temp1_input", "48000\n");
+
+    // Initial counters: 2048 sectors = 1 MB
+    write_mock_file(mock_root + "/proc/diskstats",
+                    " 259 0 nvme0n1 100 0 2048 10 50 0 1024 5 0 10 15\n"
+                    " 259 1 nvme0n1p1 100 0 2048 10 50 0 1024 5 0 10 15\n"
+                    "   7 0 loop0 50 0 4096 0 0 0 0 0 0 0 0\n");
+    write_mock_file(
+        mock_root + "/proc/net/dev",
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs "
+        "drop fifo colls carrier compressed\n"
+        "    lo: 99999999       0    0    0    0     0          0         0 99999999       0    0  "
+        "  0    0     0       0          0\n"
+        "enp3s0:  1048576     100    0    0    0     0          0         0   524288      50    0  "
+        "  0    0     0       0          0\n");
+
+    fpshud::TelemetryCollector tc(mock_root, true, true);
+    tc.poll_once_sync();
+    auto snap1 = tc.get_snapshot();
+    bool temp_ok = (snap1.disk_temp_available && snap1.disk_temp_c == 48);
+    bool base_disk_ok = (snap1.disk_read_mbs == 0.0f && snap1.disk_write_mbs == 0.0f);
+    bool base_net_ok = (snap1.net_rx_mbs == 0.0f && snap1.net_tx_mbs == 0.0f);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Advance nvme0n1 read by +20480 sectors (+10 MB) and write by +10240 sectors (+5 MB);
+    // also advance nvme0n1p1 to verify partition is ignored
+    write_mock_file(mock_root + "/proc/diskstats",
+                    " 259 0 nvme0n1 200 0 22528 20 100 0 11264 10 0 20 30\n"
+                    " 259 1 nvme0n1p1 200 0 22528 20 100 0 11264 10 0 20 30\n");
+    write_mock_file(
+        mock_root + "/proc/net/dev",
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs "
+        "drop fifo colls carrier compressed\n"
+        "    lo: 99999999       0    0    0    0     0          0         0 99999999       0    0  "
+        "  0    0     0       0          0\n"
+        "enp3s0:  6291456     200    0    0    0     0          0         0  2621440     100    0  "
+        "  0    0     0       0          0\n");
+
+    tc.poll_once_sync();
+    auto snap2 = tc.get_snapshot();
+    bool delta_disk_ok = (snap2.disk_read_mbs > 10.0f && snap2.disk_write_mbs > 5.0f &&
+                          snap2.disk_read_mbs > snap2.disk_write_mbs * 1.8f &&
+                          snap2.disk_read_mbs < snap2.disk_write_mbs * 2.2f);
+    bool delta_net_ok = (snap2.net_rx_mbs > 5.0f && snap2.net_tx_mbs > 2.0f);
+    fs::remove_all(mock_root);
+
+    check_cond(temp_ok && base_disk_ok && base_net_ok && delta_disk_ok && delta_net_ok,
+               "5.3 Storage & Network Hardware Telemetry (DiskIo, DiskTemp, NetSpeed)",
+               "Verified /proc/diskstats whole-disk filtering, NVMe hwmon temp (48C), and "
+               "/proc/net/dev RX/TX delta");
+  }
+
   // --------------------------------------------------------------------
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
   // --------------------------------------------------------------------

@@ -490,11 +490,13 @@ void TelemetryCollector::init_sensors() {
   init_cpu_sensors();
   init_gpu_sensors();
   init_battery_sensors();
+  init_storage_sensors();
 
   // Prime initial counters for delta metrics
   poll_cpu_load();
   poll_cpu_power();
   poll_battery();
+  poll_disk_temp();
   poll_local_clock();
 }
 
@@ -1552,6 +1554,9 @@ void TelemetryCollector::poll_once_sync() {
   poll_mem_pressure();
   poll_gpu();
   poll_battery();
+  poll_disk_io();
+  poll_disk_temp();
+  poll_net_speed();
   poll_local_clock();
 }
 
@@ -1710,6 +1715,201 @@ void TelemetryCollector::poll_battery() {
   hw_data_.battery_power_w = power_w;
   hw_data_.battery_charging = is_charging;
   std::snprintf(hw_data_.battery_status, sizeof(hw_data_.battery_status), "%s", status_str);
+}
+
+void TelemetryCollector::init_storage_sensors() {
+  std::error_code ec;
+  disk_temp_path_.clear();
+
+  std::string hwmon_dir = root_prefix_ + "/sys/class/hwmon";
+  if (fs::exists(hwmon_dir, ec)) {
+    std::string fallback_path;
+    for (const auto& entry : fs::directory_iterator(hwmon_dir, ec)) {
+      char buf[64] = {0};
+      std::string name_path = (entry.path() / "name").string();
+      if (!read_sysfs_buf(name_path.c_str(), buf, sizeof(buf))) continue;
+
+      fs::path t1 = entry.path() / "temp1_input";
+      if (!fs::exists(t1, ec)) continue;
+
+      if (std::strncmp(buf, "nvme", 4) == 0) {
+        disk_temp_path_ = t1.string();
+        break;
+      }
+      if (fallback_path.empty() &&
+          (std::strncmp(buf, "drivetemp", 9) == 0 || std::strncmp(buf, "ata", 3) == 0)) {
+        fallback_path = t1.string();
+      }
+    }
+    if (disk_temp_path_.empty() && !fallback_path.empty()) {
+      disk_temp_path_ = std::move(fallback_path);
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  hw_data_.disk_temp_available = !disk_temp_path_.empty();
+}
+
+void TelemetryCollector::poll_disk_temp() {
+  if (disk_temp_path_.empty()) return;
+  char buf[32] = {0};
+  if (!read_sysfs_buf(disk_temp_path_.c_str(), buf, sizeof(buf))) return;
+
+  long millideg = std::strtol(buf, nullptr, 10);
+  int temp_c = static_cast<int>((millideg + 500) / 1000);
+  if (temp_c > -20 && temp_c < 130) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.disk_temp_available = true;
+    hw_data_.disk_temp_c = temp_c;
+  }
+}
+
+void TelemetryCollector::poll_disk_io() {
+  std::string stat_path = root_prefix_ + "/proc/diskstats";
+  int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  char buf[16384];
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) return;
+  buf[n] = '\0';
+
+  auto is_whole_disk = [](const char* dev) noexcept -> bool {
+    if (!dev || !*dev) return false;
+    if (std::strncmp(dev, "nvme", 4) == 0) {
+      const char* p = dev + 4;
+      if (*p < '0' || *p > '9') return false;
+      while (*p >= '0' && *p <= '9') ++p;
+      if (*p != 'n') return false;
+      ++p;
+      if (*p < '0' || *p > '9') return false;
+      while (*p >= '0' && *p <= '9') ++p;
+      return *p == '\0';
+    }
+    if (std::strncmp(dev, "mmcblk", 6) == 0) {
+      const char* p = dev + 6;
+      if (*p < '0' || *p > '9') return false;
+      while (*p >= '0' && *p <= '9') ++p;
+      return *p == '\0';
+    }
+    if ((dev[0] == 's' || dev[0] == 'v') && dev[1] == 'd') {
+      const char* p = dev + 2;
+      if (*p < 'a' || *p > 'z') return false;
+      while (*p >= 'a' && *p <= 'z') ++p;
+      return *p == '\0';
+    }
+    return false;
+  };
+
+  uint64_t total_read_sectors = 0;
+  uint64_t total_write_sectors = 0;
+
+  const char* line = buf;
+  while (*line) {
+    const char* next_line = std::strchr(line, '\n');
+    unsigned int maj = 0, min_id = 0;
+    char dev_name[64] = {0};
+    unsigned long long r_ios = 0, r_merges = 0, r_sec = 0, r_ticks = 0;
+    unsigned long long w_ios = 0, w_merges = 0, w_sec = 0;
+    if (std::sscanf(line, "%u %u %63s %llu %llu %llu %llu %llu %llu %llu", &maj, &min_id, dev_name,
+                    &r_ios, &r_merges, &r_sec, &r_ticks, &w_ios, &w_merges, &w_sec) == 10) {
+      if (is_whole_disk(dev_name)) {
+        total_read_sectors += static_cast<uint64_t>(r_sec);
+        total_write_sectors += static_cast<uint64_t>(w_sec);
+      }
+    }
+    if (!next_line) break;
+    line = next_line + 1;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  float read_mbs = 0.0f;
+  float write_mbs = 0.0f;
+  if (prev_disk_poll_time_.time_since_epoch().count() != 0) {
+    double dt_sec = std::chrono::duration<double>(now - prev_disk_poll_time_).count();
+    if (dt_sec >= 0.01) {
+      uint64_t d_read = (total_read_sectors >= prev_disk_read_sectors_)
+                            ? (total_read_sectors - prev_disk_read_sectors_)
+                            : 0;
+      uint64_t d_write = (total_write_sectors >= prev_disk_write_sectors_)
+                             ? (total_write_sectors - prev_disk_write_sectors_)
+                             : 0;
+      constexpr double kSectorToMb = 512.0 / (1024.0 * 1024.0);
+      read_mbs = static_cast<float>((static_cast<double>(d_read) * kSectorToMb) / dt_sec);
+      write_mbs = static_cast<float>((static_cast<double>(d_write) * kSectorToMb) / dt_sec);
+    }
+  }
+  prev_disk_read_sectors_ = total_read_sectors;
+  prev_disk_write_sectors_ = total_write_sectors;
+  prev_disk_poll_time_ = now;
+
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  hw_data_.disk_read_mbs = read_mbs;
+  hw_data_.disk_write_mbs = write_mbs;
+}
+
+void TelemetryCollector::poll_net_speed() {
+  std::string net_path = root_prefix_ + "/proc/net/dev";
+  int fd = open(net_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  char buf[8192];
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) return;
+  buf[n] = '\0';
+
+  uint64_t total_rx = 0;
+  uint64_t total_tx = 0;
+
+  const char* line = buf;
+  while (*line) {
+    const char* next_line = std::strchr(line, '\n');
+    const char* colon = std::strchr(line, ':');
+    if (colon && (!next_line || colon < next_line)) {
+      const char* p = line;
+      while (p < colon && (*p == ' ' || *p == '\t')) ++p;
+      size_t name_len = static_cast<size_t>(colon - p);
+      while (name_len > 0 && (p[name_len - 1] == ' ' || p[name_len - 1] == '\t')) --name_len;
+
+      bool skip = (name_len == 0) || (name_len == 2 && std::strncmp(p, "lo", 2) == 0) ||
+                  (name_len >= 6 && std::strncmp(p, "docker", 6) == 0) ||
+                  (name_len >= 4 && std::strncmp(p, "veth", 4) == 0) ||
+                  (name_len >= 3 && std::strncmp(p, "br-", 3) == 0) ||
+                  (name_len >= 5 && std::strncmp(p, "virbr", 5) == 0);
+      if (!skip) {
+        unsigned long long rx_b = 0, rx_p = 0, rx_e = 0, rx_d = 0, rx_f = 0, rx_fr = 0, rx_c = 0,
+                           rx_m = 0, tx_b = 0;
+        if (std::sscanf(colon + 1, "%llu %llu %llu %llu %llu %llu %llu %llu %llu", &rx_b, &rx_p,
+                        &rx_e, &rx_d, &rx_f, &rx_fr, &rx_c, &rx_m, &tx_b) == 9) {
+          total_rx += static_cast<uint64_t>(rx_b);
+          total_tx += static_cast<uint64_t>(tx_b);
+        }
+      }
+    }
+    if (!next_line) break;
+    line = next_line + 1;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  float rx_mbs = 0.0f;
+  float tx_mbs = 0.0f;
+  if (prev_net_poll_time_.time_since_epoch().count() != 0) {
+    double dt_sec = std::chrono::duration<double>(now - prev_net_poll_time_).count();
+    if (dt_sec >= 0.01) {
+      uint64_t d_rx = (total_rx >= prev_net_rx_bytes_) ? (total_rx - prev_net_rx_bytes_) : 0;
+      uint64_t d_tx = (total_tx >= prev_net_tx_bytes_) ? (total_tx - prev_net_tx_bytes_) : 0;
+      constexpr double kBytesToMb = 1.0 / (1024.0 * 1024.0);
+      rx_mbs = static_cast<float>((static_cast<double>(d_rx) * kBytesToMb) / dt_sec);
+      tx_mbs = static_cast<float>((static_cast<double>(d_tx) * kBytesToMb) / dt_sec);
+    }
+  }
+  prev_net_rx_bytes_ = total_rx;
+  prev_net_tx_bytes_ = total_tx;
+  prev_net_poll_time_ = now;
+
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  hw_data_.net_rx_mbs = rx_mbs;
+  hw_data_.net_tx_mbs = tx_mbs;
 }
 
 void TelemetryCollector::poll_cpu_load() {
