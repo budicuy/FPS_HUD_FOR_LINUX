@@ -535,6 +535,10 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
     } else if (matches_keybind(code, cfg.bind_record, keys_down_) ||
                (rec_default_bind && is_record_toggle_key(code, cfg.key_record, alt_pressed_))) {
       RecorderController::instance().toggle_recording(cfg, display_width, display_height);
+    } else if (matches_keybind(code, cfg.bind_save_replay, keys_down_)) {
+      RecorderController::instance().trigger_save_replay();
+    } else if (matches_keybind(code, cfg.bind_screenshot, keys_down_)) {
+      RecorderController::instance().request_screenshot();
     } else if (code == KEY_ESC && cfg.gui_open) {
       cfg.gui_open = false;
     }

@@ -594,9 +594,63 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
 
     ImGui::Render();
   }
+  bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request();
+  auto capture_gl_screenshot = [&]() {
+    if (!g_gl.glReadPixels) return;
+    GLint prev_pbo = 0;
+    GLint prev_read_fbo = 0;
+    GLint prev_pack_align = 4;
+    GLint prev_row_len = 0;
+    if (g_gl.glGetIntegerv) {
+      g_gl.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prev_pbo);
+      g_gl.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read_fbo);
+      g_gl.glGetIntegerv(GL_PACK_ALIGNMENT, &prev_pack_align);
+      g_gl.glGetIntegerv(GL_PACK_ROW_LENGTH, &prev_row_len);
+    }
+    if (g_gl.glBindFramebuffer && prev_read_fbo != 0) {
+      g_gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    if (g_gl.glBindBuffer && prev_pbo != 0) {
+      g_gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    if (g_gl.glPixelStorei) {
+      g_gl.glPixelStorei(GL_PACK_ALIGNMENT, 4);
+      g_gl.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    }
+    uint32_t uw = static_cast<uint32_t>(width);
+    uint32_t uh = static_cast<uint32_t>(height);
+    std::vector<uint8_t> shot_buf(static_cast<size_t>(uw) * uh * 4);
+    g_gl.glReadPixels(0, 0, static_cast<GLsizei>(uw), static_cast<GLsizei>(uh), GL_BGRA,
+                      GL_UNSIGNED_BYTE, shot_buf.data());
+    fpshud::RecorderController::instance().submit_screenshot(
+        shot_buf.data(), uw, uh, 0 /*BGRA*/, true /*flip_y*/,
+        fpshud::get_effective_record_dir(cfg));
+    if (g_gl.glBindFramebuffer && prev_read_fbo != 0) {
+      g_gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prev_read_fbo));
+    }
+    if (g_gl.glPixelStorei) {
+      g_gl.glPixelStorei(GL_PACK_ALIGNMENT, prev_pack_align);
+      g_gl.glPixelStorei(GL_PACK_ROW_LENGTH, prev_row_len);
+    }
+    if (g_gl.glBindBuffer && prev_pbo != 0) {
+      g_gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pbo));
+    }
+  };
+
+  if (take_shot && !cfg.screenshot_with_hud) {
+    capture_gl_screenshot();
+  }
+
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-  if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
+  if (take_shot && cfg.screenshot_with_hud) {
+    capture_gl_screenshot();
+  }
+
+  fpshud::RecorderController::instance().sync_replay_state(cfg, width, height);
+
+  if (fpshud::RecorderController::instance().is_capturing_frames() && width > 0.0f &&
+      height > 0.0f) {
     auto now = std::chrono::steady_clock::now();
     bool should_capture = false;
 #if FPSHUD_ENABLE_EXPERIMENTAL

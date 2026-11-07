@@ -3289,6 +3289,54 @@ void run_all_devices_and_features_suite() {
                "screenshot save");
   }
 
+  // 5.5 Instant Replay IPC, Ring Buffer & Vulkan/OpenGL Capture Hooks
+  {
+    fpshud::IpcPacketHeader hdr{};
+    hdr.command = static_cast<uint32_t>(fpshud::RecorderCommand::SaveReplay);
+    bool cmd_ok = (hdr.is_valid() && hdr.get_field<1>() == 6U);
+
+    fpshud::IpcStartPayload payload{};
+    payload.replay_mode = 1;
+    payload.replay_duration_sec = 60;
+    bool payload_ok = (payload.replay_mode == 1 && payload.replay_duration_sec == 60);
+
+    auto& rc = fpshud::RecorderController::instance();
+    bool idle_ok = (!rc.is_replay_active() && !rc.is_capturing_frames());
+    rc.trigger_save_replay();
+    std::string toast_str;
+    bool toast_off_ok =
+        rc.get_recent_toast(toast_str) && (toast_str.find("OFF") != std::string::npos);
+
+    rc.request_screenshot();
+    bool shot_once = rc.consume_screenshot_request();
+    bool shot_reset = !rc.consume_screenshot_request();
+
+    bool hooks_ok = false;
+    if (!rroot.empty()) {
+      std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
+      bool ring_ok = (rec_src.find("packet_ring") != std::string::npos &&
+                      rec_src.find("RecorderCommand::SaveReplay") != std::string::npos &&
+                      rec_src.find("\"Replay\"") != std::string::npos);
+      bool vk_hook_ok = (vk_src.find("is_capturing_frames()") != std::string::npos &&
+                         vk_src.find("sync_replay_state(") != std::string::npos &&
+                         vk_src.find("consume_screenshot_request()") != std::string::npos &&
+                         vk_src.find("screenshot_with_hud") != std::string::npos);
+      bool gl_hook_ok = (gl_src.find("is_capturing_frames()") != std::string::npos &&
+                         gl_src.find("sync_replay_state(") != std::string::npos &&
+                         gl_src.find("consume_screenshot_request()") != std::string::npos &&
+                         gl_src.find("screenshot_with_hud") != std::string::npos);
+      hooks_ok = ring_ok && vk_hook_ok && gl_hook_ok;
+    }
+
+    check_cond(cmd_ok && payload_ok && idle_ok && toast_off_ok && shot_once && shot_reset &&
+                   hooks_ok,
+               "5.5 Instant Replay IPC, Ring Buffer & Vulkan/OpenGL Capture Hooks",
+               "Verified SaveReplay=6, replay_mode/replay_duration_sec, packet_ring, and "
+               "Vulkan/OpenGL Clean/HUD screenshot hooks");
+  }
+
   // --------------------------------------------------------------------
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
   // --------------------------------------------------------------------

@@ -525,9 +525,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
-      ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
+    ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     if (avcodec_open2(ctx, c, nullptr) >= 0) {
       vcodec = c;
@@ -616,9 +614,7 @@ int main(int argc, char* argv[]) {
       actx->time_base = AVRational{1, actx->sample_rate};
       astream->time_base = actx->time_base;
 
-      if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
-        actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-      }
+      actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
       if (avcodec_open2(actx, acodec, nullptr) >= 0) {
         avcodec_parameters_from_context(astream->codecpar, actx);
@@ -651,25 +647,82 @@ int main(int argc, char* argv[]) {
     if (!socket_path.empty()) unlink(socket_path.c_str());
   };
 
-  if (!(oc->oformat->flags & AVFMT_NOFILE)) {
-    if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
-      std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n",
-                   out_filename.c_str());
+  bool is_replay = (start_cfg.replay_mode == 1);
+  int replay_sec = std::clamp<int>(
+      start_cfg.replay_duration_sec > 0 ? start_cfg.replay_duration_sec : 30, 5, 300);
+
+  if (!is_replay) {
+    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+      if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
+        std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n",
+                     out_filename.c_str());
+        cleanup_early_failure();
+        return 1;
+      }
+    }
+
+    if (avformat_write_header(oc, &opt_dict) < 0) {
+      std::fprintf(stderr, "[FPSHUD Recorder] Failed to write format header.\n");
       cleanup_early_failure();
       return 1;
     }
-  }
-
-  if (avformat_write_header(oc, &opt_dict) < 0) {
-    std::fprintf(stderr, "[FPSHUD Recorder] Failed to write format header.\n");
-    cleanup_early_failure();
-    return 1;
   }
   av_dict_free(&opt_dict);
 
   // 5. Worker Loop for Video & Audio Multiplexing
   std::mutex mux_mutex;
   std::atomic<int64_t> video_frame_idx{0};
+  auto replay_clock_start = std::chrono::steady_clock::now();
+
+  struct BufferedPacket {
+    AVPacket* pkt = nullptr;
+    int stream_index = 0;
+    int64_t timestamp_us = 0;
+    bool is_keyframe = false;
+  };
+  std::deque<BufferedPacket> packet_ring;
+
+  auto push_packet_or_mux = [&](AVPacket* pkt, int stream_idx, AVRational src_tb,
+                                AVRational stream_tb) {
+    std::lock_guard<std::mutex> lock(mux_mutex);
+    if (!is_replay) {
+      av_packet_rescale_ts(pkt, src_tb, stream_tb);
+      pkt->stream_index = stream_idx;
+      av_interleaved_write_frame(oc, pkt);
+      return;
+    }
+
+    AVPacket* cloned = av_packet_clone(pkt);
+    if (!cloned) return;
+    cloned->stream_index = stream_idx;
+    auto now_tp = std::chrono::steady_clock::now();
+    int64_t now_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(now_tp - replay_clock_start).count();
+    bool is_key = (stream_idx == 0) && ((cloned->flags & AV_PKT_FLAG_KEY) != 0);
+    packet_ring.push_back(BufferedPacket{cloned, stream_idx, now_us, is_key});
+
+    int64_t cutoff_us = now_us - static_cast<int64_t>(replay_sec) * 1000000LL;
+    int64_t hard_cutoff_us = now_us - static_cast<int64_t>(replay_sec + 4) * 1000000LL;
+
+    // Find the newest keyframe at or before cutoff_us so we can safely drop older packets
+    size_t keep_from = 0;
+    for (size_t i = 0; i < packet_ring.size(); ++i) {
+      if (packet_ring[i].timestamp_us <= cutoff_us && packet_ring[i].is_keyframe) {
+        keep_from = i;
+      } else if (packet_ring[i].timestamp_us > cutoff_us) {
+        break;
+      }
+    }
+    while (keep_from > 0 && !packet_ring.empty()) {
+      av_packet_free(&packet_ring.front().pkt);
+      packet_ring.pop_front();
+      --keep_from;
+    }
+    while (!packet_ring.empty() && packet_ring.front().timestamp_us < hard_cutoff_us) {
+      av_packet_free(&packet_ring.front().pkt);
+      packet_ring.pop_front();
+    }
+  };
 
   bool is_vaapi_encoder = (vctx->pix_fmt == AV_PIX_FMT_VAAPI);
   AVPixelFormat sw_pix_fmt = is_vaapi_encoder ? AV_PIX_FMT_NV12 : vctx->pix_fmt;
@@ -782,10 +835,7 @@ int main(int argc, char* argv[]) {
 
         if (avcodec_send_frame(actx, aframe) >= 0) {
           while (avcodec_receive_packet(actx, pkt) >= 0) {
-            av_packet_rescale_ts(pkt, actx->time_base, astream->time_base);
-            pkt->stream_index = astream->index;
-            std::lock_guard<std::mutex> lock(mux_mutex);
-            av_interleaved_write_frame(oc, pkt);
+            push_packet_or_mux(pkt, astream->index, actx->time_base, astream->time_base);
             av_packet_unref(pkt);
           }
         }
@@ -801,10 +851,7 @@ int main(int argc, char* argv[]) {
     // Flush remaining audio frames in encoder
     avcodec_send_frame(actx, nullptr);
     while (avcodec_receive_packet(actx, pkt) >= 0) {
-      av_packet_rescale_ts(pkt, actx->time_base, astream->time_base);
-      pkt->stream_index = astream->index;
-      std::lock_guard<std::mutex> lock(mux_mutex);
-      av_interleaved_write_frame(oc, pkt);
+      push_packet_or_mux(pkt, astream->index, actx->time_base, astream->time_base);
       av_packet_unref(pkt);
     }
 
@@ -840,10 +887,7 @@ int main(int argc, char* argv[]) {
           hw_frame->pts = vframe->pts;
           if (avcodec_send_frame(vctx, hw_frame) >= 0) {
             while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-              av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-              v_pkt->stream_index = vstream->index;
-              std::lock_guard<std::mutex> lock(mux_mutex);
-              av_interleaved_write_frame(oc, v_pkt);
+              push_packet_or_mux(v_pkt, vstream->index, vctx->time_base, vstream->time_base);
               av_packet_unref(v_pkt);
             }
           }
@@ -853,10 +897,7 @@ int main(int argc, char* argv[]) {
     } else {
       if (avcodec_send_frame(vctx, vframe) >= 0) {
         while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-          av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-          v_pkt->stream_index = vstream->index;
-          std::lock_guard<std::mutex> lock(mux_mutex);
-          av_interleaved_write_frame(oc, v_pkt);
+          push_packet_or_mux(v_pkt, vstream->index, vctx->time_base, vstream->time_base);
           av_packet_unref(v_pkt);
         }
       }
@@ -1065,6 +1106,105 @@ int main(int argc, char* argv[]) {
               }
             }
           }
+        } else if (cmd == fpshud::RecorderCommand::SaveReplay) {
+          fpshud::IpcStatusResponse save_resp{};
+          save_resp.magic = fpshud::kRecorderIpcMagic;
+          save_resp.status = static_cast<uint32_t>(fpshud::RecorderStatus::Recording);
+
+          if (is_replay) {
+            std::string replay_file =
+                (fs::path(save_dir) / generate_timestamp_filename("Replay", ext)).string();
+            std::lock_guard<std::mutex> lock(mux_mutex);
+
+            // Find oldest keyframe within replay_sec window
+            auto now_tp = std::chrono::steady_clock::now();
+            int64_t now_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(now_tp - replay_clock_start)
+                    .count();
+            int64_t win_start_us = now_us - static_cast<int64_t>(replay_sec) * 1000000LL;
+            size_t start_idx = packet_ring.size();
+            for (size_t i = 0; i < packet_ring.size(); ++i) {
+              if (packet_ring[i].is_keyframe && packet_ring[i].timestamp_us >= win_start_us) {
+                start_idx = i;
+                break;
+              }
+            }
+            if (start_idx == packet_ring.size()) {
+              for (size_t i = 0; i < packet_ring.size(); ++i) {
+                if (packet_ring[i].is_keyframe) {
+                  start_idx = i;
+                  break;
+                }
+              }
+            }
+
+            if (start_idx < packet_ring.size()) {
+              AVFormatContext* replay_oc = nullptr;
+              if (avformat_alloc_output_context2(&replay_oc, nullptr, nullptr,
+                                                 replay_file.c_str()) >= 0 &&
+                  replay_oc) {
+                AVStream* rv = avformat_new_stream(replay_oc, nullptr);
+                rv->id = 0;
+                rv->time_base = vctx->time_base;
+                avcodec_parameters_from_context(rv->codecpar, vctx);
+                if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
+                  rv->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+                }
+
+                AVStream* ra = nullptr;
+                if (actx && audio_enabled) {
+                  ra = avformat_new_stream(replay_oc, nullptr);
+                  ra->id = 1;
+                  ra->time_base = actx->time_base;
+                  avcodec_parameters_from_context(ra->codecpar, actx);
+                }
+
+                AVDictionary* ropts = nullptr;
+                av_dict_set(&ropts, "movflags", "+faststart", 0);
+                if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
+                  av_dict_set(&ropts, "tag:v", "hvc1", 0);
+                }
+
+                bool opened = true;
+                if (!(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                  opened = (avio_open(&replay_oc->pb, replay_file.c_str(), AVIO_FLAG_WRITE) >= 0);
+                }
+                if (opened && avformat_write_header(replay_oc, &ropts) >= 0) {
+                  int64_t v_base_pts = packet_ring[start_idx].pkt->pts;
+                  int64_t a_base_pts = -1;
+                  for (size_t i = start_idx; i < packet_ring.size(); ++i) {
+                    const auto& bp = packet_ring[i];
+                    if (bp.stream_index == 1 && !ra) continue;
+                    AVPacket* cp = av_packet_clone(bp.pkt);
+                    if (!cp) continue;
+                    if (bp.stream_index == 0) {
+                      cp->pts = std::max<int64_t>(0, cp->pts - v_base_pts);
+                      cp->dts = std::max<int64_t>(0, cp->dts - v_base_pts);
+                      av_packet_rescale_ts(cp, vctx->time_base, rv->time_base);
+                      cp->stream_index = rv->index;
+                    } else if (ra) {
+                      if (a_base_pts < 0) a_base_pts = cp->pts;
+                      cp->pts = std::max<int64_t>(0, cp->pts - a_base_pts);
+                      cp->dts = std::max<int64_t>(0, cp->dts - a_base_pts);
+                      av_packet_rescale_ts(cp, actx->time_base, ra->time_base);
+                      cp->stream_index = ra->index;
+                    }
+                    av_interleaved_write_frame(replay_oc, cp);
+                    av_packet_free(&cp);
+                  }
+                  av_write_trailer(replay_oc);
+                  std::snprintf(save_resp.last_saved_file, sizeof(save_resp.last_saved_file), "%s",
+                                replay_file.c_str());
+                }
+                av_dict_free(&ropts);
+                if (replay_oc->pb && !(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                  avio_closep(&replay_oc->pb);
+                }
+                avformat_free_context(replay_oc);
+              }
+            }
+          }
+          send(client_fd, &save_resp, sizeof(save_resp), 0);
         } else if (cmd == fpshud::RecorderCommand::QueryStatus) {
           fpshud::IpcStatusResponse status_resp{};
           status_resp.magic = fpshud::kRecorderIpcMagic;
@@ -1108,29 +1248,37 @@ int main(int argc, char* argv[]) {
   }
 
   // Flush video encoder
-  avcodec_send_frame(vctx, nullptr);
-  while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-    av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-    v_pkt->stream_index = vstream->index;
-    std::lock_guard<std::mutex> lock(mux_mutex);
-    av_interleaved_write_frame(oc, v_pkt);
-    av_packet_unref(v_pkt);
+  if (!is_replay) {
+    avcodec_send_frame(vctx, nullptr);
+    while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+      push_packet_or_mux(v_pkt, vstream->index, vctx->time_base, vstream->time_base);
+      av_packet_unref(v_pkt);
+    }
+    av_write_trailer(oc);
   }
   av_packet_free(&v_pkt);
 
-  av_write_trailer(oc);
+  {
+    std::lock_guard<std::mutex> lock(mux_mutex);
+    for (auto& bp : packet_ring) {
+      if (bp.pkt) av_packet_free(&bp.pkt);
+    }
+    packet_ring.clear();
+  }
 
   // Send final saved file path response back to client socket
   fpshud::IpcStatusResponse final_resp{};
   final_resp.magic = fpshud::kRecorderIpcMagic;
   final_resp.status = static_cast<uint32_t>(fpshud::RecorderStatus::Idle);
   final_resp.frame_count = static_cast<uint32_t>(video_frame_idx.load(std::memory_order_relaxed));
-  std::snprintf(final_resp.last_saved_file, sizeof(final_resp.last_saved_file), "%s",
-                out_filename.c_str());
+  if (!is_replay) {
+    std::snprintf(final_resp.last_saved_file, sizeof(final_resp.last_saved_file), "%s",
+                  out_filename.c_str());
+  }
   send(client_fd, &final_resp, sizeof(final_resp), 0);
 
   // Cleanup FFmpeg resources
-  if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+  if (!is_replay && !(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
     avio_closep(&oc->pb);
   }
   avcodec_free_context(&vctx);

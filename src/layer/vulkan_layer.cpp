@@ -56,12 +56,13 @@ struct FrameResources {
   VkFence fence = VK_NULL_HANDLE;
   VkSemaphore semaphore = VK_NULL_HANDLE;
 
-  // Staging resources for screen recording
+  // Staging resources for screen recording & screenshot capture
   VkBuffer staging_buffer = VK_NULL_HANDLE;
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
   void* mapped_ptr = nullptr;
   VkDeviceSize buffer_size = 0;
   bool has_valid_capture = false;
+  bool has_valid_screenshot = false;
 };
 
 struct DeviceData {
@@ -1305,9 +1306,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     dd->ResetFences(dd->device, 1, &frame.fence);
     dd->ResetCommandBuffer(frame.command_buffer, 0);
 
-    // If recording is active and previous GPU frame copy finished, send to recorder
-    if (fpshud::RecorderController::instance().is_recording() && frame.has_valid_capture &&
-        frame.mapped_ptr) {
+    // If recording/replay or screenshot copy finished on previous fence, submit to controller
+    if ((frame.has_valid_capture || frame.has_valid_screenshot) && frame.mapped_ptr) {
       if (dd->InvalidateMappedMemoryRanges) {
         VkMappedMemoryRange range{};
         range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -1328,8 +1328,16 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       } else if (sd->format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
         fmt = 3;  // 3 = X2RGB10LE
       }
-      fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width,
-                                                          sd->extent.height, fmt, false);
+      if (frame.has_valid_screenshot) {
+        fpshud::RecorderController::instance().submit_screenshot(
+            frame.mapped_ptr, sd->extent.width, sd->extent.height, fmt, false,
+            fpshud::get_effective_record_dir(cfg));
+        frame.has_valid_screenshot = false;
+      }
+      if (frame.has_valid_capture && fpshud::RecorderController::instance().is_capturing_frames()) {
+        fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width,
+                                                            sd->extent.height, fmt, false);
+      }
       frame.has_valid_capture = false;
     }
 
@@ -1351,51 +1359,12 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       ImGui::Render();
     }
 
-    VkCommandBufferBeginInfo begin_info{};
-    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    dd->BeginCommandBuffer(frame.command_buffer, &begin_info);
+    bool take_shot =
+        fpshud::RecorderController::instance().consume_screenshot_request() &&
+        sd->supports_transfer_src;
+    bool clean_shot_recorded = false;
 
-    VkRenderPassBeginInfo rp_begin{};
-    rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp_begin.renderPass = sd->render_pass;
-    rp_begin.framebuffer = frame.framebuffer;
-    rp_begin.renderArea.extent = sd->extent;
-    dd->CmdBeginRenderPass(frame.command_buffer, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
-
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.command_buffer);
-
-    dd->CmdEndRenderPass(frame.command_buffer);
-
-    // Record GPU copy of swapchain image to staging buffer if recording is active (with
-    // jitter-resilient pacing / adaptive VFR)
-    bool should_capture_frame = false;
-    if (fpshud::RecorderController::instance().is_recording() && sd->supports_transfer_src) {
-      auto now = std::chrono::steady_clock::now();
-#if FPSHUD_ENABLE_EXPERIMENTAL
-      if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
-        if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
-                now, sd->last_capture_time, cfg.record_vfr_max_fps)) {
-          sd->last_capture_time = now;
-          should_capture_frame = true;
-        }
-      } else
-#endif
-      {
-        int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
-        auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
-        auto min_interval = target_interval * 70 / 100;
-        if (sd->last_capture_time == std::chrono::steady_clock::time_point{} ||
-            now - sd->last_capture_time >= min_interval) {
-          sd->last_capture_time = now;
-          should_capture_frame = true;
-        }
-      }
-    } else {
-      sd->last_capture_time = std::chrono::steady_clock::time_point{};
-    }
-
-    if (should_capture_frame && ensure_frame_capture_buffer(dd, sd.get(), frame)) {
+    auto record_image_copy = [&]() {
       VkImageMemoryBarrier b1{};
       b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
       b1.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -1442,13 +1411,76 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       b2.subresourceRange.baseArrayLayer = 0;
       b2.subresourceRange.layerCount = 1;
       b2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      b2.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+      b2.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
 
       dd->CmdPipelineBarrier(frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &b2);
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b2);
+    };
 
-      frame.has_valid_capture = true;
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    dd->BeginCommandBuffer(frame.command_buffer, &begin_info);
+
+    // Clean Game Screenshot (Tanpa HUD): copy swapchain image BEFORE ImGui render pass!
+    if (take_shot && !cfg.screenshot_with_hud && ensure_frame_capture_buffer(dd, sd.get(), frame)) {
+      record_image_copy();
+      frame.has_valid_screenshot = true;
+      clean_shot_recorded = true;
+    }
+
+    VkRenderPassBeginInfo rp_begin{};
+    rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp_begin.renderPass = sd->render_pass;
+    rp_begin.framebuffer = frame.framebuffer;
+    rp_begin.renderArea.extent = sd->extent;
+    dd->CmdBeginRenderPass(frame.command_buffer, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.command_buffer);
+
+    dd->CmdEndRenderPass(frame.command_buffer);
+
+    // Record GPU copy of swapchain image to staging buffer if recording/replay is active (with
+    // jitter-resilient pacing / adaptive VFR) or if Screenshot With HUD was requested
+    bool should_capture_frame = false;
+    if (fpshud::RecorderController::instance().is_capturing_frames() && sd->supports_transfer_src) {
+      auto now = std::chrono::steady_clock::now();
+#if FPSHUD_ENABLE_EXPERIMENTAL
+      if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
+        if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
+                now, sd->last_capture_time, cfg.record_vfr_max_fps)) {
+          sd->last_capture_time = now;
+          should_capture_frame = true;
+        }
+      } else
+#endif
+      {
+        int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
+        auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
+        auto min_interval = target_interval * 70 / 100;
+        if (sd->last_capture_time == std::chrono::steady_clock::time_point{} ||
+            now - sd->last_capture_time >= min_interval) {
+          sd->last_capture_time = now;
+          should_capture_frame = true;
+        }
+      }
+    } else {
+      sd->last_capture_time = std::chrono::steady_clock::time_point{};
+    }
+
+    bool want_hud_shot = (take_shot && cfg.screenshot_with_hud);
+    if (!clean_shot_recorded && (should_capture_frame || want_hud_shot) &&
+        ensure_frame_capture_buffer(dd, sd.get(), frame)) {
+      record_image_copy();
+      frame.has_valid_capture = should_capture_frame;
+      if (want_hud_shot) {
+        frame.has_valid_screenshot = true;
+      }
+    } else if (!clean_shot_recorded) {
+      frame.has_valid_capture = false;
+      frame.has_valid_screenshot = false;
     } else {
       frame.has_valid_capture = false;
     }
@@ -1503,6 +1535,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       pres_res = dd->QueuePresentKHR(queue, pPresentInfo);
     }
 
+    fpshud::RecorderController::instance().sync_replay_state(cfg, w, h);
     fpshud::RecorderController::instance().on_frame_present(sd->extent.width, sd->extent.height);
     return pres_res;
   } catch (...) {

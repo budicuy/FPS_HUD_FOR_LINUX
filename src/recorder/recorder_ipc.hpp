@@ -22,7 +22,8 @@ enum class RecorderCommand : uint32_t {
   StopRecord = 2,
   QueryStatus = 3,
   SendFrame = 4,
-  Ping = 5
+  Ping = 5,
+  SaveReplay = 6
 };
 
 enum class RecorderStatus : uint32_t {
@@ -65,6 +66,8 @@ struct IpcStartPayload {
   uint32_t cq_level = 22;      // CQP 16-30
   uint32_t vfr_mode = 0;       // 0 = CFR (statis 60 FPS), 1 = Pure Adaptive VFR (1:1 Capture)
   uint32_t vfr_max_fps = 120;  // Safety maximum framerate cap in VFR mode
+  uint32_t replay_mode = 0;    // 0 = Normal Record, 1 = Instant Replay Ring Buffer
+  uint32_t replay_duration_sec = 30;
   char save_dir[256] = {0};
   char filename_prefix[64] = {0};
 };
@@ -125,9 +128,15 @@ public:
 
   // Live status queries for HUD overlay & GUI menu
   bool is_recording() const noexcept;
+  bool is_replay_active() const noexcept;
+  bool is_capturing_frames() const noexcept;
   float get_recording_duration() const;
   uint32_t get_recorded_frames() const;
   std::string get_last_saved_path() const;
+
+  // Instant Replay lifecycle & on-demand save
+  void sync_replay_state(const HudConfig& cfg, float display_w, float display_h);
+  void trigger_save_replay();
 
   // Toast notification (returns true if a message should be shown on screen)
   bool get_recent_toast(std::string& out_msg) const;
@@ -162,6 +171,8 @@ private:
 
   mutable std::recursive_mutex mutex_;
   std::atomic<bool> is_recording_{false};
+  std::atomic<bool> is_replay_active_{false};
+  int active_replay_duration_sec_ = 0;
   std::atomic<float> elapsed_sec_{0.0f};
   std::atomic<uint32_t> recorded_frames_{0};
   std::string last_saved_file_;
