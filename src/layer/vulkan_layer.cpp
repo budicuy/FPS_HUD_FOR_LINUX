@@ -933,7 +933,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
       copy_dispatch_key(dd->graphics_queue, *pDevice);
     }
 
-    // Bind Active GPU to Telemetry only if layer is enabled (prioritize Discrete GPU over iGPU probes)
+    // Bind Active GPU to Telemetry only if layer is enabled (prioritize Discrete GPU over iGPU
+    // probes)
     if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
       VkPhysicalDeviceProperties props{};
       dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
@@ -1384,9 +1385,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       ImGui::Render();
     }
 
-    bool take_shot =
-        fpshud::RecorderController::instance().consume_screenshot_request() &&
-        sd->supports_transfer_src;
+    bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request() &&
+                     sd->supports_transfer_src;
     bool clean_shot_recorded = false;
 
     auto record_image_copy = [&]() {
@@ -1438,10 +1438,10 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       b2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
       b2.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
 
-      dd->CmdPipelineBarrier(frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b2);
+      dd->CmdPipelineBarrier(
+          frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+          0, nullptr, 0, nullptr, 1, &b2);
     };
 
     VkCommandBufferBeginInfo begin_info{};

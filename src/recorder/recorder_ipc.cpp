@@ -957,8 +957,8 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
   }
 
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  screenshot_thread_ = std::thread(
-      [this, buf = std::move(raw_copy), width, height, format, flip_y, target_dir]() {
+  screenshot_thread_ =
+      std::thread([this, buf = std::move(raw_copy), width, height, format, flip_y, target_dir]() {
         std::error_code ec;
         fs::create_directories(target_dir, ec);
 

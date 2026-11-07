@@ -3121,10 +3121,10 @@ void run_all_devices_and_features_suite() {
   // 5.2 Replay, Screenshot, Storage/Net Config & Keybind Capture
   {
     fpshud::HudConfig cfg;
-    bool defaults_ok = (fpshud::kTotalMetricCount == 31 && !cfg.replay_enabled &&
-                        cfg.replay_duration_sec == 30 && !cfg.screenshot_with_hud &&
-                        cfg.bind_save_replay == (fpshud::Keybind{0, 66}) &&
-                        cfg.bind_screenshot == (fpshud::Keybind{0, 68}));
+    bool defaults_ok =
+        (fpshud::kTotalMetricCount == 31 && !cfg.replay_enabled && cfg.replay_duration_sec == 30 &&
+         !cfg.screenshot_with_hud && cfg.bind_save_replay == (fpshud::Keybind{0, 66}) &&
+         cfg.bind_screenshot == (fpshud::Keybind{0, 68}));
     cfg.replay_enabled = true;
     cfg.replay_duration_sec = 60;
     cfg.screenshot_with_hud = true;
@@ -3140,13 +3140,13 @@ void run_all_devices_and_features_suite() {
     bool load_ok = fpshud::load_ini_file(tmp_ini, loaded);
     std::remove(tmp_ini.c_str());
 
-    bool roundtrip_ok =
-        save_ok && load_ok && loaded.replay_enabled && loaded.replay_duration_sec == 60 &&
-        loaded.screenshot_with_hud && loaded.bind_save_replay == (fpshud::Keybind{29, 66}) &&
-        loaded.bind_screenshot == (fpshud::Keybind{56, 68}) &&
-        loaded.has_metric(fpshud::MetricType::DiskIo) &&
-        loaded.has_metric(fpshud::MetricType::DiskTemp) &&
-        loaded.has_metric(fpshud::MetricType::NetSpeed);
+    bool roundtrip_ok = save_ok && load_ok && loaded.replay_enabled &&
+                        loaded.replay_duration_sec == 60 && loaded.screenshot_with_hud &&
+                        loaded.bind_save_replay == (fpshud::Keybind{29, 66}) &&
+                        loaded.bind_screenshot == (fpshud::Keybind{56, 68}) &&
+                        loaded.has_metric(fpshud::MetricType::DiskIo) &&
+                        loaded.has_metric(fpshud::MetricType::DiskTemp) &&
+                        loaded.has_metric(fpshud::MetricType::NetSpeed);
 
     fpshud::InputManager im;
     im.start_keybind_capture(fpshud::KeybindTarget::SaveReplay);
@@ -3320,11 +3320,11 @@ void run_all_devices_and_features_suite() {
       std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
       std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
-      bool ring_ok = (rec_src.find("packet_ring") != std::string::npos &&
-                      rec_src.find("RecorderCommand::SaveReplay") != std::string::npos &&
-                      rec_src.find("\"Replay\"") != std::string::npos &&
-                      rec_src.find("packet_ring[i].timestamp_us <= win_start_us") !=
-                          std::string::npos);
+      bool ring_ok =
+          (rec_src.find("packet_ring") != std::string::npos &&
+           rec_src.find("RecorderCommand::SaveReplay") != std::string::npos &&
+           rec_src.find("\"Replay\"") != std::string::npos &&
+           rec_src.find("packet_ring[i].timestamp_us <= win_start_us") != std::string::npos);
       bool ipc_fix_ok = (ipc_src.find("replay_save_thread_") != std::string::npos &&
                          ipc_src.find("is_saving_replay_") != std::string::npos &&
                          ipc_src.find("if (cfg.replay_enabled)") != std::string::npos);
@@ -3339,11 +3339,11 @@ void run_all_devices_and_features_suite() {
       hooks_ok = ring_ok && ipc_fix_ok && vk_hook_ok && gl_hook_ok;
     }
 
-    check_cond(cmd_ok && payload_ok && idle_ok && toast_off_ok && shot_once && shot_reset &&
-                   hooks_ok,
-               "5.5 Instant Replay IPC, Ring Buffer & Vulkan/OpenGL Capture Hooks",
-               "Verified SaveReplay=6, replay_mode/replay_duration_sec, packet_ring, and "
-               "Vulkan/OpenGL Clean/HUD screenshot hooks");
+    check_cond(
+        cmd_ok && payload_ok && idle_ok && toast_off_ok && shot_once && shot_reset && hooks_ok,
+        "5.5 Instant Replay IPC, Ring Buffer & Vulkan/OpenGL Capture Hooks",
+        "Verified SaveReplay=6, replay_mode/replay_duration_sec, packet_ring, and "
+        "Vulkan/OpenGL Clean/HUD screenshot hooks");
   }
 
   // 5.6 Smart Color Alerts, Storage/Net HUD Formatting & GUI Controls
@@ -3366,7 +3366,7 @@ void run_all_devices_and_features_suite() {
     bool preset_31_ok = (cfg.metrics.size() == fpshud::kTotalMetricCount);
 
     fpshud::TelemetryData td{};
-    td.fps = 24.0f;           // Red (< 30)
+    td.fps = 24.0f;  // Red (< 30)
     td.fps_avg = 55.0f;
     td.fps_1pct_low = 20.0f;  // Red (< 25)
     td.frametime_ms = 36.0f;  // Red (> 33.3)
@@ -3404,12 +3404,12 @@ void run_all_devices_and_features_suite() {
     if (!rroot.empty()) {
       std::string ovl_src = read_text_file(rroot / "src" / "ui" / "overlay_ui.cpp");
       std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
-      bool smart_alerts_ok = (ovl_src.find("33.3f") != std::string::npos &&
-                              ovl_src.find("22.2f") != std::string::npos &&
-                              ovl_src.find("1500.0f") != std::string::npos &&
-                              ovl_src.find("DSK:") != std::string::npos &&
-                              ovl_src.find("NVME:") != std::string::npos &&
-                              ovl_src.find("NET:") != std::string::npos);
+      bool smart_alerts_ok =
+          (ovl_src.find("33.3f") != std::string::npos &&
+           ovl_src.find("22.2f") != std::string::npos &&
+           ovl_src.find("1500.0f") != std::string::npos &&
+           ovl_src.find("DSK:") != std::string::npos &&
+           ovl_src.find("NVME:") != std::string::npos && ovl_src.find("NET:") != std::string::npos);
       bool gui_controls_ok =
           (gui_src.find("Smart Color Alerts") != std::string::npos &&
            gui_src.find("KeybindTarget::SaveReplay") != std::string::npos &&

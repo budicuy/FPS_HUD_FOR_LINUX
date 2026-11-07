@@ -132,9 +132,9 @@ struct HudConfig {
   Keybind bind_screenshot{0, 68};
 
   // Instant Replay & Screenshot Settings
-  bool replay_enabled = false;     // Default OFF (0 MB RAM, 0% CPU/GPU overhead)
-  int replay_duration_sec = 30;    // 15, 30, 60, 120 seconds
-  bool screenshot_with_hud = false; // false = Clean Game (Tanpa HUD), true = With HUD (Dengan HUD)
+  bool replay_enabled = false;       // Default OFF (0 MB RAM, 0% CPU/GPU overhead)
+  int replay_duration_sec = 30;      // 15, 30, 60, 120 seconds
+  bool screenshot_with_hud = false;  // false = Clean Game (Tanpa HUD), true = With HUD (Dengan HUD)
 
   // Screen Recorder Settings
   // record_resolution: 0=Native (100%), 1=1440p, 2=1080p, 3=720p

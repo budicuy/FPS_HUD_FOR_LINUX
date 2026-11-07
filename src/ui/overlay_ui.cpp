@@ -366,7 +366,9 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       std::snprintf(sv.prefix, sizeof(sv.prefix), "NVME:");
       if (d.disk_temp_available) {
         std::snprintf(sv.number, sizeof(sv.number), "%d", d.disk_temp_c);
-        std::snprintf(sv.unit, sizeof(sv.unit), "\xC2\xB0" "C");
+        std::snprintf(sv.unit, sizeof(sv.unit),
+                      "\xC2\xB0"
+                      "C");
       } else {
         std::snprintf(sv.number, sizeof(sv.number), "N/A");
       }

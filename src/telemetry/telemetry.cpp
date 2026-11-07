@@ -512,8 +512,8 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
     std::lock_guard<std::mutex> lock(data_mutex_);
     if (mclk_mhz > 0) hw_data_.gpu_vram_clock_mhz = mclk_mhz;
     if (fan_pct >= 0) hw_data_.gpu_fan_pct = fan_pct;
-    int eff_clk = (hw_data_.gpu_vram_clock_mhz > 0) ? hw_data_.gpu_vram_clock_mhz
-                                                    : hw_data_.gpu_clock_mhz;
+    int eff_clk =
+        (hw_data_.gpu_vram_clock_mhz > 0) ? hw_data_.gpu_vram_clock_mhz : hw_data_.gpu_clock_mhz;
     if (eff_clk > 0) {
       float bus_bytes = (hw_data_.gpu_vram_total_gb >= 14.5f)
                             ? 32.0f
@@ -662,8 +662,7 @@ void TelemetryCollector::init_cpu_sensors() {
         }
       }
 
-      if (is_cpu_hwmon || std::strcmp(buf, "amd_energy") == 0 ||
-          std::strcmp(buf, "zenergy") == 0) {
+      if (is_cpu_hwmon || std::strcmp(buf, "amd_energy") == 0 || std::strcmp(buf, "zenergy") == 0) {
         if (cpu_hwmon_power_uw_path_.empty()) {
           fs::path p_avg = entry.path() / "power1_average";
           fs::path p_inp = entry.path() / "power1_input";
@@ -2679,7 +2678,8 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
   if (mclk_mhz > 0) {
     // Granular VRAM capacity -> bus width mapping across RDNA/GDDR6 tiers:
     // >= 20GB (7900 XT/XTX): 48B (384-bit) | 16GB (7800 XT/6800 XT): 32B (256-bit)
-    // 12GB (6700 XT/7700 XT): 24B (192-bit) | 6-10GB (6600/7600): 16B (128-bit) | <= 4GB: 8B (64-bit)
+    // 12GB (6700 XT/7700 XT): 24B (192-bit) | 6-10GB (6600/7600): 16B (128-bit) | <= 4GB: 8B
+    // (64-bit)
     float bus_bytes = 8.0f;
     if (vram_total_gb >= 19.5f)
       bus_bytes = 48.0f;

@@ -622,9 +622,9 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
     std::vector<uint8_t> shot_buf(static_cast<size_t>(uw) * uh * 4);
     g_gl.glReadPixels(0, 0, static_cast<GLsizei>(uw), static_cast<GLsizei>(uh), GL_BGRA,
                       GL_UNSIGNED_BYTE, shot_buf.data());
-    fpshud::RecorderController::instance().submit_screenshot(
-        shot_buf.data(), uw, uh, 0 /*BGRA*/, true /*flip_y*/,
-        fpshud::get_effective_record_dir(cfg));
+    fpshud::RecorderController::instance().submit_screenshot(shot_buf.data(), uw, uh, 0 /*BGRA*/,
+                                                             true /*flip_y*/,
+                                                             fpshud::get_effective_record_dir(cfg));
     if (g_gl.glBindFramebuffer && prev_read_fbo != 0) {
       g_gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prev_read_fbo));
     }
