@@ -14,6 +14,7 @@ fpshud_test
 
 # Generated files
 VkLayer_FPSHUD_overlay.json
+Testing/
 # Generated release artifacts and documentation scratch/plans
 dist/
 docs/
