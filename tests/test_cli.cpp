@@ -7,6 +7,7 @@
 #include "input_manager.hpp"
 #include "adaptive_vfr.hpp"
 #include "overlay_ui.hpp"
+#include "gui_menu.hpp"
 #include "imgui.h"
 
 #include <linux/input.h>
@@ -3350,6 +3351,7 @@ void run_all_devices_and_features_suite() {
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1920.0f, 1080.0f);
     unsigned char* pixels = nullptr;
     int w = 0, h = 0;
@@ -3388,9 +3390,11 @@ void run_all_devices_and_features_suite() {
 
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
+    fpshud::render_gui_menu(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
+    fpshud::render_gui_menu(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
     ImDrawData* dd = ImGui::GetDrawData();
     bool render_ok = (dd != nullptr && dd->TotalVtxCount > 0);
@@ -3406,12 +3410,17 @@ void run_all_devices_and_features_suite() {
                               ovl_src.find("DSK:") != std::string::npos &&
                               ovl_src.find("NVME:") != std::string::npos &&
                               ovl_src.find("NET:") != std::string::npos);
-      bool gui_controls_ok = (gui_src.find("Smart Color Alerts") != std::string::npos &&
-                              gui_src.find("KeybindTarget::SaveReplay") != std::string::npos &&
-                              gui_src.find("KeybindTarget::TakeScreenshot") != std::string::npos &&
-                              gui_src.find("[SAVE REPLAY]") != std::string::npos &&
-                              gui_src.find("[IMG] Take Screenshot") != std::string::npos &&
-                              gui_src.find("Clean Game") != std::string::npos);
+      bool gui_controls_ok =
+          (gui_src.find("Smart Color Alerts") != std::string::npos &&
+           gui_src.find("KeybindTarget::SaveReplay") != std::string::npos &&
+           gui_src.find("KeybindTarget::TakeScreenshot") != std::string::npos &&
+           gui_src.find("[SAVE REPLAY]") != std::string::npos &&
+           gui_src.find("[IMG] Take Screenshot") != std::string::npos &&
+           gui_src.find("Clean Game") != std::string::npos &&
+           gui_src.find("##SensorsScrollList") != std::string::npos &&
+           gui_src.find("##Col3ScrollSettings") != std::string::npos &&
+           gui_src.find("##SensorsSplitGrid") == std::string::npos &&
+           gui_src.find("if (cfg.active_preset == \"custom\")") != std::string::npos);
       ui_src_ok = smart_alerts_ok && gui_controls_ok;
     }
 

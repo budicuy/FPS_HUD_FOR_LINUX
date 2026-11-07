@@ -297,7 +297,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     // ====================================================================
     // 2. Top Header Bar: Presets on Left + Live FPS Waveform on Right
     // ====================================================================
-    float presets_col_w = 480.0f * scale;
+    float presets_col_w = 395.0f * scale;
     if (ImGui::BeginTable("##TopHeaderBar", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("PresetsCol", ImGuiTableColumnFlags_WidthFixed, presets_col_w);
       ImGui::TableSetupColumn("GraphCol", ImGuiTableColumnFlags_WidthStretch);
@@ -330,13 +330,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       draw_preset_btn("Advance", "advance", apply_preset_advance);
       ImGui::SameLine(0.0f, 5.0f * scale);
       draw_preset_btn("Custom", "custom", apply_preset_custom);
-      ImGui::SameLine(0.0f, 5.0f * scale);
-      if (ImGui::Button("Save", ImVec2(58.0f * scale, 28.0f * scale))) {
-        cfg.active_preset = "custom";
-        if (save_custom_preset_to_disk(cfg)) {
-          set_status_message("Tersimpan ke Custom!");
-        }
-      }
 
       ImGui::TableSetColumnIndex(1);
       const auto& telemetry = get_telemetry();
@@ -354,10 +347,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     }
 
     // ====================================================================
-    // 3. Three-Column Split View Dashboard
-    //    Col 1 (Left ~32%):   HUD Style, Typography, Colors & Hotkeys
-    //    Col 2 (Center ~36%): 25 Hardware Telemetry Sensors Grid
-    //    Col 3 (Right ~32%):  Screen Recorder & Benchmark Hub
+    // 3. Three-Column Scrollable Dashboard
+    //    Col 1 (Left ~32%):   HUD Style, Typography, Colors & All 6 Hotkeys
+    //    Col 2 (Center ~36%): Sticky Header + Full-Width Scrollable 31 Sensors
+    //    Col 3 (Right ~32%):  Sticky Quick Actions + Scrollable Capture Settings
     // ====================================================================
     float footer_height = 42.0f * scale;
     float panel_height = ImGui::GetContentRegionAvail().y - footer_height;
@@ -368,12 +361,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     float col3_w = total_avail_w - col1_w - col2_w - (2.0f * col_gap);
 
     // --------------------------------------------------------------------
-    // COLUMN 1: HUD Style, Appearance, Typography & Hotkeys
+    // COLUMN 1: HUD Style, Appearance, Typography & All 6 Hotkeys
     // --------------------------------------------------------------------
     ImGui::BeginChild("##Col1_HudStyle", ImVec2(col1_w, panel_height), true);
 
     if (ImGui::BeginTable("##Col1FormTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-      ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 125.0f * scale);
+      ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 120.0f * scale);
       ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
 
       // Section 1: Layout & Grouping
@@ -415,7 +408,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("HUD Display");
       ImGui::TableSetColumnIndex(1);
       ImGui::Checkbox("Show HUD", &cfg.hud_visible);
-      ImGui::SameLine(0.0f, 14.0f * scale);
+      ImGui::SameLine(0.0f, 12.0f * scale);
       ImGui::Checkbox("Mini FT Graph", &cfg.hud_graph_enabled);
 
       // Section 2: Typography & Scaling
@@ -584,7 +577,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Color Coding");
       ImGui::TableSetColumnIndex(1);
       ImGui::Checkbox("Category Colors", &cfg.category_colors_enabled);
-      ImGui::SameLine(0.0f, 12.0f * scale);
       ImGui::Checkbox("Smart Color Alerts (Yellow/Red)", &cfg.thermal_warnings_enabled);
 
       ImGui::TableNextRow();
@@ -592,12 +584,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Label Brightness");
       ImGui::TableSetColumnIndex(1);
-      ImGui::Checkbox("Dim Indikator Teks (Unit & Sub-Label Redup)", &cfg.dim_labels_enabled);
+      ImGui::Checkbox("Dim Unit & Sub-Labels (Redup)", &cfg.dim_labels_enabled);
 
-      // Section 4: Hotkeys
+      // Section 4: Unified Hotkeys (All 6 Shortcuts)
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      draw_section_header("Hotkeys");
+      draw_section_header("Hotkeys (Pintasan)");
       ImGui::TableSetColumnIndex(1);
       draw_section_header("");
 
@@ -609,10 +601,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
                        gui_default_hint, scale);
       draw_keybind_row("HUD Toggle Key", KeybindTarget::ToggleHud, cfg.bind_toggle_hud, nullptr,
                        scale);
+      draw_keybind_row("Record Key", KeybindTarget::ToggleRecord, cfg.bind_record, nullptr, scale);
       draw_keybind_row("Replay Key", KeybindTarget::SaveReplay, cfg.bind_save_replay, nullptr,
                        scale);
       draw_keybind_row("Screenshot Key", KeybindTarget::TakeScreenshot, cfg.bind_screenshot,
                        nullptr, scale);
+      draw_keybind_row("Bench Key", KeybindTarget::ToggleBenchmark, cfg.bind_benchmark, nullptr,
+                       scale);
 
       ImGui::EndTable();
     }
@@ -622,14 +617,20 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::SameLine(0.0f, col_gap);
 
     // --------------------------------------------------------------------
-    // COLUMN 2: 25 Hardware Telemetry Sensors Grid
+    // COLUMN 2: 31 Hardware Telemetry Sensors (Sticky Header + 1-Col Scroll)
     // --------------------------------------------------------------------
     ImGui::BeginChild("##Col2_HardwareSensors", ImVec2(col2_w, panel_height), true);
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImVec4(0.38f, 0.84f, 1.0f, 1.0f), "Hardware Sensors (%zu/%zu Active)",
                        cfg.metrics.size(), kTotalMetricCount);
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 150.0f * scale);
+    float filter_btns_w = 148.0f * scale;
+    float avail_hdr_x = ImGui::GetContentRegionAvail().x;
+    if (avail_hdr_x > filter_btns_w) {
+      ImGui::SameLine(ImGui::GetCursorPosX() + avail_hdr_x - filter_btns_w);
+    } else {
+      ImGui::SameLine();
+    }
     if (ImGui::SmallButton("All")) {
       apply_preset_advance(cfg);
       cfg.active_preset = "custom";
@@ -721,76 +722,71 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_net, sizeof(b_net), "%.1fD / %.1fU MB/s", data.net_rx_mbs, data.net_tx_mbs);
     }
 
-    if (ImGui::BeginTable("##SensorsSplitGrid", 2,
-                          ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
-      ImGui::TableNextRow();
+    // Full-width 1-column scrollable sensor list (prevents text/value collision)
+    ImGui::BeginChild("##SensorsScrollList", ImVec2(0.0f, 0.0f), false);
 
-      // Column 1: FPS + CPU + System
-      ImGui::TableSetColumnIndex(0);
-      ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.0f, 1.0f), "FPS & Frame Timing");
-      draw_metric_checkbox_row(cfg, MetricType::FPS, "FPS Counter", b_fps);
-      draw_metric_checkbox_row(cfg, MetricType::FpsAvg, "FPS Average", b_avg);
-      draw_metric_checkbox_row(cfg, MetricType::Fps1Low, "FPS 1% Low", b_1l);
-      draw_metric_checkbox_row(cfg, MetricType::Fps01Low, "FPS 0.1% Low", b_01l);
-      draw_metric_checkbox_row(cfg, MetricType::FrameTimes, "Frame Time", b_ft);
+    ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.0f, 1.0f), "FPS & Frame Timing");
+    draw_metric_checkbox_row(cfg, MetricType::FPS, "FPS Counter", b_fps);
+    draw_metric_checkbox_row(cfg, MetricType::FpsAvg, "FPS Average", b_avg);
+    draw_metric_checkbox_row(cfg, MetricType::Fps1Low, "FPS 1% Low", b_1l);
+    draw_metric_checkbox_row(cfg, MetricType::Fps01Low, "FPS 0.1% Low", b_01l);
+    draw_metric_checkbox_row(cfg, MetricType::FrameTimes, "Frame Time", b_ft);
 
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::TextColored(ImVec4(0.0f, 0.90f, 1.0f, 1.0f), "CPU (%s)", data.cpu_name);
-      draw_metric_checkbox_row(cfg, MetricType::CpuLoad, "CPU Load", b_cload);
-      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreLoad, "All Core Load", b_all_cload);
-      draw_metric_checkbox_row(cfg, MetricType::CpuClock, "CPU Clock", b_cclk);
-      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreClock, "All Core Clock", b_all_cclk);
-      draw_metric_checkbox_row(cfg, MetricType::CpuTemp, "CPU Temp", b_ctmp);
-      draw_metric_checkbox_row(cfg, MetricType::CpuWatt, "CPU Power", b_cpwr);
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.46f, 0.88f, 0.0f, 1.0f), "GPU (%s)", data.gpu_name);
+    draw_metric_checkbox_row(cfg, MetricType::GpuLoad, "GPU Load", b_gload);
+    draw_metric_checkbox_row(cfg, MetricType::GpuClock, "GPU Clock", b_gclk);
+    draw_metric_checkbox_row(cfg, MetricType::GpuVramClock, "GPU VRAM Clock", b_gvclk);
+    draw_metric_checkbox_row(cfg, MetricType::GpuVram, "GPU VRAM", b_gvram);
+    draw_metric_checkbox_row(cfg, MetricType::GpuBandwidth, "GPU Bandwidth", b_gbw);
+    draw_metric_checkbox_row(cfg, MetricType::GpuTemp, "GPU Temp", b_gtmp);
+    draw_metric_checkbox_row(cfg, MetricType::GpuFan, "GPU Fan", b_gfan);
+    draw_metric_checkbox_row(cfg, MetricType::GpuWatt, "GPU Power", b_gpwr);
 
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::TextColored(ImVec4(0.75f, 0.82f, 0.90f, 1.0f), "System");
-      draw_metric_checkbox_row(cfg, MetricType::EngineApi, "Render API", b_api);
-      draw_metric_checkbox_row(cfg, MetricType::GpuModel, "GPU Model", data.gpu_name);
-      draw_metric_checkbox_row(cfg, MetricType::CpuModel, "CPU Model", data.cpu_name);
-      draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock", data.local_time_str);
-      draw_metric_checkbox_row(cfg, MetricType::DiskIo, "Disk Read/Write", b_dsk_io);
-      draw_metric_checkbox_row(cfg, MetricType::DiskTemp, "Disk Temp (NVMe)", b_dsk_tmp);
-      draw_metric_checkbox_row(cfg, MetricType::NetSpeed, "Network Speed", b_net);
-      draw_metric_checkbox_row(cfg, MetricType::Battery, "Battery & Power", b_bat,
-                               data.battery_available,
-                               "(Disabled - No Battery Detected / Desktop PC)");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.0f, 0.90f, 1.0f, 1.0f), "CPU (%s)", data.cpu_name);
+    draw_metric_checkbox_row(cfg, MetricType::CpuLoad, "CPU Load", b_cload);
+    draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreLoad, "All Core Load", b_all_cload);
+    draw_metric_checkbox_row(cfg, MetricType::CpuClock, "CPU Clock", b_cclk);
+    draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreClock, "All Core Clock", b_all_cclk);
+    draw_metric_checkbox_row(cfg, MetricType::CpuTemp, "CPU Temp", b_ctmp);
+    draw_metric_checkbox_row(cfg, MetricType::CpuWatt, "CPU Power", b_cpwr);
 
-      // Column 2: GPU + Memory (RAM)
-      ImGui::TableSetColumnIndex(1);
-      ImGui::TextColored(ImVec4(0.46f, 0.88f, 0.0f, 1.0f), "GPU (%s)", data.gpu_name);
-      draw_metric_checkbox_row(cfg, MetricType::GpuLoad, "GPU Load", b_gload);
-      draw_metric_checkbox_row(cfg, MetricType::GpuClock, "GPU Clock", b_gclk);
-      draw_metric_checkbox_row(cfg, MetricType::GpuVramClock, "GPU VRAM Clock", b_gvclk);
-      draw_metric_checkbox_row(cfg, MetricType::GpuVram, "GPU VRAM", b_gvram);
-      draw_metric_checkbox_row(cfg, MetricType::GpuBandwidth, "GPU Bandwidth", b_gbw);
-      draw_metric_checkbox_row(cfg, MetricType::GpuTemp, "GPU Temp", b_gtmp);
-      draw_metric_checkbox_row(cfg, MetricType::GpuFan, "GPU Fan", b_gfan);
-      draw_metric_checkbox_row(cfg, MetricType::GpuWatt, "GPU Power", b_gpwr);
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.86f, 0.53f, 1.0f, 1.0f), "Memory (RAM)");
+    draw_metric_checkbox_row(cfg, MetricType::Ram, "System RAM", b_ram);
+    draw_metric_checkbox_row(cfg, MetricType::GameRam, "Game RAM", b_gram);
+    draw_metric_checkbox_row(cfg, MetricType::SwapRam, "Swap / ZRAM", b_swap);
+    draw_metric_checkbox_row(cfg, MetricType::MemPressure, "Mem Pressure", b_psi);
 
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::TextColored(ImVec4(0.86f, 0.53f, 1.0f, 1.0f), "Memory (RAM)");
-      draw_metric_checkbox_row(cfg, MetricType::Ram, "System RAM", b_ram);
-      draw_metric_checkbox_row(cfg, MetricType::GameRam, "Game RAM", b_gram);
-      draw_metric_checkbox_row(cfg, MetricType::SwapRam, "Swap / ZRAM", b_swap);
-      draw_metric_checkbox_row(cfg, MetricType::MemPressure, "Mem Pressure", b_psi);
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.75f, 0.82f, 0.90f, 1.0f), "System, Storage & Network");
+    draw_metric_checkbox_row(cfg, MetricType::EngineApi, "Render API", b_api);
+    draw_metric_checkbox_row(cfg, MetricType::GpuModel, "GPU Model", data.gpu_name);
+    draw_metric_checkbox_row(cfg, MetricType::CpuModel, "CPU Model", data.cpu_name);
+    draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock", data.local_time_str);
+    draw_metric_checkbox_row(cfg, MetricType::DiskIo, "Disk Read/Write", b_dsk_io);
+    draw_metric_checkbox_row(cfg, MetricType::DiskTemp, "Disk Temp (NVMe)", b_dsk_tmp);
+    draw_metric_checkbox_row(cfg, MetricType::NetSpeed, "Network Speed", b_net);
+    draw_metric_checkbox_row(cfg, MetricType::Battery, "Battery & Power", b_bat,
+                             data.battery_available,
+                             "(Disabled - No Battery Detected / Desktop PC)");
 
-      ImGui::EndTable();
-    }
-
+    ImGui::EndChild();
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, col_gap);
 
     // --------------------------------------------------------------------
-    // COLUMN 3: Screen Recorder & Benchmark Hub
+    // COLUMN 3: Quick Actions & Capture / Recorder Settings
     // --------------------------------------------------------------------
     ImGui::BeginChild("##Col3_RecorderHub", ImVec2(col3_w, panel_height), true);
 
-    draw_section_header("Screen Recorder & Tools", ImVec4(0.38f, 0.84f, 1.0f, 1.0f));
+    draw_section_header("Quick Actions & Capture Hub", ImVec4(0.38f, 0.84f, 1.0f, 1.0f));
 
     // Action Buttons Row 1: Primary Record Trigger (Full Width)
     float btn_row_w = ImGui::GetContentRegionAvail().x;
@@ -799,6 +795,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     bool is_rec = RecorderController::instance().is_recording();
     std::string rec_kb_str = format_keybind(cfg.bind_record);
     std::string bench_kb_str = format_keybind(cfg.bind_benchmark);
+    std::string shot_kb = format_keybind(cfg.bind_screenshot);
+    std::string rep_kb = format_keybind(cfg.bind_save_replay);
+
     if (!is_rec) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.58f, 0.32f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.70f, 0.38f, 1.0f));
@@ -825,7 +824,26 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::PopStyleColor(2);
     }
 
-    // Action Buttons Row 2: Secondary Tools (Benchmark & Open Folder)
+    // Action Buttons Row 2: Screenshot & Save Replay
+    char take_shot_lbl[64];
+    std::snprintf(take_shot_lbl, sizeof(take_shot_lbl), "[IMG] Take Screenshot (%s)",
+                  shot_kb.c_str());
+    if (ImGui::Button(take_shot_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
+      RecorderController::instance().request_screenshot();
+      set_status_message("Screenshot dijadwalkan pada frame berikutnya!");
+    }
+
+    ImGui::SameLine(0.0f, 6.0f * scale);
+    ImGui::BeginDisabled(!cfg.replay_enabled || is_rec);
+    char save_rep_lbl[64];
+    std::snprintf(save_rep_lbl, sizeof(save_rep_lbl), "[SAVE REPLAY] (%s)", rep_kb.c_str());
+    if (ImGui::Button(save_rep_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
+      RecorderController::instance().trigger_save_replay();
+      set_status_message("Menyimpan klip Instant Replay...");
+    }
+    ImGui::EndDisabled();
+
+    // Action Buttons Row 3: Benchmark & Open Folder
     if (!data.benchmark_active) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.45f, 0.12f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.68f, 0.55f, 0.16f, 1.0f));
@@ -858,16 +876,89 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::Spacing();
     ImGui::Separator();
 
-    if (is_rec) {
-      ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.30f, 1.0f),
-                         "[Pengaturan dikunci saat perekaman berjalan]");
+    // Scrollable settings area inside Column 3
+    ImGui::BeginChild("##Col3ScrollSettings", ImVec2(0.0f, 0.0f), false);
+
+    // Screenshot settings remain unlocked even during video recording
+    if (ImGui::BeginTable("##Col3ScreenshotTable", 2, ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f * scale);
+      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      draw_section_header("Screenshot");
+      ImGui::TableSetColumnIndex(1);
+      draw_section_header("");
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Capture Mode");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(-1.0f);
+      const char* shot_modes[] = {"Clean Game (Tanpa HUD)", "With HUD (Dengan HUD)"};
+      int shot_mode_idx = cfg.screenshot_with_hud ? 1 : 0;
+      if (ImGui::Combo("##ScreenshotMode", &shot_mode_idx, shot_modes, IM_ARRAYSIZE(shot_modes))) {
+        cfg.screenshot_with_hud = (shot_mode_idx == 1);
+      }
+
+      ImGui::EndTable();
     }
 
-    // Settings Table inside Column 3 (disabled while recording is active)
+    if (is_rec) {
+      ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.30f, 1.0f),
+                         "[Pengaturan video dikunci saat perekaman berjalan]");
+    }
+
+    // Video Recorder & Instant Replay Settings (locked while recording is active)
     ImGui::BeginDisabled(is_rec);
     if (ImGui::BeginTable("##Col3RecorderTable", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f * scale);
       ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+
+      // Instant Replay Section
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      draw_section_header("Instant Replay");
+      ImGui::TableSetColumnIndex(1);
+      draw_section_header("");
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Replay Buffer");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(-1.0f);
+      const char* replay_items[] = {"OFF (Disabled - 0 MB RAM)", "15 Seconds", "30 Seconds",
+                                    "60 Seconds", "120 Seconds"};
+      int replay_idx = 0;
+      if (cfg.replay_enabled) {
+        if (cfg.replay_duration_sec <= 15)
+          replay_idx = 1;
+        else if (cfg.replay_duration_sec <= 30)
+          replay_idx = 2;
+        else if (cfg.replay_duration_sec <= 60)
+          replay_idx = 3;
+        else
+          replay_idx = 4;
+      }
+      if (ImGui::Combo("##ReplayModeCombo", &replay_idx, replay_items,
+                       IM_ARRAYSIZE(replay_items))) {
+        if (replay_idx == 0) {
+          cfg.replay_enabled = false;
+        } else {
+          cfg.replay_enabled = true;
+          const int durs[] = {0, 15, 30, 60, 120};
+          cfg.replay_duration_sec = durs[replay_idx];
+        }
+      }
+
+      // Screen Recorder (Video & Audio) Section
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      draw_section_header("Recorder Settings");
+      ImGui::TableSetColumnIndex(1);
+      draw_section_header("");
 
       // Resolution
       ImGui::TableNextRow();
@@ -978,11 +1069,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items,
                    IM_ARRAYSIZE(audio_items));
 
-      // Interactive Keybindings Section
-      draw_keybind_row("Record Key", KeybindTarget::ToggleRecord, cfg.bind_record, nullptr, scale);
-      draw_keybind_row("Bench Key", KeybindTarget::ToggleBenchmark, cfg.bind_benchmark, nullptr,
-                       scale);
-
       // Save Folder Path Display
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -991,91 +1077,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TableSetColumnIndex(1);
       ImGui::AlignTextToFramePadding();
       ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.95f, 1.0f), "%s", cur_dir.c_str());
-
-      // Instant Replay Section
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      draw_section_header("Instant Replay");
-      ImGui::TableSetColumnIndex(1);
-      draw_section_header("");
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Replay Buffer");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      const char* replay_items[] = {"OFF (Disabled - 0 MB RAM)", "15 Seconds", "30 Seconds",
-                                    "60 Seconds", "120 Seconds"};
-      int replay_idx = 0;
-      if (cfg.replay_enabled) {
-        if (cfg.replay_duration_sec <= 15)
-          replay_idx = 1;
-        else if (cfg.replay_duration_sec <= 30)
-          replay_idx = 2;
-        else if (cfg.replay_duration_sec <= 60)
-          replay_idx = 3;
-        else
-          replay_idx = 4;
-      }
-      if (ImGui::Combo("##ReplayModeCombo", &replay_idx, replay_items,
-                       IM_ARRAYSIZE(replay_items))) {
-        if (replay_idx == 0) {
-          cfg.replay_enabled = false;
-        } else {
-          cfg.replay_enabled = true;
-          const int durs[] = {0, 15, 30, 60, 120};
-          cfg.replay_duration_sec = durs[replay_idx];
-        }
-      }
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Save Clip");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::BeginDisabled(!cfg.replay_enabled);
-      std::string rep_kb = format_keybind(cfg.bind_save_replay);
-      char save_rep_lbl[64];
-      std::snprintf(save_rep_lbl, sizeof(save_rep_lbl), "[SAVE REPLAY] (%s)", rep_kb.c_str());
-      if (ImGui::Button(save_rep_lbl, ImVec2(-1.0f, 26.0f * scale))) {
-        RecorderController::instance().trigger_save_replay();
-        set_status_message("Menyimpan klip Instant Replay...");
-      }
-      ImGui::EndDisabled();
-
-      // Screenshot Section
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      draw_section_header("Screenshot");
-      ImGui::TableSetColumnIndex(1);
-      draw_section_header("");
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Capture Mode");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      const char* shot_modes[] = {"Clean Game (Tanpa HUD)", "With HUD (Dengan HUD)"};
-      int shot_mode_idx = cfg.screenshot_with_hud ? 1 : 0;
-      if (ImGui::Combo("##ScreenshotMode", &shot_mode_idx, shot_modes, IM_ARRAYSIZE(shot_modes))) {
-        cfg.screenshot_with_hud = (shot_mode_idx == 1);
-      }
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Snapshot");
-      ImGui::TableSetColumnIndex(1);
-      std::string shot_kb = format_keybind(cfg.bind_screenshot);
-      char take_shot_lbl[64];
-      std::snprintf(take_shot_lbl, sizeof(take_shot_lbl), "[IMG] Take Screenshot (%s)",
-                    shot_kb.c_str());
-      if (ImGui::Button(take_shot_lbl, ImVec2(-1.0f, 26.0f * scale))) {
-        RecorderController::instance().request_screenshot();
-        set_status_message("Screenshot dijadwalkan pada frame berikutnya!");
-      }
 
       ImGui::EndTable();
     }
@@ -1091,14 +1092,21 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     }
 
     ImGui::EndChild();
+    ImGui::EndChild();
 
     // ====================================================================
-    // 4. Bottom Action Bar
+    // 4. Bottom Action Bar (Unified Save Configuration + Custom Preset)
     // ====================================================================
     ImGui::Separator();
-    if (ImGui::Button("Save Configuration", ImVec2(185.0f * scale, 28.0f * scale))) {
-      if (save_config_to_disk(cfg)) {
-        set_status_message("Tersimpan ke config.ini");
+    if (ImGui::Button("Save Configuration", ImVec2(195.0f * scale, 28.0f * scale))) {
+      bool ok = save_config_to_disk(cfg);
+      if (cfg.active_preset == "custom") {
+        ok = save_custom_preset_to_disk(cfg) && ok;
+      }
+      if (ok) {
+        set_status_message(cfg.active_preset == "custom"
+                               ? "Tersimpan ke config.ini & custom_preset.ini"
+                               : "Tersimpan ke config.ini");
       }
     }
     ImGui::SameLine();
