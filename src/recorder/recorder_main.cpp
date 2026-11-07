@@ -814,12 +814,11 @@ int main(int argc, char* argv[]) {
   int last_src_w = 0, last_src_h = 0;
 
   auto frame_interval = std::chrono::microseconds(1000000 / target_fps);
-  auto next_frame_time = std::chrono::steady_clock::now();
-  int64_t next_pts = 0;
+  int64_t last_encoded_pts = -1;
 
   auto encode_frame_to_stream = [&](int64_t pts) {
     vframe->pts = pts;
-    video_frame_idx.store(pts, std::memory_order_relaxed);
+    video_frame_idx.store(pts + 1, std::memory_order_relaxed);
     has_new_frame = false;
 
     if (is_vaapi_encoder && hw_frame) {
@@ -854,16 +853,17 @@ int main(int argc, char* argv[]) {
   while (g_running.load(std::memory_order_relaxed)) {
     struct timeval sel_tv{};
     if (has_received_game_frame) {
+      // Watchdog deadline: wake up if no frame arrives after 1.5 frame intervals from
+      // last_encoded_pts
+      auto deadline = session_start + (last_encoded_pts + 1) * frame_interval + frame_interval / 2;
       auto now = std::chrono::steady_clock::now();
-      auto wait_deadline = next_frame_time + frame_interval / 2;
-      if (wait_deadline > now) {
-        auto diff =
-            std::chrono::duration_cast<std::chrono::microseconds>(wait_deadline - now).count();
+      if (deadline > now) {
+        auto diff = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
         sel_tv.tv_sec = static_cast<long>(diff / 1000000);
         sel_tv.tv_usec = static_cast<long>(diff % 1000000);
       } else {
         sel_tv.tv_sec = 0;
-        sel_tv.tv_usec = 0;
+        sel_tv.tv_usec = 1000;  // 1ms
       }
     } else {
       sel_tv.tv_sec = 0;
@@ -887,9 +887,6 @@ int main(int argc, char* argv[]) {
       if (in_hdr.is_valid()) {
         auto cmd = static_cast<fpshud::RecorderCommand>(in_hdr.command);
         if (cmd == fpshud::RecorderCommand::StopRecord) {
-          if (has_new_frame) {
-            encode_frame_to_stream(next_pts++);
-          }
           g_running.store(false, std::memory_order_relaxed);
           break;
         } else if (cmd == fpshud::RecorderCommand::SendFrame) {
@@ -936,50 +933,71 @@ int main(int argc, char* argv[]) {
                   continue;
                 }
 
-                av_frame_make_writable(vframe);
-                if (notify.flip_y) {
-                  const uint8_t* src_slice[1] = {src +
-                                                 static_cast<size_t>(notify.height - 1) * stride};
-                  int src_stride[1] = {-stride};
-                  sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                            vframe->linesize);
-                } else {
-                  const uint8_t* src_slice[1] = {src};
-                  int src_stride[1] = {stride};
-                  sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                            vframe->linesize);
-                }
-
-                has_new_frame = true;
                 if (!has_received_game_frame) {
                   has_received_game_frame = true;
                   g_has_received_game_frame.store(true, std::memory_order_relaxed);
                   session_start = std::chrono::steady_clock::now();
-                  next_frame_time = session_start;
-                  next_pts = 0;
-                }
+                  last_encoded_pts = 0;
 
-                auto now = std::chrono::steady_clock::now();
-                int64_t target_pts =
-                    std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
-                        .count() /
-                    frame_interval.count();
-                // If game fell behind real-time (e.g. 50 FPS on 60 FPS target), duplicate previous
-                // frame up to target_pts to maintain exact 1:1 real-time audio sync
-                if (target_pts > next_pts + 4) {
-                  int64_t missed_frames = target_pts - next_pts;
-                  next_pts += missed_frames;
-                  next_frame_time = session_start + next_pts * frame_interval;
-                  encode_frame_to_stream(next_pts++);
-                  next_frame_time = session_start + next_pts * frame_interval;
-                } else {
-                  while (next_pts < target_pts && g_running.load(std::memory_order_relaxed)) {
-                    encode_frame_to_stream(next_pts++);
-                    next_frame_time = session_start + next_pts * frame_interval;
+                  av_frame_make_writable(vframe);
+                  if (notify.flip_y) {
+                    const uint8_t* src_slice[1] = {src +
+                                                   static_cast<size_t>(notify.height - 1) * stride};
+                    int src_stride[1] = {-stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
+                  } else {
+                    const uint8_t* src_slice[1] = {src};
+                    int src_stride[1] = {stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
                   }
-                  if (next_pts <= target_pts) {
-                    encode_frame_to_stream(next_pts++);
-                    next_frame_time = session_start + next_pts * frame_interval;
+                  encode_frame_to_stream(0);
+                } else {
+                  auto now = std::chrono::steady_clock::now();
+                  int64_t elapsed_us =
+                      std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
+                          .count();
+                  int64_t target_pts =
+                      (elapsed_us + frame_interval.count() / 2) / frame_interval.count();
+
+                  // If game fell behind real-time (e.g. 50 FPS on 60 FPS target), duplicate
+                  // previous frame up to target_pts BEFORE overwriting vframe with the new frame!
+                  if (target_pts > last_encoded_pts + 1) {
+                    int64_t missed_frames = target_pts - (last_encoded_pts + 1);
+                    if (missed_frames > 4) {
+                      // Cap lag catch-up if game was paused or loading (> 4 frame intervals)
+                      last_encoded_pts = target_pts - 1;
+                    } else {
+                      while (last_encoded_pts + 1 < target_pts &&
+                             g_running.load(std::memory_order_relaxed)) {
+                        last_encoded_pts++;
+                        encode_frame_to_stream(last_encoded_pts);
+                      }
+                    }
+                  }
+
+                  // Scale newly arrived game frame into vframe
+                  av_frame_make_writable(vframe);
+                  if (notify.flip_y) {
+                    const uint8_t* src_slice[1] = {src +
+                                                   static_cast<size_t>(notify.height - 1) * stride};
+                    int src_stride[1] = {-stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
+                  } else {
+                    const uint8_t* src_slice[1] = {src};
+                    int src_stride[1] = {stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
+                  }
+
+                  // If target_pts is fresh (next slot or greater), encode the new frame!
+                  // If target_pts <= last_encoded_pts (game > 60 FPS), vframe is updated
+                  // with latest pixels for the next slot without emitting an extra frame.
+                  if (target_pts > last_encoded_pts) {
+                    last_encoded_pts = target_pts;
+                    encode_frame_to_stream(last_encoded_pts);
                   }
                 }
               }
@@ -998,24 +1016,20 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    // Emit duplicate frame only if the game paused or hitched (> 1.5 frame intervals without a new
-    // frame)
-    if (has_received_game_frame) {
+    // Watchdog fallback: if game paused, frozen, or stopped sending frames (> 1.5 intervals),
+    // emit duplicate frames locked to real time to prevent video from falling behind audio
+    if (has_received_game_frame && ret == 0) {
       auto cur_time = std::chrono::steady_clock::now();
-      // Cap lag catch-up if game was paused or loading (> 4 frame intervals) to avoid massive
-      // burst, and advance next_pts by missed_frames so video PTS stays locked 1:1 with real time
-      // and audio!
-      if (cur_time - next_frame_time > frame_interval * 4) {
-        int64_t missed_frames =
-            std::chrono::duration_cast<std::chrono::microseconds>(cur_time - next_frame_time)
-                .count() /
-            frame_interval.count();
-        next_pts += missed_frames;
-        next_frame_time = session_start + next_pts * frame_interval;
+      int64_t target_pts =
+          (std::chrono::duration_cast<std::chrono::microseconds>(cur_time - session_start).count() +
+           frame_interval.count() / 2) /
+          frame_interval.count();
+      if (target_pts > last_encoded_pts + 4) {
+        last_encoded_pts = target_pts - 1;
       }
-      while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
-        encode_frame_to_stream(next_pts++);
-        next_frame_time = session_start + next_pts * frame_interval;
+      while (last_encoded_pts < target_pts && g_running.load(std::memory_order_relaxed)) {
+        last_encoded_pts++;
+        encode_frame_to_stream(last_encoded_pts);
       }
     }
   }

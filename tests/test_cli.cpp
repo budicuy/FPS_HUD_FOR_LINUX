@@ -2790,8 +2790,9 @@ void run_all_devices_and_features_suite() {
   bool high_fps_guard_ok = false;
   if (!rroot.empty()) {
     std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
-    // Verify next_pts is bounded by target_pts to prevent over-encoding when game runs >60 FPS
-    bool has_pts_bound = (rec_src.find("next_pts <= target_pts") != std::string::npos);
+    // Verify PTS pacing is bounded by target_pts to prevent over-encoding when game runs >60 FPS
+    bool has_pts_bound = (rec_src.find("target_pts > last_encoded_pts") != std::string::npos ||
+                          rec_src.find("next_pts <= target_pts") != std::string::npos);
     // Verify target_fps is clamped to prevent division by zero or malformed rates
     bool has_fps_clamp = (rec_src.find("std::clamp") != std::string::npos &&
                           rec_src.find("start_cfg.fps") != std::string::npos);
@@ -2800,8 +2801,8 @@ void run_all_devices_and_features_suite() {
   check_cond(
       high_fps_guard_ok, "4.8 High-FPS Over-Encoding & Pacing Guard",
       high_fps_guard_ok
-          ? "Guarded PTS pacing (next_pts <= target_pts) and clamped target_fps verified"
-          : "Failed: Missing next_pts <= target_pts guard or start_cfg.fps clamp in recorder");
+          ? "Guarded PTS pacing (target_pts > last_encoded_pts) and clamped target_fps verified"
+          : "Failed: Missing target_pts pacing guard or start_cfg.fps clamp in recorder");
 
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
