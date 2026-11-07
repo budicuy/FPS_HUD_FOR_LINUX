@@ -2912,6 +2912,19 @@ void run_all_devices_and_features_suite() {
                  ? "AdaptiveVfrController integrated in Vulkan and OpenGL present loops"
                  : "Failed: Missing AdaptiveVfrController present hook in Vulkan or OpenGL layer");
 
+  // 5.0.4 In-Game GUI Dedicated Experimental Menu Isolation
+  bool gui_experimental_ok = false;
+  if (!rroot.empty()) {
+    std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+    bool has_exp_menu = (gui_src.find("draw_experimental_menu") != std::string::npos);
+    bool has_exp_menu_item = (gui_src.find("\"Experimental\"") != std::string::npos);
+    gui_experimental_ok = has_exp_menu && has_exp_menu_item;
+  }
+  check_cond(gui_experimental_ok, "5.0.4 In-Game GUI Dedicated Experimental Menu Isolation",
+             gui_experimental_ok
+                 ? "Experimental features isolated under MenuBar 'Experimental' menu"
+                 : "Failed: Missing dedicated Experimental menu item in GUI MenuBar");
+
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

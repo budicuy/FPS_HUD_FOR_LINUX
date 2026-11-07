@@ -1,4 +1,5 @@
 #include "gui_menu.hpp"
+#include "adaptive_vfr.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -236,6 +237,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImGui::MenuItem("Show Mini Frametime Graph on HUD", nullptr, &cfg.hud_graph_enabled);
         ImGui::MenuItem("Category Color Coding", nullptr, &cfg.category_colors_enabled);
         ImGui::MenuItem("Thermal & Load Warnings", nullptr, &cfg.thermal_warnings_enabled);
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Experimental")) {
+        fpshud::experimental::draw_experimental_menu(cfg);
         ImGui::EndMenu();
       }
       ImGui::EndMenuBar();
@@ -803,6 +808,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         cfg.record_fps = (current_fps_idx == 1)
                              ? 30
                              : ((current_fps_idx == 2) ? 120 : ((current_fps_idx == 3) ? 0 : 60));
+      }
+      if (cfg.record_adaptive_vfr) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.20f, 1.0f), "[VFR Mode Active: 1:1 Adaptive]");
       }
 
       // Video Codec
