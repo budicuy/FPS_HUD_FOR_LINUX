@@ -37,6 +37,21 @@ EOF
 }
 
 check_status() {
+    local SCRIPT_DIR_LOCAL
+    SCRIPT_DIR_LOCAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local LIB_DIR_LOCAL
+    LIB_DIR_LOCAL="$(dirname "$LIB_SO")"
+    for candidate in \
+        "$LIB_DIR_LOCAL/fpshud_test" \
+        "$HOME/.local/lib/fpshud/fpshud_test" \
+        "$SCRIPT_DIR_LOCAL/fpshud_test" \
+        "$SCRIPT_DIR_LOCAL/../build/fpshud_test"; do
+        if [ -x "$candidate" ] && grep -aq -- "--probe-sensors" "$candidate" 2>/dev/null; then
+            "$candidate" --probe-sensors
+            return 0
+        fi
+    done
+
     echo "===================================================================="
     echo "  FPSHUD — Status Izin & Akses Sensor Perangkat Keras"
     echo "===================================================================="
@@ -53,13 +68,13 @@ check_status() {
 
     echo -n "  [+] CPU Package Power (RAPL / Watt)   : "
     if [ "$rapl_ok" -eq 1 ]; then
-        echo -e "\033[32mAKTIF (Dapat dibaca)\033[0m"
+        echo -e "\033[32mAVAILABLE (Direct RAPL Counter)\033[0m"
     else
-        echo -e "\033[33mTERBATAS (Perlu izin udev / sudo opsional)\033[0m"
+        echo -e "\033[32mAVAILABLE (TDP Dynamic Estimation - Sudo-Free)\033[0m"
     fi
 
-    echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAKTIF (Bebas Sudo)\033[0m"
-    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAKTIF (In-Process Hook, Bebas Sudo)\033[0m"
+    echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAVAILABLE (Bebas Sudo)\033[0m"
+    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAVAILABLE (In-Process Hook, Bebas Sudo)\033[0m"
 
     echo "--------------------------------------------------------------------"
     if [ "$rapl_ok" -eq 1 ]; then
@@ -79,9 +94,12 @@ run_setup() {
     echo "dapat dibaca oleh user biasa tanpa hak root saat bermain game."
     echo ""
     echo "Perhatian Keamanan / Security Notice (I6):"
-    echo "  1. Memberikan izin baca RAPL CPU Watt (MODE 0444) memungkinkan aplikasi lokal"
-    echo "     membaca konsumsi daya CPU (potensi side-channel CVE-2020-8694 Platypus)."
-    echo "  2. Input hotkeys & RAM telah bebas sudo dan tidak memerlukan izin tambahan."
+    echo "  1. Memberikan izin baca RAPL CPU Watt (GROUP=\"render\", MODE=\"0440\") memungkinkan"
+    echo "     anggota grup 'render' membaca counter daya CPU (trade-off CVE-2020-8694 Platypus)."
+    echo "  2. Yang dilakukan sudo: menulis /etc/udev/rules.d/99-fpshud-rapl.rules (mode 0440)"
+    echo "     dan menjalankan 'udevadm control --reload-rules'. Tanpa sudo, FPSHUD otomatis"
+    echo "     menggunakan estimasi TDP & frekuensi CPU yang aman (tidak pernah 0W)."
+    echo "  3. Input hotkeys & RAM telah bebas sudo dan tidak memerlukan izin tambahan."
     echo "--------------------------------------------------------------------"
 
     local user_consent=0
@@ -168,6 +186,7 @@ EOF'
     echo "Catatan: Sensor CPU Wattage (RAPL) telah aktif."
     echo "Input dan RAM bekerja 100% tanpa hak akses khusus (sudo-free)."
     echo "===================================================================="
+    check_status
 }
 
 case "$1" in
@@ -184,18 +203,16 @@ case "$1" in
         exit 0
         ;;
     --uninstall|uninstall)
+        shift || true
         UNINSTALL_SH="${HOME}/.local/lib/fpshud/uninstall.sh"
         if [ -f "$UNINSTALL_SH" ]; then
-            exec bash "$UNINSTALL_SH"
+            exec bash "$UNINSTALL_SH" "$@"
         fi
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [ -f "$SCRIPT_DIR/uninstall.sh" ]; then
-            exec bash "$SCRIPT_DIR/uninstall.sh"
+            exec bash "$SCRIPT_DIR/uninstall.sh" "$@"
         fi
-        if command -v curl >/dev/null 2>&1; then
-            exec bash -c 'curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash'
-        fi
-        echo "[!] ERROR: Uninstallation script not found and curl is unavailable." >&2
+        echo "[!] ERROR: Local uninstallation script not found at $UNINSTALL_SH or $SCRIPT_DIR/uninstall.sh." >&2
         exit 1
         ;;
     *)

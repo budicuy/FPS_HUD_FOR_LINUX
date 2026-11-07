@@ -74,9 +74,10 @@ if grep -q "/build/libfpshud.so" "${TEST_HOME}/.local/bin/fpshud"; then
     exit 1
 fi
 "${TEST_HOME}/.local/bin/fpshud" --help >/dev/null || { echo "FAIL: dev installed fpshud --help failed"; exit 1; }
+"${TEST_HOME}/.local/bin/fpshud" --status | grep -q "AVAILABLE" || { echo "FAIL: fpshud --status did not output AVAILABLE sensor probe"; exit 1; }
 
-echo "[5/5] Running uninstall.sh in sandbox home..."
-(cd "${ROOT_DIR}" && ./uninstall.sh >/dev/null)
+echo "[5/5] Running local fpshud --uninstall in sandbox home..."
+"${TEST_HOME}/.local/bin/fpshud" --uninstall >/dev/null
 
 # Verify clean removal
 test ! -d "${TEST_HOME}/.local/lib/fpshud" || { echo "FAIL: lib dir was not removed"; exit 1; }

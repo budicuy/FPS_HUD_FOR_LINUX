@@ -153,13 +153,6 @@ struct TelemetryData {
   std::array<uint8_t, kMaxCpuCores> cpu_core_loads_pct{};
   std::array<uint16_t, kMaxCpuCores> cpu_core_clocks_mhz{};
 
-  // Intel Hybrid P-Core vs E-Core CPU metrics
-  bool hybrid_cpu = false;
-  float cpu_p_core_load_pct = 0.0f;
-  float cpu_e_core_load_pct = 0.0f;
-  int cpu_p_core_count = 0;
-  int cpu_e_core_count = 0;
-
   float ram_used_gb = 0.0f;
   float ram_total_gb = 0.0f;
   float ram_used_pct = 0.0f;
@@ -379,17 +372,6 @@ private:
   uint64_t prev_net_rx_bytes_ = 0;
   uint64_t prev_net_tx_bytes_ = 0;
   std::chrono::steady_clock::time_point prev_net_poll_time_{};
-
-  // Intel Hybrid P-Core vs E-Core CPU discovery & delta tracking
-  bool hybrid_cpu_ = false;
-  int p_core_count_ = 0;
-  int e_core_count_ = 0;
-  std::bitset<512> p_core_mask_{};
-  std::bitset<512> e_core_mask_{};
-  uint64_t prev_p_core_total_ = 0;
-  uint64_t prev_p_core_busy_ = 0;
-  uint64_t prev_e_core_total_ = 0;
-  uint64_t prev_e_core_busy_ = 0;
 
   // Previous counters for delta calculation
   uint64_t prev_cpu_total_ = 0;

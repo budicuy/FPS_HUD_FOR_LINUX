@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 
 Untuk menghapus instalasi (uninstall) kapan saja:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+~/.local/bin/fpshud --uninstall
 ```
 
 ---
@@ -101,13 +101,18 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - Companion daemon khusus (`fpshud_recorder`) yang berjalan terpisah dengan zero copy lewat triple-buffered POSIX Shared Memory IPC.
   - Mendukung akselerasi hardware **HEVC (H.265 / `hvc1`)** dan **H.264** via NVIDIA NVENC dan VAAPI dengan kualitas **Adaptive CQP (CQ 16–30)** untuk hasil rekaman tajam tanpa artifak piksel.
   - Perekaman audio multi-sumber (Game Audio, Mikrofon, Campuran, atau Mute) via PulseAudio/PipeWire yang langsung tersimpan rapi ke folder `~/Videos/FPSHUD`.
-- **Dukungan Universal Multi-Vendor (NVIDIA, AMD, Intel & APU)**:
-  - **NVIDIA**: Membaca sensor melalui `libnvidia-ml.so.1` (NVML) secara dinamis.
-  - **AMD Radeon & APU (`amdgpu`)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, serta menggabungkan memori *Shared GTT* pada APU/Steam Deck.
-  - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Backend dinamis Intel Level Zero Sysman (`libze_loader.so.1` via runtime `dlopen`), fallback sensor Linux DRM & `hwmon`, serta sensor daya Intel RAPL.
-  - **Topologi Core Intel Hybrid (P-Core vs E-Core)**: Penguraian otomatis topologi prosesor Intel Core Generasi 12/13/14 dan Core Ultra via `/sys/devices/cpu_{core,atom}/cpus` dengan beban kerja klaster terpisah secara real-time.
+- **Dukungan Universal Multi-Vendor & Pengerasan Sensor (NVIDIA, AMD, Intel & APU)**:
+  - **NVIDIA (`NVML` + Prioritas dGPU)**: Membaca sensor melalui `libnvidia-ml.so.1` secara dinamis dan memindai seluruh adapter NVIDIA (`nvmlDeviceGetCount_v2`) untuk memprioritaskan GPU gaming diskrit (`dGPU`) melalui pencocokan PCI Device ID aktif atau kapasitas VRAM terbesar.
+  - **AMD Radeon & APU (`amdgpu` + Estimasi Bandwidth VRAM 5-Lapis)**: Membaca sensor DRM & `hwmon` Linux, fallback clock `pp_dpm_sclk`, menggabungkan memori *Shared GTT* pada APU/Steam Deck, serta mengestimasi lebar bus dan bandwidth VRAM melalui **hierarki 5 lapis** (`gpu_metrics` `vram_max_bandwidth` -> tabel PCI Device ID -> heuristik nama model -> heuristik kapasitas VRAM -> standar aman 128-bit).
+  - **Suhu Asli Silikon AMD Ryzen (`Tdie` vs `Tctl`)**: Memprioritaskan sensor `Tdie` di atas `Tctl` pada driver `k10temp` / `zenpower` sehingga prosesor AMD Ryzen menampilkan suhu asli silikon tanpa offset +10°C/+20°C bawaan kontrol kipas.
+  - **Intel Arc & Integrated Graphics (Level Zero + `drm_sysfs` Hibrida)**: Backend dinamis Intel Level Zero Sysman (`libze_loader.so.1` via runtime `dlopen`) yang membaca suhu GPU (`ZES_TEMP_SENSORS_GPU`), clock core & memori, beban engine 3D/Compute, counter energi, status VRAM, dan kecepatan kipas, dilengkapi **fallback hibrida per-metrik** ke `drm_sysfs` & `hwmon` Linux untuk metrik apa pun yang tidak didukung oleh Level Zero.
+  - **Arsitektur Daya CPU 3-Lapis (100% Berfungsi Tanpa Sudo)**:
+    1. *Lapis 1 (Sensor Daya Hardware)*: Membaca sensor `hwmon` bebas sudo (`k10temp`, `zenpower`, `amd_energy`, `zenergy`) atau counter RAPL (`/sys/class/powercap/*rapl*/energy_uj`).
+    2. *Lapis 2 (Estimasi Dinamis Berbasis TDP & Frekuensi)*: Jika counter RAPL dikunci root (`0400`) dan pengguna melewati `sudo`, FPSHUD otomatis menghitung estimasi Watt CPU secara real-time dari `constraint_0_max_power_uw` (batas TDP PL1 yang selalu dapat dibaca tanpa root di Intel/AMD) atau baseline TDP model CPU yang diskalakan dengan beban kerja dan rasio frekuensi boost—**tidak pernah tertahan di `0 W`**.
+    3. *Lapis 3 (Aturan udev `0440` Grup `render` Opsional)*: Opsi `fpshud --setup` membuka akses baca counter RAPL khusus untuk anggota grup `GROUP="render", MODE="0440"` (jauh lebih aman daripada `0444`).
+  - **Beban & Clock CPU Per-Core (`All-Core`)**: Pemantauan persentase beban kerja dan frekuensi (MHz) setiap thread CPU hingga 64 thread secara real-time tanpa alokasi heap dinamis.
   - **Status Baterai Laptop & Handheld (`/sys/class/power_supply`)**: Persentase kapasitas baterai, daya listrik Watt (discharge/charge), dan indikator charging dengan deteksi otomatis Desktop PC (otomatis di-disabled dan digelapkan pada komputer desktop tanpa baterai).
-  - **Laptop Gaming Hybrid Dual-GPU**: Otomatis memprioritaskan GPU gaming diskrit dibanding kartu grafis terintegrasi (iGPU) dengan mengevaluasi kelas perangkat PCI (`0x030000`), atribut `boot_vga`, dan flag perangkat diskrit Vulkan daripada nomor urut `cardN` statis, disertai resolusi nama model GPU akurat lewat `/usr/share/hwdata/pci.ids`.
+  - **Laptop Gaming Hybrid Dual-GPU (Seleksi dGPU Vulkan & DRM)**: Otomatis memprioritaskan GPU gaming diskrit dibanding kartu grafis terintegrasi (iGPU) dengan mengevaluasi `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU` pada Vulkan, kelas perangkat PCI (`0x030000`), dan atribut `boot_vga` daripada nomor urut `cardN` statis, disertai resolusi nama model GPU akurat lewat `/usr/share/hwdata/pci.ids`.
 - **Keterbacaan Kontras Tinggi & Peringatan Dinamis**:
   - Badge warna kategori (`FPS` Emas, `GPU` Hijau, `CPU` Cyan, `RAM` Ungu, `SYS` Perak), pemisah titik tengah (`·`), dan peringatan suhu dinamis (**Kuning saat `>= 72°C`**, **Merah saat `>= 82°C`**; penyesuaian nilai ambang batas direncanakan pada rilis mendatang).
 - **Grafik Mini Frametime & Perekam Benchmark CSV (`F9`)**:
@@ -150,39 +155,53 @@ tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
 ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
-### Izin Akses Perangkat Keras, Model Keamanan & Trade-off
+### Izin Akses Perangkat Keras, Transparansi `sudo` & Model Keamanan
 > [!NOTE]
-> **Arsitektur Bebas Sudo untuk Overlay, Input & RAM:**
-> FPSHUD dapat langsung berjalan **100% bebas sudo** tanpa hak akses khusus:
+> **Arsitektur 100% Bebas Sudo (Zero-Sudo Out-of-the-Box):**
+> FPSHUD langsung berjalan **100% bebas sudo** untuk seluruh fitur, termasuk pembacaan daya CPU:
 > - **Shortcut Keyboard & Navigasi GUI In-Game**: Ditangani langsung secara in-process melalui hooked event queue Wayland display (`wl_keyboard` / `wl_pointer`) dan X11 tanpa memerlukan grup `input` atau akses root `/dev/input/event*`.
-> - **Metrik RAM**: Kapasitas memori dinamis, konsumsi game resident (VmRSS), Swap/ZRAM, dan memory stall pressure (PSI) dibaca secara aman langsung dari `/proc/meminfo`, `/proc/self/status`, dan `/proc/pressure/memory` (100% world-readable).
-> - **Telemetri Grafis**: FPS, frametimes, dan sensor GPU (NVIDIA NVML, AMD sysfs, Intel Level Zero / DRM) beroperasi tanpa hak root.
+> - **Metrik RAM**: Kapasitas memori dinamis, konsumsi game resident (`VmRSS`), Swap/ZRAM, dan memory stall pressure (PSI) dibaca secara aman langsung dari `/proc/meminfo`, `/proc/self/status`, dan `/proc/pressure/memory` (100% world-readable).
+> - **Telemetri Grafis**: FPS, frametimes, dan sensor GPU (NVIDIA NVML, AMD sysfs, Intel Level Zero + DRM hibrida) beroperasi penuh tanpa hak root.
+> - **Daya CPU 3-Lapis (Tidak Pernah `0 W` Meski Tanpa Sudo)**:
+>   1. **Lapis 1 (Sensor Hardware Langsung)**: Membaca sensor daya `hwmon` bebas sudo (`amd_energy`, `zenergy`, `zenpower`, `k10temp`) atau counter RAPL `/sys/class/powercap/*rapl*/energy_uj` jika sudah dapat dibaca.
+>   2. **Lapis 2 (Estimasi Dinamis TDP Bebas Sudo)**: Jika counter RAPL dikunci ke root (`0400`), FPSHUD otomatis membaca batas daya paket (`constraint_0_max_power_uw` PL1 pada Intel/AMD yang berizin `0444`) atau nilai TDP model CPU lalu menghitung daya secara dinamis berdasarkan beban kerja CPU dan rasio frekuensi boost.
+>   3. **Lapis 3 (Aturan udev `0440` Terbatas Opsional)**: Bagi pengguna yang menginginkan pembacaan counter energi hardware RAPL secara langsung, `fpshud --setup` menyediakan aturan udev terbatas untuk grup `render`.
 
 > [!IMPORTANT]
-> **Sensor Opsional RAPL CPU Wattage (Trade-off Celah Platypus CVE-2020-8694):**
-> Satu-satunya sensor yang memerlukan pengaturan izin istimewa adalah pembacaan daya paket CPU (Watts).
-> Kebijakan keamanan kernel Linux membatasi `/sys/class/powercap/*rapl*/energy_uj` hanya untuk root (mode `0400`) guna memitigasi serangan side-channel **Platypus** (CVE-2020-8694), di mana proses tanpa privilege pada sistem bersama berpotensi menebak kunci kriptografis dari fluktuasi mikroskopis daya CPU. Pemasangan aturan udev (`/etc/udev/rules.d/99-fpshud-rapl.rules`) mengatur hak baca `0444` (read-only untuk semua pengguna lokal). Ini adalah trade-off eksplisit pengguna: kenyamanan memantau konsumsi Watt CPU berbanding mitigasi serangan side-channel pada sistem multi-user atau server sensitif.
->
-> Jika Anda memilih tidak memberikan akses sudo, FPSHUD tetap dapat berjalan sempurna dengan 23 metrik lainnya tetap aktif.
+> **Apa Saja yang Dilakukan `sudo`? (Transparansi Penuh & Mitigasi Platypus CVE-2020-8694):**
+> **FPSHUD tidak pernah menjalankan game atau kode overlay sebagai `root`.** Akses `sudo` bersifat 100% opsional dan hanya dipanggil secara interaktif jika Anda menyetujuinya saat instalasi (`install.sh`) atau menjalankan `fpshud --setup` / `fpshud --uninstall`. Berikut adalah **seluruh tindakan** yang dilakukan oleh `sudo`:
+> 1. **Saat menjalankan `fpshud --setup` (atau menyetujui prompt di `install.sh`)**:
+>    - Membuat satu berkas aturan udev di `/etc/udev/rules.d/99-fpshud-rapl.rules` yang berisi:
+>      ```udev
+>      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
+>      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
+>      ```
+>    - Mengapa menggunakan `GROUP="render", MODE="0440"` dan bukan `0444`? Kernel Linux membatasi file `energy_uj` (`0400`) untuk memitigasi serangan side-channel **Platypus** (`CVE-2020-8694`). Alih-alih membuka izin baca ke semua akun di sistem (`0444`), FPSHUD membatasi izin baca (`0440`) hanya untuk grup `render` (pengguna lokal desktop/GPU gaming Anda), sehingga layanan latar belakang atau proses asing tanpa grup `render` tetap terblokir.
+>    - Memuat ulang aturan udev dengan perintah `sudo udevadm control --reload-rules` dan `sudo udevadm trigger --subsystem-match=powercap`.
+>    - Jika terdeteksi instalasi Flatpak Steam (`~/.var/app/com.valvesoftware.Steam`), memastikan kepemilikan folder manifes Vulkan Implicit Layer tetap milik akun pengguna biasa Anda (`chown -R $USER`).
+> 2. **Saat menjalankan `fpshud --uninstall`**:
+>    - Seluruh file utama di ruang pengguna (`~/.local/lib/fpshud`, `~/.local/bin/fpshud*`, manifes layer Vulkan, dan `~/.config/fpshud`) dihapus **terlebih dahulu tanpa `sudo`**.
+>    - Jika Anda tidak pernah mengaktifkan `sudo` saat instalasi, maka `fpshud --uninstall` langsung selesai secara instan tanpa menanyakan `sudo` sama sekali.
+>    - Hanya jika file `/etc/udev/rules.d/99-fpshud-*.rules` terdeteksi di sistem, skrip akan menanyakan konfirmasi opsional `[y/N]` apakah Anda ingin sekalian menghapus file aturan udev tersebut dengan `sudo` (Anda bebas menekan `N`/`Enter` untuk melewati `sudo`).
 
 > [!NOTE]
 > **Konfigurasi atau Periksa Izin Kapan Saja:**
 > Anda dapat mengonfigurasi izin sensor RAPL kapan saja tanpa perlu menginstal ulang:
 > ```bash
-> fpshud --setup
+> ~/.local/bin/fpshud --setup
 > ```
 > Untuk memeriksa status keterbacaan sensor hardware pada akun Anda:
 > ```bash
-> fpshud --status
+> ~/.local/bin/fpshud --status
 > ```
 
 > [!TIP]
 > **Arsitektur Keamanan & Batasan Hak Akses:**
 > Seluruh game dan proses overlay HUD berjalan murni dengan hak akses pengguna biasa (*unprivileged*). Hak akses root tidak pernah digunakan saat bermain game. Akses sudo hanya diminta saat setup awal untuk mendaftarkan aturan udev di `/etc/udev/rules.d/`.
 
-### Uninstall 1 Perintah (Hapus Bersih Seluruh Komponen & Konfigurasi)
+### Uninstall 1 Perintah (Hapus Bersih Secara Lokal)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+~/.local/bin/fpshud --uninstall
 ```
 
 ---
@@ -252,7 +271,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut (semua to
 ### 4 Pilihan Preset di Dalam GUI
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
 - **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
-- **`Advance`**: Menampilkan lengkap **24 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 7 sensor `GPU`, 5 sensor `CPU` termasuk `P/E Core Load`, 4 sensor `RAM/Memori`, `Render API`, `Local Clock`, dan `Battery & Power`).
+- **`Advance`**: Menampilkan lengkap **31 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 8 sensor `GPU` termasuk `VRAM Clock`, 6 sensor `CPU` termasuk `All-Core Load` & `All-Core Clock`, 4 sensor `RAM/Memori`, `Disk I/O & Suhu NVMe`, `Kecepatan Jaringan`, `Render API`, `Model GPU/CPU`, `Local Clock`, dan `Battery & Power`).
 - **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
 
 ### Peringatan Suhu Panas & Ambang Batas
@@ -301,21 +320,22 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 
 ---
 
-## 6. Dukungan Perangkat Keras & Daftar 24 Sensor
+## 6. Dukungan Perangkat Keras & Daftar 31 Sensor
 
 ### Matriks Kompatibilitas Perangkat Keras
 
-| Komponen | Vendor & Driver yang Didukung | Sumber Data di Linux |
+| Komponen | Vendor & Driver yang Didukung | Sumber Data Linux & Hierarki Fallback |
 | :--- | :--- | :--- |
-| **GPU NVIDIA** | Driver NVIDIA Proprietary / Open (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
-| **GPU & APU AMD** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
-| **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) dengan `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
-| **CPU Intel** | Intel Core & Core Ultra (Hybrid & Standar) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
-| **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+| **GPU NVIDIA** | Driver NVIDIA Proprietary / Open (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) dengan prioritas GPU diskrit (`dGPU`) multi-GPU via PCI ID & ukuran VRAM |
+| **GPU & APU AMD** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `gpu_metrics` + estimasi lebar bus & bandwidth VRAM 5-lapis + `mem_info_gtt_*` + `pci.ids` |
+| **GPU Intel** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) dengan fallback hibrida per-metrik ke `/sys/class/drm/card*` + `hwmon` + `intel-rapl` |
+| **CPU Intel** | Intel Core & Core Ultra | `/proc/cpuinfo`, `/proc/stat` (Total & All-Core), `cpufreq`, `coretemp`, `intel-rapl` (`0440` grup `render`) + fallback estimasi dinamis TDP PL1 |
+| **CPU AMD** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat` (Total & All-Core), `cpufreq`, `k10temp`/`zenpower` (prioritas `Tdie` di atas `Tctl`), `amd_energy`/`zenergy`/`amd-rapl` + fallback estimasi dinamis TDP |
 | **Memori RAM** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory` (100% bebas sudo) |
+| **Storage & Jaringan** | NVMe, SATA SSD/HDD & Ethernet/Wi-Fi | `/proc/diskstats`, `/sys/class/hwmon` (`nvme`/`drivetemp`), `/proc/net/dev` (100% bebas sudo) |
 | **Baterai & Daya** | Standar ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (otomatis disabled di Desktop PC) |
 
-### Daftar Lengkap 24 Sensor
+### Daftar Lengkap 31 Sensor
 
 | # | Nama Sensor | Grup | Informasi yang Ditampilkan | Contoh di HUD |
 | :--- | :--- | :--- | :--- | :--- |
@@ -325,24 +345,31 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
 | `04` | **FPS 0.1% Low** | `FPS` | Rata-rata 0,1% frame paling lambat (*micro-stutter*) | `0.1%: 95` |
 | `05` | **Frame Time** | `FPS` | Waktu yang dibutuhkan untuk merender 1 frame (milidetik) | `6.9 ms` |
 | `06` | **GPU Load** | `GPU` | Persentase beban kerja core GPU | `98%` |
-| `07` | **GPU Clock** | `GPU` | Kecepatan frekuensi core GPU saat ini | `2430 MHz` |
-| `08` | **GPU VRAM** | `GPU` | Pemakaian memori VRAM GPU dalam GB (termasuk GTT di APU) | `6.4 GB` |
-| `09` | **GPU Bandwidth** | `GPU` | Kecepatan transfer bandwidth memori VRAM + PCIe aktif | `165.4 GB/s` |
-| `10` | **GPU Temp** | `GPU` | Suhu GPU dalam derajat Celcius | `65 °C` |
-| `11` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
-| `12` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
-| `13` | **CPU Load** | `CPU` | Persentase pemakaian total seluruh thread CPU | `42%` |
-| `14` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt | `58 W` |
-| `16` | **CPU Temp** | `CPU` | Suhu prosesor CPU dalam derajat Celcius | `62 °C` |
-| `17` | **P/E Core Load** | `CPU` | Penguraian beban core Intel Hybrid (P-Core % / E-Core %; auto-disabled pada non-hybrid) | `P/E: 45/20%` |
-| `18` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
-| `19` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
-| `20` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
-| `21` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
-| `22` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN` atau `OPENGL`) | `VULKAN` |
-| `23` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
-| `24` | **Battery & Power** | `SYS` | Persentase baterai, daya Watt, dan status cas (otomatis disabled di PC Desktop) | `BAT: 82% (16.5W+)` |
+| `07` | **GPU Core Clock** | `GPU` | Kecepatan frekuensi core GPU saat ini | `2430 MHz` |
+| `08` | **GPU VRAM Clock** | `GPU` | Kecepatan frekuensi memori VRAM GPU saat ini | `2200 MHz` |
+| `09` | **GPU VRAM** | `GPU` | Pemakaian memori VRAM GPU dalam GB & % (termasuk GTT di APU) | `6.4 GB 40%` |
+| `10` | **GPU Bandwidth** | `GPU` | Kecepatan transfer bandwidth memori VRAM + PCIe aktif | `165.4 GB/s` |
+| `11` | **GPU Temp** | `GPU` | Suhu GPU dalam derajat Celcius | `65 °C` |
+| `12` | **GPU Fan** | `GPU` | Persentase kecepatan putaran kipas GPU | `FAN: 55%` |
+| `13` | **GPU Power** | `GPU` | Konsumsi daya listrik GPU dalam Watt | `185 W` |
+| `14` | **CPU Load** | `CPU` | Persentase pemakaian total seluruh thread CPU | `42%` |
+| `15` | **CPU All-Core Load** | `CPU` | Persentase beban kerja setiap thread CPU secara individual | `C0:45% C1:38%` |
+| `16` | **CPU Clock** | `CPU` | Kecepatan frekuensi core CPU tertinggi yang sedang aktif | `5050 MHz` |
+| `17` | **CPU All-Core Clock** | `CPU` | Kecepatan frekuensi masing-masing core CPU dalam MHz | `C0:5050MHz` |
+| `18` | **CPU Power** | `CPU` | Konsumsi daya listrik CPU dalam Watt (RAPL/hwmon atau estimasi TDP) | `58 W` |
+| `19` | **CPU Temp** | `CPU` | Suhu prosesor CPU (`Tdie`) dalam derajat Celcius | `62 °C` |
+| `20` | **System RAM** | `RAM` | Pemakaian RAM sistem dalam GB & persen dengan peringatan warna | `9.2 GB 60%` |
+| `21` | **Game RAM** | `RAM` | Memori fisik (VmRSS) khusus yang dipakai oleh game ini saja | `GAME: 4.8 GB` |
+| `22` | **Swap / ZRAM** | `RAM` | Pemakaian swap / zram aktif dalam GB | `SWAP: 1.2 GB` |
+| `23` | **Memory Pressure** | `RAM` | Metrik Linux PSI (persentase stall memori 10 detik terakhir) | `PSI: 2.1%` |
+| `24` | **Disk I/O Speed** | `SYS` | Kecepatan baca / tulis penyimpanan fisik (Read / Write) | `DSK: 120/45 MB/s` |
+| `25` | **Disk / NVMe Temp** | `SYS` | Suhu perangkat penyimpanan NVMe / SSD dalam Celcius | `NVME: 46 °C` |
+| `26` | **Network Speed** | `SYS` | Kecepatan unduh / unggah jaringan aktif (Download / Upload) | `NET: 12.4/1.2 MB/s` |
+| `27` | **Render API** | `SYS` | Engine grafis yang digunakan game (`VULKAN`, `DX12`, `DX11`, `OPENGL`) | `VULKAN` |
+| `28` | **GPU Model** | `SYS` | Nama model kartu grafis GPU diskrit / terintegrasi | `GTX 1660 SUPER` |
+| `29` | **CPU Model** | `SYS` | Nama model prosesor CPU yang terdeteksi | `Ryzen 7 7800X3D` |
+| `30` | **Local Clock** | `SYS` | Jam lokal sistem saat ini (`HH:MM`) | `21:45` |
+| `31` | **Battery & Power** | `SYS` | Persentase baterai, daya Watt, dan status cas (otomatis disabled di PC Desktop) | `BAT: 82% (16.5W+)` |
 
 ---
 
@@ -396,7 +423,7 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 > **Rentang Total Konsumsi Sumber Daya (Ringkasan):**
 > - **Rentang Penggunaan CPU:** **0,01% – 0,05% dari 1 core CPU** saat bermain game pada 60 FPS (**0,03% – 0,11% @ 144 FPS**); thread telemetri sensor hanya menambah **~0,045% dari 1 core**. Beban terhadap total prosesor multi-core adalah **< 0,01% dari total kapasitas CPU**.
 > - **Rentang Pemakaian Memori (RAM):** **~4,5 MB** memori internal & font atlas (**~17 MB** total VmRSS proses terisolasi), dengan **0 byte/frame** alokasi heap saat gameplay berjalan.
-> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 61-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian komunitas pada berbagai setup hardware AMD dan Intel sangat kami sambut!
+> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 89-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian komunitas pada berbagai setup hardware AMD dan Intel sangat kami sambut!
 
 ---
 
@@ -433,7 +460,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 64 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
+# 2. Jalankan 89 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
 
 # 3. (Opsional) Instal build lokal langsung ke ~/.local (offline / tanpa download):
@@ -452,7 +479,7 @@ FPS_HUD_FOR_LINUX/
 ├── .github/workflows/ci.yml             # Otomatisasi CI build, pengujian 5 perangkat, matriks multi-distro & rilis GitHub
 ├── .clang-tidy                          # Aturan analisis statis memori & keamanan kode C++
 ├── CMakeLists.txt                       # Konfigurasi build C++26 dengan ThinLTO, LLD, ASan/UBSan & static libstdc++
-├── install.sh / uninstall.sh            # Skrip instalasi & uninstalasi instan curl
+├── install.sh                           # Skrip instalasi instan curl
 ├── manifest/
 │   ├── libfpshud.version                # Peta ekspor simbol (menyembunyikan simbol internal dari game)
 │   └── VkLayer_FPSHUD_overlay.json.in   # Templat manifes Vulkan Implicit Layer
@@ -475,7 +502,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── ui/                              # Menu in-game Dear ImGui, HUD two-tone & font embedded
 │   └── main.cpp                         # Titik masuk CLI diagnostik
 └── tests/
-    └── test_cli.cpp                     # Suite pengujian 61-check simulasi sysfs 5-perangkat & keamanan memori
+    └── test_cli.cpp                     # Suite pengujian 89-check simulasi sysfs 5-perangkat & keamanan memori
 ```
 
 ---
@@ -484,8 +511,8 @@ FPS_HUD_FOR_LINUX/
 
 1. **Menekan `Insert` / `F12` tidak membuka menu GUI atau klik mouse tembus ke dalam game:**
    - Pada Wayland maupun X11, FPSHUD menangkap tombol keyboard dan kursor mouse secara in-process langsung dari dalam proses game tanpa memerlukan grup input atau sudo. Pastikan jendela game sedang aktif (terfokus), atau gunakan tombol alternatif (`F10` atau `Insert`).
-2. **Daya CPU menampilkan `0 W`:**
-   - Jalankan `fpshud --setup` untuk memasang aturan udev read-only RAPL (lihat [Bagian 2](#2-instalasi--izin-akses-sensor) untuk penjelasan trade-off keamanan Platypus).
+2. **Bagaimana cara kerja Daya CPU (Watt) tanpa `sudo` dibandingkan dengan `fpshud --setup`?**
+   - Tanpa `sudo`, FPSHUD otomatis menggunakan **Lapis 2 (Estimasi Dinamis Berbasis TDP + Frekuensi)** dari `constraint_0_max_power_uw`, sehingga angka Watt CPU selalu aktif dan tidak pernah tertahan di `0 W`. Jika Anda ingin membaca counter energi hardware RAPL secara langsung (**Lapis 1/3**), jalankan `~/.local/bin/fpshud --setup` untuk memasang aturan udev terbatas `0440` (`GROUP="render"`, lihat [Bagian 2](#2-instalasi--izin-akses-sensor)).
 3. **Bagaimana cara mengembalikan semua pengaturan ke kondisi awal (Reset)?**
    - Buka menu GUI di dalam game (`Insert` / `F12`) lalu klik tombol **`Reset`** di pojok kanan atas, atau hapus file `~/.config/fpshud/config.ini`.
 4. **Apakah FPSHUD aman digunakan dengan Anti-Cheat di game online?**
@@ -498,7 +525,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 61 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 89 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.

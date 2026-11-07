@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/inst
 
 To uninstall at any time:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+~/.local/bin/fpshud --uninstall
 ```
 
 ---
@@ -101,13 +101,18 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - Dedicated background recording daemon (`fpshud_recorder`) with decoupled triple-buffered POSIX Shared Memory IPC.
   - Supports hardware-accelerated **HEVC (H.265 / `hvc1`)** and **H.264** via NVIDIA NVENC and VAAPI with **Adaptive CQP (CQ 16–30)** for crisp, artifact-free gameplay video.
   - Multi-source audio recording (Game Audio, Microphone, Mixed, or Mute) via PulseAudio/PipeWire saved directly to `~/Videos/FPSHUD`.
-- **Universal Multi-Vendor Hardware Support**:
-  - **NVIDIA**: Uses `libnvidia-ml.so.1` (NVML) dynamically.
-  - **AMD Radeon & APUs (`amdgpu`)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, and combines shared `GTT` memory on APUs/Steam Deck.
-  - **Intel Arc & Integrated Graphics (`i915` / `xe` / Level Zero)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`), Linux DRM & `hwmon` sysfs fallback, and Intel RAPL power counters.
-  - **Intel Hybrid Architecture (P-Core & E-Core)**: Automatic topology discovery for 12th/13th/14th Gen Intel Core and Core Ultra processors via `/sys/devices/cpu_{core,atom}/cpus` with real-time cluster load breakdown.
+- **Universal Multi-Vendor Hardware Support & Sensor Hardening**:
+  - **NVIDIA (`NVML` + dGPU Priority)**: Uses `libnvidia-ml.so.1` dynamically and iterates all NVIDIA adapters (`nvmlDeviceGetCount_v2`) to prioritize the dedicated discrete GPU (`dGPU`) via active DRM PCI Device ID matching or highest VRAM capacity.
+  - **AMD Radeon & APUs (`amdgpu` + 5-Tier VRAM Bandwidth)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, combines shared `GTT` memory on APUs/Steam Deck, and estimates VRAM bandwidth using a **5-tier resolution hierarchy** (`gpu_metrics` `vram_max_bandwidth` -> exact PCI Device ID lookup -> model name heuristic -> VRAM capacity heuristic -> 128-bit baseline).
+  - **AMD Ryzen True Die Temperature (`Tdie` Priority)**: Prioritizes `Tdie` over `Tctl` on `k10temp` / `zenpower` sensors so AMD Ryzen CPUs display true silicon temperature without the artificial +10°C/+20°C fan-curve offset.
+  - **Intel Arc & Integrated Graphics (Level Zero + `drm_sysfs` Hybrid)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`) reading GPU temperature (`ZES_TEMP_SENSORS_GPU`), core & memory clocks, 3D/Compute engine load, energy counters, VRAM state, and fan speed, with **per-metric hybrid fallback** to Linux DRM & `hwmon` sysfs for any metric unsupported by Level Zero.
+  - **3-Tier CPU Package Power Architecture (100% Sudo-Free Capable)**:
+    1. *Tier 1 (Hardware Power Counters)*: Reads unprivileged `hwmon` (`k10temp`, `zenpower`, `amd_energy`, `zenergy`) or RAPL (`/sys/class/powercap/*rapl*/energy_uj`).
+    2. *Tier 2 (Dynamic TDP & Frequency-Scaled Estimation)*: If RAPL is root-locked (`0400`) and sudo setup is skipped, automatically calculates real-time CPU wattage from `constraint_0_max_power_uw` (world-readable PL1 TDP) or CPU model TDP scaled by CPU load and boost frequency—**never stuck at `0 W`**.
+    3. *Tier 3 (Optional Scoped `0440` `render` Group udev Rule)*: Optional `fpshud --setup` grants hardware RAPL read access scoped strictly to `GROUP="render", MODE="0440"` (safer than world-readable `0444`).
+  - **Per-Core CPU Load & Clock (`All-Core`)**: Real-time per-thread CPU utilization (%) and per-core frequency (MHz) up to 64 threads with zero-heap inline storage.
   - **Laptop & Handheld Battery (`/sys/class/power_supply`)**: Real-time capacity percentage, discharge/charge wattage, and charging state with automatic desktop PC detection (auto-disabled and grayed out on desktop machines).
-  - **Hybrid Gaming Laptops**: Automatically prioritizes the dedicated gaming GPU over integrated graphics by evaluating PCI device class (`0x030000`), `boot_vga` attributes, and Vulkan discrete device flags rather than static card numbering, with exact GPU model resolution via `/usr/share/hwdata/pci.ids`.
+  - **Hybrid Gaming Laptops (Vulkan + DRM dGPU Selection)**: Automatically prioritizes the dedicated gaming GPU over integrated graphics by evaluating Vulkan `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`, PCI device class (`0x030000`), and `boot_vga` attributes rather than static card numbering, with exact GPU model resolution via `/usr/share/hwdata/pci.ids`.
 - **High-Contrast Readability & Dynamic Alerts**:
   - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and dynamic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**; threshold customization planned for upcoming release).
 - **Mini Frametime Graph & CSV Benchmark Logging (`F9`)**:
@@ -150,39 +155,53 @@ tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
 ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 ```
 
-### Hardware Permissions, Security Model & Trade-offs
+### Hardware Permissions, Sudo Transparency & Security Model
 > [!NOTE]
-> **Zero Sudo Architecture for Overlay, Input & RAM:**
-> FPSHUD runs **100% sudo-free** out-of-the-box for all core features:
+> **100% Zero-Sudo Architecture Out-of-the-Box:**
+> FPSHUD runs **100% sudo-free** out-of-the-box for all features, including CPU power:
 > - **In-Game Hotkeys & GUI Navigation**: Handled directly in-process via hooked Wayland display event queues (`wl_keyboard` / `wl_pointer`) and X11 events without requiring the `input` group or `/dev/input/event*` root access.
-> - **RAM Metrics**: Dynamic capacity, resident game memory, Swap/ZRAM, and memory stall pressure (PSI) are parsed cleanly from world-readable `/proc/meminfo`, `/proc/self/status`, and `/proc/pressure/memory`.
-> - **Graphics Telemetry**: FPS, frametimes, and GPU sensors (NVIDIA NVML, AMD sysfs, Intel Level Zero / DRM) operate without root privileges.
+> - **RAM Metrics**: Dynamic capacity, resident game memory (`VmRSS`), Swap/ZRAM, and memory stall pressure (PSI) are parsed cleanly from world-readable `/proc/meminfo`, `/proc/self/status`, and `/proc/pressure/memory`.
+> - **Graphics Telemetry**: FPS, frametimes, and GPU sensors (NVIDIA NVML, AMD sysfs, Intel Level Zero + DRM hybrid) operate without root privileges.
+> - **3-Tier CPU Wattage (Never Stuck at `0 W` Without Sudo)**:
+>   1. **Tier 1 (Hardware Sensor)**: Reads unprivileged `hwmon` power sensors (`amd_energy`, `zenergy`, `zenpower`, `k10temp`) or RAPL `/sys/class/powercap/*rapl*/energy_uj` when readable.
+>   2. **Tier 2 (Sudo-Free Dynamic TDP Estimation)**: When kernel RAPL is locked to root (`0400`), FPSHUD automatically reads the world-readable package power limit (`constraint_0_max_power_uw` PL1 on Intel/AMD) or CPU model TDP baseline and scales it dynamically by real-time CPU load and boost frequency ratio.
+>   3. **Tier 3 (Optional Scoped `0440` udev Rule)**: For users who want direct hardware RAPL energy counter readings instead of TDP estimation, `fpshud --setup` installs a scoped read-only udev rule.
 
 > [!IMPORTANT]
-> **Optional RAPL CPU Power Monitoring (Watts & CVE-2020-8694 Platypus Trade-off):**
-> The only sensor that requires elevated setup is privileged CPU Package Power.
-> The Linux kernel restricts `/sys/class/powercap/*rapl*/energy_uj` to root (mode `0400`) to mitigate the **Platypus side-channel attack** (CVE-2020-8694), where an unprivileged attacker on a shared system could infer cryptographic operations from micro-fluctuations in CPU power consumption. Installing the optional udev rule (`/etc/udev/rules.d/99-fpshud-rapl.rules`) sets mode `0444` (read-only for all users). This is an explicit user trade-off: package power monitoring convenience versus cryptographic side-channel mitigation on multi-user or sensitive systems.
->
-> If you prefer not to grant sudo, FPSHUD continues to run perfectly with all other 23 metrics active.
+> **What Does `sudo` Do? (Complete Transparency & CVE-2020-8694 Platypus Mitigation):**
+> **FPSHUD never runs games or overlay code as `root`.** `sudo` is completely optional and is only invoked interactively if you explicitly confirm setup (`install.sh` prompt or `fpshud --setup`) or during `fpshud --uninstall`. Here is **everything** `sudo` does:
+> 1. **During `fpshud --setup` (or `install.sh` if confirmed)**:
+>    - Creates `/etc/udev/rules.d/99-fpshud-rapl.rules` containing:
+>      ```udev
+>      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
+>      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
+>      ```
+>    - Why `GROUP="render", MODE="0440"` instead of `0444`? The Linux kernel restricts `energy_uj` (`0400`) to mitigate the **Platypus side-channel attack** (`CVE-2020-8694`). Instead of making RAPL world-readable (`0444`) to all system accounts and sandboxed services, FPSHUD scopes read-only access (`0440`) strictly to the `render` group (your local GPU/gaming desktop user).
+>    - Reloads udev rules via `sudo udevadm control --reload-rules` and `sudo udevadm trigger --subsystem-match=powercap`.
+>    - If Flatpak Steam (`~/.var/app/com.valvesoftware.Steam`) is installed, ensures the copied Vulkan layer manifest directory is owned by your normal user account (`chown -R $USER`).
+> 2. **During `fpshud --uninstall`**:
+>    - All user-space files (`~/.local/lib/fpshud`, `~/.local/bin/fpshud*`, Vulkan layer manifest, and `~/.config/fpshud`) are removed **first without `sudo`**.
+>    - If you never enabled `sudo` during installation, `fpshud --uninstall` finishes immediately without asking for `sudo`.
+>    - Only if `/etc/udev/rules.d/99-fpshud-*.rules` exists on your system, it asks an optional `[y/N]` prompt whether you also want to remove the system udev rule via `sudo` (so you can press `N` to skip `sudo` at any time).
 
 > [!NOTE]
 > **Configure or Verify Permissions Anytime:**
 > You can configure optional RAPL sensor permissions at any time without reinstalling:
 > ```bash
-> fpshud --setup
+> ~/.local/bin/fpshud --setup
 > ```
 > To inspect current hardware sensor accessibility:
 > ```bash
-> fpshud --status
+> ~/.local/bin/fpshud --status
 > ```
 
 > [!TIP]
 > **Security Architecture & Trust Boundaries:**
 > Games and overlay processes run strictly with your unprivileged user account. Root privileges are never used during gameplay. Sudo is requested only during initial setup to register udev rules in `/etc/udev/rules.d/`.
 
-### 1-Command Uninstallation (Clean Removal)
+### 1-Command Uninstallation (Clean Local Removal)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/uninstall.sh | bash
+~/.local/bin/fpshud --uninstall
 ```
 
 ---
@@ -252,7 +271,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
 - **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
-- **`Advance`**: Enables all **24 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 7 `GPU` metrics, all 5 `CPU` metrics including `P/E Core Load`, all 4 `Memory/RAM` metrics, `Render API`, `Local Clock`, and `Battery & Power`).
+- **`Advance`**: Enables all **31 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 8 `GPU` metrics including `VRAM Clock`, all 6 `CPU` metrics including `All-Core Load` & `All-Core Clock`, all 4 `Memory/RAM` metrics, `Storage I/O & NVMe Temp`, `Network Speed`, `Render API`, `GPU/CPU Model`, `Local Clock`, and `Battery & Power`).
 - **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
 
 ### Thermal Warning Alerts & Thresholds
@@ -301,21 +320,22 @@ To ensure high-framerate gameplay is never penalized during active recording:
 
 ---
 
-## 6. Supported Hardware & All 24 Sensors
+## 6. Supported Hardware & All 31 Sensors
 
 ### Hardware Compatibility Matrix
 
-| Component | Supported Vendors & Drivers | Linux Data Sources |
+| Component | Supported Vendors & Drivers | Linux Data Sources & Fallback Hierarchy |
 | :--- | :--- | :--- |
-| **NVIDIA GPUs** | NVIDIA Proprietary / Open Kernel (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) |
-| **AMD GPUs & APUs** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `mem_info_gtt_*` + `pci.ids` |
-| **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) with `/sys/class/drm/card*` + `hwmon` + `intel-rapl` fallback |
-| **Intel CPUs** | Intel Core & Core Ultra (Hybrid & Standard) | `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/cpu_{core,atom}/cpus`, `cpufreq`, `coretemp`, `intel-rapl` |
-| **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat`, `cpufreq`, `k10temp`/`zenpower`, `amd-rapl` |
+| **NVIDIA GPUs** | NVIDIA Proprietary / Open Kernel (`nvidia`) | `libnvidia-ml.so.1` (NVML runtime `dlopen`) with multi-GPU discrete (`dGPU`) prioritization via PCI ID & VRAM size |
+| **AMD GPUs & APUs** | AMD Radeon Discrete & APU (`amdgpu`) | `/sys/class/drm/card*/device` + `hwmon` + `gpu_metrics` + 5-tier VRAM bus-width & bandwidth estimator + `mem_info_gtt_*` + `pci.ids` |
+| **Intel GPUs** | Intel Arc Discrete & Iris/UHD (`xe`, `i915`) | Intel Level Zero Sysman (`libze_loader.so.1` runtime `dlopen`) with per-metric hybrid fallback to `/sys/class/drm/card*` + `hwmon` + `intel-rapl` |
+| **Intel CPUs** | Intel Core & Core Ultra | `/proc/cpuinfo`, `/proc/stat` (Total & All-Core), `cpufreq`, `coretemp`, `intel-rapl` (`0440` `render` group) + PL1 TDP dynamic estimation fallback |
+| **AMD CPUs** | AMD Ryzen / Threadripper / Custom APU | `/proc/cpuinfo`, `/proc/stat` (Total & All-Core), `cpufreq`, `k10temp`/`zenpower` (`Tdie` prioritized over `Tctl`), `amd_energy`/`zenergy`/`amd-rapl` + TDP dynamic estimation fallback |
 | **System Memory** | DDR3, DDR4, DDR5, LPDDR4, LPDDR5 | `/proc/meminfo`, `/proc/self/status`, `/proc/pressure/memory` (100% sudo-free) |
+| **Storage & Network** | NVMe, SATA SSD/HDD & Ethernet/Wi-Fi | `/proc/diskstats`, `/sys/class/hwmon` (`nvme`/`drivetemp`), `/proc/net/dev` (100% sudo-free) |
 | **Battery & Power** | Standard ACPI / Linux Power Supply (`BAT0`, `BAT1`) | `/sys/class/power_supply/BAT*/{capacity,power_now,status}` (auto-disabled on Desktop PCs) |
 
-### All 24 Available Sensors
+### All 31 Available Sensors
 
 | # | Sensor Name | Group | What It Shows | Example |
 | :--- | :--- | :--- | :--- | :--- |
@@ -325,24 +345,31 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | `04` | **FPS 0.1% Low** | `FPS` | Time-weighted 0.1% worst micro-stutter frames | `0.1%: 95` |
 | `05` | **Frame Time** | `FPS` | Time taken to render a frame in milliseconds | `6.9 ms` |
 | `06` | **GPU Load** | `GPU` | GPU core usage percentage | `98%` |
-| `07` | **GPU Clock** | `GPU` | Current GPU graphics core clock speed | `2430 MHz` |
-| `08` | **GPU VRAM** | `GPU` | Used video memory in GB (includes shared GTT on APUs) | `6.4 GB` |
-| `09` | **GPU Bandwidth** | `GPU` | Active VRAM + PCIe memory bandwidth throughput | `165.4 GB/s` |
-| `10` | **GPU Temp** | `GPU` | GPU temperature in Celsius | `65 °C` |
-| `11` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
-| `12` | **GPU Power** | `GPU` | GPU power draw in Watts | `185 W` |
-| `13` | **CPU Load** | `CPU` | Total CPU utilization across all threads | `42%` |
-| `14` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
-| `15` | **CPU Power** | `CPU` | CPU package power draw in Watts | `58 W` |
-| `16` | **CPU Temp** | `CPU` | CPU package temperature in Celsius | `62 °C` |
-| `17` | **P/E Core Load** | `CPU` | Intel Hybrid Core breakdown (P-Core % / E-Core %; auto-disabled on non-hybrid CPUs) | `P/E: 45/20%` |
-| `18` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
-| `19` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
-| `20` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
-| `21` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
-| `22` | **Render API** | `SYS` | Active graphics engine (`VULKAN` or `OPENGL`) | `VULKAN` |
-| `23` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
-| `24` | **Battery & Power** | `SYS` | Battery percentage, power draw (W), and charging state (auto-disabled on Desktop PCs) | `BAT: 82% (16.5W+)` |
+| `07` | **GPU Core Clock** | `GPU` | Current GPU graphics core clock speed | `2430 MHz` |
+| `08` | **GPU VRAM Clock** | `GPU` | Current GPU video memory clock speed | `2200 MHz` |
+| `09` | **GPU VRAM** | `GPU` | Used video memory in GB & % (includes shared GTT on APUs) | `6.4 GB 40%` |
+| `10` | **GPU Bandwidth** | `GPU` | Active VRAM + PCIe memory bandwidth throughput | `165.4 GB/s` |
+| `11` | **GPU Temp** | `GPU` | GPU temperature in Celsius | `65 °C` |
+| `12` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
+| `13` | **GPU Power** | `GPU` | GPU power draw in Watts | `185 W` |
+| `14` | **CPU Load** | `CPU` | Total CPU utilization across all threads | `42%` |
+| `15` | **CPU All-Core Load** | `CPU` | Per-thread CPU load breakdown across active cores | `C0:45% C1:38%` |
+| `16` | **CPU Clock** | `CPU` | Highest active core clock speed | `5050 MHz` |
+| `17` | **CPU All-Core Clock** | `CPU` | Per-core frequency breakdown in MHz | `C0:5050MHz` |
+| `18` | **CPU Power** | `CPU` | CPU package power draw in Watts (RAPL/hwmon or TDP estimation) | `58 W` |
+| `19` | **CPU Temp** | `CPU` | CPU package/die (`Tdie`) temperature in Celsius | `62 °C` |
+| `20` | **System RAM** | `RAM` | Used system memory in GB and percentage with warning alerts | `9.2 GB 60%` |
+| `21` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
+| `22` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
+| `23` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
+| `24` | **Disk I/O Speed** | `SYS` | Physical storage Read / Write throughput | `DSK: 120/45 MB/s` |
+| `25` | **Disk / NVMe Temp** | `SYS` | NVMe / SSD hardware temperature in Celsius | `NVME: 46 °C` |
+| `26` | **Network Speed** | `SYS` | Active network interface Download / Upload speed | `NET: 12.4/1.2 MB/s` |
+| `27` | **Render API** | `SYS` | Active graphics engine (`VULKAN`, `DX12`, `DX11`, `OPENGL`) | `VULKAN` |
+| `28` | **GPU Model** | `SYS` | Detected discrete / integrated GPU hardware name | `GTX 1660 SUPER` |
+| `29` | **CPU Model** | `SYS` | Detected CPU processor model name | `Ryzen 7 7800X3D` |
+| `30` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
+| `31` | **Battery & Power** | `SYS` | Battery percentage, power draw (W), and charging state (auto-disabled on Desktop PCs) | `BAT: 82% (16.5W+)` |
 
 ---
 
@@ -396,7 +423,7 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 > **Total Resource Consumption Range (Summary):**
 > - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds just **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
 > - **Memory (RAM) Footprint Range:** **~4.5 MB** internal data & font atlas footprint (**~17 MB** total isolated process VmRSS), with **0 bytes/frame** heap allocation during active gameplay.
-> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 61-check automated simulation test suite (`./build/fpshud_test 1`). Community benchmark contributions across AMD and Intel Arc setups are warmly welcomed!
+> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 89-check automated simulation test suite (`./build/fpshud_test 1`). Community benchmark contributions across AMD and Intel Arc setups are warmly welcomed!
 
 ---
 
@@ -433,7 +460,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 64-check verification suite across 5 simulated device profiles + memory safety:
+# 2. Run the automated 89-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
 
 # 3. (Optional) Install local build directly to ~/.local (offline / no download):
@@ -452,7 +479,7 @@ FPS_HUD_FOR_LINUX/
 ├── .github/workflows/ci.yml             # Automated CI build, 5-device test, multi-distro matrix & GitHub Release
 ├── .clang-tidy                          # Automated static code analysis rules for C++ memory safety
 ├── CMakeLists.txt                       # C++26 build config with ThinLTO, LLD, ASan/UBSan & static libstdc++
-├── install.sh / uninstall.sh            # 1-command curl installer & uninstaller
+├── install.sh                           # 1-command curl installer
 ├── manifest/
 │   ├── libfpshud.version                # Export symbol map (hides internal symbols from game process)
 │   └── VkLayer_FPSHUD_overlay.json.in   # Vulkan Implicit Layer manifest template
@@ -475,7 +502,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── ui/                              # Dear ImGui in-game GUI menu, two-tone HUD & embedded fonts
 │   └── main.cpp                         # Diagnostic CLI entry point
 └── tests/
-    └── test_cli.cpp                     # Automated 61-check 5-device simulation & memory safety suite
+    └── test_cli.cpp                     # Automated 89-check 5-device simulation & memory safety suite
 ```
 
 ---
@@ -484,8 +511,8 @@ FPS_HUD_FOR_LINUX/
 
 1. **Pressing `Insert` / `F12` does not open the GUI or mouse clicks pass through to the game:**
    - On Wayland and X11, FPSHUD hooks keyboard events and mouse capture in-process out-of-the-box (zero sudo required). Ensure the game window is currently focused, or try pressing alternative toggle keys (`F10` or `Insert`).
-2. **CPU Power shows `0 W`:**
-   - Run `fpshud --setup` to install the read-only RAPL udev rule (see [Section 2](#2-installation--sensor-permissions) for Platypus security trade-offs).
+2. **How does CPU Power work without `sudo` vs with `fpshud --setup`?**
+   - Without `sudo`, FPSHUD automatically uses **Tier 2 Dynamic TDP + Frequency-Scaled Estimation** (`constraint_0_max_power_uw`), so CPU wattage is always active and never stuck at `0 W`. If you want direct hardware RAPL energy counter readings (**Tier 1/3**), run `~/.local/bin/fpshud --setup` to install the scoped `0440` (`GROUP="render"`) udev rule (see [Section 2](#2-installation--sensor-permissions)).
 3. **How do I reset all settings back to default?**
    - Open the In-Game GUI (`Insert` / `F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
 4. **Is FPSHUD safe to use with Anti-Cheat in online games?**
@@ -498,7 +525,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 61 multi-vendor checks and memory safety tests pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 89 multi-vendor checks and memory safety tests pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.

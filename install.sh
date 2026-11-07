@@ -170,13 +170,17 @@ echo "=================================================================="
 echo "  Hardware Telemetry & Sensor Permissions Setup"
 echo "=================================================================="
 echo "FPSHUD works out-of-the-box (sudo-free) for FPS, Frametimes, GPU"
-echo "sensors, RAM usage/swap/PSI, and in-game GUI/hotkeys on Wayland & X11."
-echo "Only privileged CPU Package Power (Watts via RAPL counters) requires"
-echo "an optional system udev rule."
+echo "sensors, CPU power estimation (TDP fallback), RAM usage/swap/PSI,"
+echo "and in-game GUI/hotkeys on Wayland & X11."
+echo "Only direct hardware RAPL energy counters require an optional udev rule."
 echo ""
 echo "Security Notice / Perhatian Keamanan:"
-echo "  Granting read access to RAPL CPU Wattage (MODE 0444) allows local"
-echo "  software to observe CPU power counters (side-channel CVE-2020-8694 Platypus trade-off)."
+echo "  Granting read access to RAPL CPU Wattage (GROUP=\"render\", MODE=\"0440\")"
+echo "  allows local render-group apps to read exact CPU power counters"
+echo "  (side-channel CVE-2020-8694 Platypus trade-off)."
+echo "  What sudo does: creates /etc/udev/rules.d/99-fpshud-rapl.rules (0440)"
+echo "  and reloads udevadm rules. Without sudo, CPU Wattage automatically"
+echo "  uses safe TDP + frequency estimation (never stuck at 0W)."
 echo "=================================================================="
 
 USER_CONFIRM=0
@@ -213,6 +217,9 @@ else
     echo "    To enable CPU Wattage later, run at any time:"
     echo "        ~/.local/bin/fpshud --setup"
     echo ""
+    if [ -x "$BIN_DIR/fpshud" ]; then
+        "$BIN_DIR/fpshud" --status || true
+    fi
 fi
 
 echo ""
@@ -237,4 +244,5 @@ echo ""
 echo "  Hardware Sensors & Permissions:"
 echo "  - Check permission state: ~/.local/bin/fpshud --status"
 echo "  - Configure permissions : ~/.local/bin/fpshud --setup"
+echo "  - Uninstall FPSHUD      : ~/.local/bin/fpshud --uninstall"
 echo "=================================================================="

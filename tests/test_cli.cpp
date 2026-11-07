@@ -1537,7 +1537,7 @@ void run_elf_and_layer_abi_suite() {
         scripts_install_ok = true;
       }
 
-      std::string uninstall_content = read_text_file(repo_root / "uninstall.sh");
+      std::string uninstall_content = read_text_file(repo_root / "scripts" / "uninstall.sh");
       if (uninstall_content.find("fpshud_recorder") != std::string::npos &&
           uninstall_content.find("fpshud_recorder_bin") != std::string::npos &&
           uninstall_content.find("com.valvesoftware.Steam") != std::string::npos) {
@@ -1816,13 +1816,11 @@ void run_all_devices_and_features_suite() {
     td_check.battery_power_w = 12.3f;
     td_check.battery_charging = true;
     std::strncpy(td_check.battery_status, "Charging", sizeof(td_check.battery_status));
-    td_check.hybrid_cpu = true;
-    td_check.cpu_p_core_load_pct = 45.0f;
-    td_check.cpu_e_core_load_pct = 20.0f;
-    td_check.cpu_p_core_count = 8;
-    td_check.cpu_e_core_count = 8;
+    td_check.cpu_core_count = 16;
+    td_check.cpu_core_loads_pct[0] = 45;
+    td_check.cpu_core_clocks_mhz[0] = 5050;
     bool td_ok = (td_check.battery_available && td_check.battery_pct == 75.5f &&
-                  td_check.hybrid_cpu && td_check.cpu_p_core_count == 8);
+                  td_check.cpu_core_count == 16 && td_check.cpu_core_loads_pct[0] == 45);
 
     test_cfg.gui_scale = 1.35f;
     test_cfg.dim_labels_enabled = false;
@@ -2465,18 +2463,12 @@ void run_all_devices_and_features_suite() {
     auto hybrid_snap = hybrid_collector.get_snapshot();
     fs::remove_all(hybrid_base, ec);
 
-    bool p_count_ok = (hybrid_snap.cpu_p_core_count == 16);
-    bool e_count_ok = (hybrid_snap.cpu_e_core_count == 8);
-    bool hybrid_flag_ok = hybrid_snap.hybrid_cpu;
-    bool p_load_ok = std::fabs(hybrid_snap.cpu_p_core_load_pct - 60.0f) < 1.0f;
-    bool e_load_ok = std::fabs(hybrid_snap.cpu_e_core_load_pct - 25.0f) < 1.0f;
     bool all_core_ok =
         (hybrid_snap.cpu_core_count == 24 && hybrid_snap.cpu_core_loads_pct[0] == 60 &&
          hybrid_snap.cpu_core_loads_pct[8] == 25);
 
-    check_cond(hybrid_flag_ok && p_count_ok && e_count_ok && p_load_ok && e_load_ok && all_core_ok,
-               "PROFILE 9.4: All-Core CPU Load & Intel Hybrid Topology",
-               "Parsed 24 per-core loads (C0=60%, C8=25%) and hybrid topology from /proc/stat");
+    check_cond(all_core_ok, "PROFILE 9.4: All-Core Per-Thread CPU Load Parsing",
+               "Parsed 24 per-core loads (C0=60%, C8=25%) from /proc/stat");
 
     // Verify DX11 / DX12 / DX9 / Vulkan / OpenGL Render API Detection
     fs::path maps_dx12 = "/tmp/fpshud_mock_maps_dx12_" + std::to_string(::getpid());
@@ -3622,10 +3614,250 @@ void run_all_devices_and_features_suite() {
   std::printf("====================================================================\n");
 }
 
+void print_probe_row(const char* name, bool available, const char* value_or_reason, int& avail_cnt,
+                     int& total_cnt) {
+  ++total_cnt;
+  if (available) {
+    ++avail_cnt;
+    std::printf("  [\033[32m✓\033[0m] %-24s : \033[32mAVAILABLE\033[0m   | %s\n", name,
+                value_or_reason);
+  } else {
+    std::printf("  [\033[33m-\033[0m] %-24s : \033[33mUNAVAILABLE\033[0m | %s\n", name,
+                value_or_reason);
+  }
+}
+
+void run_sensor_probe() {
+  using namespace fpshud;
+  TelemetryCollector tc;
+  tc.poll_once_sync();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  tc.poll_once_sync();
+  TelemetryData d = tc.get_snapshot();
+
+  bool rapl_readable = false;
+  std::error_code ec;
+  if (fs::exists("/sys/class/powercap", ec)) {
+    for (const auto& entry : fs::directory_iterator("/sys/class/powercap", ec)) {
+      std::string fname = entry.path().filename().string();
+      if (fname.find("rapl") != std::string::npos) {
+        fs::path epath = entry.path() / "energy_uj";
+        struct stat st{};
+        if (::stat(epath.c_str(), &st) == 0 && (st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) != 0 &&
+            ::access(epath.c_str(), R_OK) == 0) {
+          rapl_readable = true;
+          break;
+        }
+      }
+    }
+  }
+
+  std::printf("\n==============================================================================\n");
+  std::printf("  FPSHUD — Live Hardware Sensor Readability Test (Hasil Tes Sensor)\n");
+  std::printf("==============================================================================\n");
+
+  int avail = 0;
+  int total = 0;
+  char buf[160];
+
+  // 1. CPU & GPU Identity
+  std::snprintf(buf, sizeof(buf), "%s (%d Threads)", d.cpu_name, d.cpu_core_count);
+  print_probe_row("CPU Processor", d.cpu_core_count > 0, buf, avail, total);
+
+  if (d.gpu_available) {
+    std::snprintf(buf, sizeof(buf), "%s (%s, Driver: %s)", d.gpu_name, d.gpu_vendor,
+                  d.gpu_driver_version);
+    print_probe_row("GPU Adapter", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Adapter", false, "No supported DRM / NVML / Level Zero GPU detected",
+                    avail, total);
+  }
+
+  std::printf("------------------------------------------------------------------------------\n");
+
+  // 2. CPU Sensors
+  std::snprintf(buf, sizeof(buf), "%.1f %%", d.cpu_load_pct);
+  print_probe_row("CPU Total Load", d.cpu_core_count > 0, buf, avail, total);
+
+  if (d.cpu_core_count > 0) {
+    std::snprintf(buf, sizeof(buf), "%d Threads (C0: %u%%, C1: %u%%, ...)", d.cpu_core_count,
+                  static_cast<unsigned>(d.cpu_core_loads_pct[0]),
+                  static_cast<unsigned>(d.cpu_core_loads_pct[d.cpu_core_count > 1 ? 1 : 0]));
+    print_probe_row("CPU All-Core Load", true, buf, avail, total);
+  } else {
+    print_probe_row("CPU All-Core Load", false, "/proc/stat per-core lines unavailable", avail,
+                    total);
+  }
+
+  if (d.cpu_clock_mhz > 0) {
+    std::snprintf(buf, sizeof(buf), "%d MHz (C0: %u MHz)", d.cpu_clock_mhz,
+                  static_cast<unsigned>(d.cpu_core_clocks_mhz[0]));
+    print_probe_row("CPU Clock (Max & Core)", true, buf, avail, total);
+  } else {
+    print_probe_row("CPU Clock (Max & Core)", false, "cpufreq / /proc/cpuinfo clock not exposed",
+                    avail, total);
+  }
+
+  if (d.cpu_temp_c > 0) {
+    std::snprintf(buf, sizeof(buf), "%d °C", d.cpu_temp_c);
+    print_probe_row("CPU Temperature", true, buf, avail, total);
+  } else {
+    print_probe_row("CPU Temperature", false, "coretemp / k10temp / zenpower hwmon not found",
+                    avail, total);
+  }
+
+  if (d.cpu_power_w > 0.0f) {
+    std::snprintf(
+        buf, sizeof(buf), "%.1f W (%s)", d.cpu_power_w,
+        rapl_readable ? "Direct Hardware Counter / RAPL" : "TDP + Frequency Dynamic Estimation");
+    print_probe_row("CPU Package Power", true, buf, avail, total);
+  } else {
+    print_probe_row("CPU Package Power", false, "0.0 W (Run: ~/.local/bin/fpshud --setup)", avail,
+                    total);
+  }
+
+  std::printf("------------------------------------------------------------------------------\n");
+
+  // 3. GPU Sensors
+  if (d.gpu_available) {
+    std::snprintf(buf, sizeof(buf), "%.0f %%", d.gpu_load_pct);
+    print_probe_row("GPU Core Load", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Core Load", false, "GPU load sensor unavailable", avail, total);
+  }
+
+  if (d.gpu_clock_mhz > 0) {
+    std::snprintf(buf, sizeof(buf), "%d MHz", d.gpu_clock_mhz);
+    print_probe_row("GPU Core Clock", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Core Clock", false, "GPU core frequency sensor unavailable", avail, total);
+  }
+
+  if (d.gpu_vram_clock_mhz > 0) {
+    std::snprintf(buf, sizeof(buf), "%d MHz", d.gpu_vram_clock_mhz);
+    print_probe_row("GPU VRAM Clock", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU VRAM Clock", false, "VRAM memory clock sensor not exposed by GPU driver",
+                    avail, total);
+  }
+
+  if (d.gpu_vram_total_gb > 0.0f) {
+    float vram_pct = (d.gpu_vram_used_gb / d.gpu_vram_total_gb) * 100.0f;
+    std::snprintf(buf, sizeof(buf), "%.2f / %.2f GB (%.0f%%)", d.gpu_vram_used_gb,
+                  d.gpu_vram_total_gb, vram_pct);
+    print_probe_row("GPU VRAM Usage", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU VRAM Usage", false, "VRAM capacity sensor unavailable", avail, total);
+  }
+
+  if (d.gpu_max_bandwidth_gbs > 0.0f || d.gpu_bandwidth_gbs > 0.0f) {
+    std::snprintf(buf, sizeof(buf), "%.1f GB/s", d.gpu_bandwidth_gbs);
+    print_probe_row("GPU Memory Bandwidth", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Memory Bandwidth", false, "GPU memory throughput sensor unavailable",
+                    avail, total);
+  }
+
+  if (d.gpu_temp_c > 0) {
+    std::snprintf(buf, sizeof(buf), "%d °C", d.gpu_temp_c);
+    print_probe_row("GPU Temperature", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Temperature", false, "GPU thermal sensor unavailable", avail, total);
+  }
+
+  if (d.gpu_available && d.gpu_fan_pct >= 0) {
+    std::snprintf(buf, sizeof(buf), "%d %%", d.gpu_fan_pct);
+    print_probe_row("GPU Fan Speed", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Fan Speed", false, "Passive / Laptop shared cooling or fan sensor absent",
+                    avail, total);
+  }
+
+  if (d.gpu_power_w > 0.0f) {
+    std::snprintf(buf, sizeof(buf), "%.1f W", d.gpu_power_w);
+    print_probe_row("GPU Power Draw", true, buf, avail, total);
+  } else {
+    print_probe_row("GPU Power Draw", false, "GPU power sensor not exposed by driver", avail,
+                    total);
+  }
+
+  std::printf("------------------------------------------------------------------------------\n");
+
+  // 4. Memory, Storage, Network & Battery
+  if (d.ram_total_gb > 0.0f) {
+    std::snprintf(buf, sizeof(buf), "%.2f / %.2f GB (%.0f%%)", d.ram_used_gb, d.ram_total_gb,
+                  d.ram_used_pct);
+    print_probe_row("System RAM", true, buf, avail, total);
+  } else {
+    print_probe_row("System RAM", false, "/proc/meminfo unavailable", avail, total);
+  }
+
+  std::snprintf(buf, sizeof(buf), "%.2f GB (Process VmRSS)", d.game_ram_gb);
+  print_probe_row("Process / Game RAM", d.ram_total_gb > 0.0f, buf, avail, total);
+
+  if (d.swap_total_gb > 0.0f) {
+    std::snprintf(buf, sizeof(buf), "%.2f / %.2f GB", d.swap_used_gb, d.swap_total_gb);
+    print_probe_row("Swap / ZRAM", true, buf, avail, total);
+  } else {
+    print_probe_row("Swap / ZRAM", false, "No Swap or ZRAM configured on this system", avail,
+                    total);
+  }
+
+  if (d.mem_psi_some_pct >= 0.0f) {
+    std::snprintf(buf, sizeof(buf), "%.1f %% (10s stall avg)", d.mem_psi_some_pct);
+    print_probe_row("Memory Pressure (PSI)", true, buf, avail, total);
+  } else {
+    print_probe_row("Memory Pressure (PSI)", false, "/proc/pressure/memory disabled in kernel",
+                    avail, total);
+  }
+
+  std::snprintf(buf, sizeof(buf), "Read: %.1f MB/s | Write: %.1f MB/s", d.disk_read_mbs,
+                d.disk_write_mbs);
+  print_probe_row("Disk I/O Speed", true, buf, avail, total);
+
+  if (d.disk_temp_available && d.disk_temp_c > 0) {
+    std::snprintf(buf, sizeof(buf), "%d °C", d.disk_temp_c);
+    print_probe_row("Storage / NVMe Temp", true, buf, avail, total);
+  } else {
+    print_probe_row("Storage / NVMe Temp", false, "No NVMe / SATA hwmon thermal sensor exposed",
+                    avail, total);
+  }
+
+  std::snprintf(buf, sizeof(buf), "Download: %.2f MB/s | Upload: %.2f MB/s", d.net_rx_mbs,
+                d.net_tx_mbs);
+  print_probe_row("Network Speed", true, buf, avail, total);
+
+  if (d.battery_available) {
+    std::snprintf(buf, sizeof(buf), "%.0f%% (%.1f W, %s)", d.battery_pct, d.battery_power_w,
+                  d.battery_status);
+    print_probe_row("Laptop / Handheld Bat", true, buf, avail, total);
+  } else {
+    print_probe_row("Laptop / Handheld Bat", false, "Desktop PC (No battery detected)", avail,
+                    total);
+  }
+
+  std::printf("==============================================================================\n");
+  std::printf("  Summary: \033[32m%d / %d\033[0m Hardware Sensors AVAILABLE on your system.\n",
+              avail, total);
+  if (!rapl_readable) {
+    std::printf(
+        "  [i] Info: CPU Power is using Sudo-Free TDP Estimation (%.1f W). To enable\n"
+        "      direct hardware RAPL counter access anytime, run: ~/.local/bin/fpshud --setup\n",
+        d.cpu_power_w);
+  }
+  std::printf("==============================================================================\n");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   using namespace fpshud;
+
+  if (argc > 1 &&
+      (std::strcmp(argv[1], "--probe-sensors") == 0 || std::strcmp(argv[1], "--status") == 0)) {
+    run_sensor_probe();
+    return 0;
+  }
 
   std::string env_input_str = "1";
   if (const char* env = std::getenv("FPS_HUD")) {
