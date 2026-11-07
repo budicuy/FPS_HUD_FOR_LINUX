@@ -101,7 +101,6 @@ struct BenchmarkSummary {
   float max_gpu_power_w = 0.0f;
   int max_cpu_temp_c = 0;
   float max_cpu_power_w = 0.0f;
-  char saved_csv_path[128] = {0};
   std::chrono::steady_clock::time_point finished_time{};
 };
 

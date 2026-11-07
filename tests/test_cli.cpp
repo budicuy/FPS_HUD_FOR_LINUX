@@ -1934,10 +1934,38 @@ void run_all_devices_and_features_suite() {
       }
       unlink(tmp_ini.c_str());
     }
-    check_cond(exp_ini_ok, "0.4 Experimental Adaptive VFR Config Persistence",
-               exp_ini_ok
-                   ? "record_adaptive_vfr and record_vfr_max_fps persisted under [Experimental]"
-                   : "Failed: [Experimental] section persistence or parsing failure");
+
+    HudConfig off_cfg{};
+    off_cfg.record_adaptive_vfr = false;
+    auto t0 = std::chrono::steady_clock::time_point{};
+    auto t1 = t0 + std::chrono::milliseconds(100);
+    auto t2 = t1 + std::chrono::milliseconds(2);   // 2ms elapsed (< 90% of 8.33ms @ 120 FPS)
+    auto t3 = t1 + std::chrono::milliseconds(9);   // 9ms elapsed (>= 90% of 8.33ms @ 120 FPS)
+    bool vfr_logic_ok =
+        !fpshud::experimental::AdaptiveVfrController::is_vfr_active(off_cfg) &&
+        fpshud::experimental::AdaptiveVfrController::is_vfr_active(save_cfg) &&
+        fpshud::experimental::AdaptiveVfrController::should_capture_frame(t1, t0, 120) &&
+        !fpshud::experimental::AdaptiveVfrController::should_capture_frame(t2, t1, 120) &&
+        fpshud::experimental::AdaptiveVfrController::should_capture_frame(t3, t1, 120);
+
+    [&]<typename T = BenchmarkSummary>() {
+      static_assert(!requires(T bs) { bs.saved_csv_path; },
+                    "saved_csv_path must be removed from BenchmarkSummary");
+    }();
+
+    fs::path rroot = find_repo_root();
+    bool dead_vk_fields_removed = rroot.empty();
+    if (!rroot.empty()) {
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      dead_vk_fields_removed = (vk_src.find("has_dma_buf_support") == std::string::npos &&
+                                vk_src.find("GetMemoryFdKHR") == std::string::npos);
+    }
+
+    check_cond(exp_ini_ok && vfr_logic_ok && dead_vk_fields_removed,
+               "0.4 Experimental Adaptive VFR Config & Controller Logic",
+               exp_ini_ok && vfr_logic_ok && dead_vk_fields_removed
+                   ? "AdaptiveVfrController pacing & [Experimental] INI persistence verified"
+                   : "Failed: AdaptiveVfrController logic or [Experimental] persistence failure");
   }
 
   {

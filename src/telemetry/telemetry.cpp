@@ -1498,7 +1498,6 @@ void TelemetryCollector::stop_benchmark() {
   sum.fps_01pct_low = std::min(sum.fps_1pct_low, calc_bench_time_weighted_low(0.001));
 
   std::string csv_path = get_benchmark_csv_path();
-  std::snprintf(sum.saved_csv_path, sizeof(sum.saved_csv_path), "%s", csv_path.c_str());
 
   std::error_code ec;
   bool file_exists = fs::exists(csv_path, ec) && fs::file_size(csv_path, ec) > 0;

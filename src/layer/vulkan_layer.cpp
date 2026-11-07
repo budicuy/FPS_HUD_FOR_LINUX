@@ -117,10 +117,6 @@ struct DeviceData {
   PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
   PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges = nullptr;
 
-  // Zero-Copy DMA-BUF export support (VK_KHR_external_memory_fd)
-  bool has_dma_buf_support = false;
-  PFN_vkGetMemoryFdKHR GetMemoryFdKHR = nullptr;
-
   // VRAM memory budget extension support (VK_EXT_memory_budget) & throttling
   bool has_memory_budget_ext = false;
   std::chrono::steady_clock::time_point last_vram_update{};
@@ -850,12 +846,6 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     LOAD_DEV_FN(CmdPipelineBarrier);
     LOAD_DEV_FN(InvalidateMappedMemoryRanges);
 #undef LOAD_DEV_FN
-
-    dd->GetMemoryFdKHR =
-        reinterpret_cast<PFN_vkGetMemoryFdKHR>(fpGetDeviceProcAddr(*pDevice, "vkGetMemoryFdKHR"));
-    if (dd->GetMemoryFdKHR) {
-      dd->has_dma_buf_support = true;
-    }
 
     // Check VK_EXT_memory_budget extension presence
     if (pCreateInfo && pCreateInfo->ppEnabledExtensionNames) {
