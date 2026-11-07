@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <algorithm>
@@ -88,6 +89,14 @@ bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
   if (end == buf) return false;
   out = static_cast<uint64_t>(val);
   return true;
+}
+
+bool is_sysfs_readable(const char* path) noexcept {
+  if (!path || !*path) return false;
+  struct stat st{};
+  if (::stat(path, &st) != 0) return false;
+  if ((st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) == 0) return false;
+  return ::access(path, R_OK) == 0;
 }
 
 // Parses sysfs CPU range string (e.g. "0-7,16-23") into bitmask and returns count of CPUs.
@@ -666,14 +675,14 @@ void TelemetryCollector::init_cpu_sensors() {
         if (cpu_hwmon_power_uw_path_.empty()) {
           fs::path p_avg = entry.path() / "power1_average";
           fs::path p_inp = entry.path() / "power1_input";
-          if (::access(p_avg.c_str(), R_OK) == 0)
+          if (is_sysfs_readable(p_avg.c_str()))
             cpu_hwmon_power_uw_path_ = p_avg.string();
-          else if (::access(p_inp.c_str(), R_OK) == 0)
+          else if (is_sysfs_readable(p_inp.c_str()))
             cpu_hwmon_power_uw_path_ = p_inp.string();
         }
         if (cpu_hwmon_energy_uj_path_.empty()) {
           fs::path e_inp = entry.path() / "energy1_input";
-          if (::access(e_inp.c_str(), R_OK) == 0) cpu_hwmon_energy_uj_path_ = e_inp.string();
+          if (is_sysfs_readable(e_inp.c_str())) cpu_hwmon_energy_uj_path_ = e_inp.string();
         }
       }
     }
@@ -706,7 +715,7 @@ void TelemetryCollector::init_cpu_sensors() {
       cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
     }
 
-    if (::access(candidate.c_str(), R_OK) == 0) {
+    if (is_sysfs_readable(candidate.c_str())) {
       rapl_energy_path_ = candidate;
       fs::path max_path = parent_dir / "max_energy_range_uj";
       if (read_sysfs_buf(max_path.c_str(), buf, sizeof(buf))) {
