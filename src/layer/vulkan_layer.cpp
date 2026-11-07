@@ -1314,14 +1314,16 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
         dd->InvalidateMappedMemoryRanges(dd->device, 1, &range);
       }
       uint32_t fmt = 0;  // 0 = BGRA
-      // On x86_64 little-endian:
-      // VK_FORMAT_A2B10G10R10_UNORM_PACK32 stores R in bits 0..9 (byte 0 -> Red, similar to RGBA)
-      // VK_FORMAT_A2R10G10B10_UNORM_PACK32 stores B in bits 0..9 (byte 0 -> Blue, similar to BGRA)
-      if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB ||
-          sd->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+      // Autodetect Vulkan swapchain pixel format (8-bit and 10-bit HDR/wide gamut)
+      // VK_FORMAT_A2B10G10R10_UNORM_PACK32 stores R in bits 0..9, G in bits 10..19, B in
+      // bits 20..29 (little-endian X2BGR10LE) VK_FORMAT_A2R10G10B10_UNORM_PACK32 stores B in bits
+      // 0..9, G in bits 10..19, R in bits 20..29 (little-endian X2RGB10LE)
+      if (sd->format == VK_FORMAT_R8G8B8A8_UNORM || sd->format == VK_FORMAT_R8G8B8A8_SRGB) {
         fmt = 1;  // 1 = RGBA
+      } else if (sd->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+        fmt = 2;  // 2 = X2BGR10LE
       } else if (sd->format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
-        fmt = 0;  // 0 = BGRA
+        fmt = 3;  // 3 = X2RGB10LE
       }
       fpshud::RecorderController::instance().submit_frame(frame.mapped_ptr, sd->extent.width,
                                                           sd->extent.height, fmt, false);

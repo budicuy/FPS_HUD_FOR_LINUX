@@ -912,7 +912,14 @@ int main(int argc, char* argv[]) {
                 const uint8_t* src = static_cast<const uint8_t*>(shm_base) + slot_offset;
                 int stride = notify.width * 4;
 
-                AVPixelFormat src_fmt = (notify.format == 1) ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
+                AVPixelFormat src_fmt = AV_PIX_FMT_BGRA;
+                if (notify.format == 1) {
+                  src_fmt = AV_PIX_FMT_RGBA;
+                } else if (notify.format == 2) {
+                  src_fmt = AV_PIX_FMT_X2BGR10LE;
+                } else if (notify.format == 3) {
+                  src_fmt = AV_PIX_FMT_X2RGB10LE;
+                }
                 if (!sws_ctx || last_src_fmt != src_fmt ||
                     last_src_w != static_cast<int>(notify.width) ||
                     last_src_h != static_cast<int>(notify.height)) {

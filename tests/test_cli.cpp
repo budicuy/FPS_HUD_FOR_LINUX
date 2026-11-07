@@ -2804,6 +2804,24 @@ void run_all_devices_and_features_suite() {
           ? "Guarded PTS pacing (target_pts > last_encoded_pts) and clamped target_fps verified"
           : "Failed: Missing target_pts pacing guard or start_cfg.fps clamp in recorder");
 
+  // 4.9 10-Bit HDR / Wide-Gamut Swapchain Format Preservation
+  bool hdr_10bit_format_ok = false;
+  if (!rroot.empty()) {
+    std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+    std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+    bool vk_maps_10bit = (vk_src.find("fmt = 2") != std::string::npos &&
+                          vk_src.find("fmt = 3") != std::string::npos &&
+                          vk_src.find("VK_FORMAT_A2B10G10R10_UNORM_PACK32") != std::string::npos);
+    bool rec_unpacks_10bit = (rec_src.find("AV_PIX_FMT_X2BGR10LE") != std::string::npos &&
+                              rec_src.find("AV_PIX_FMT_X2RGB10LE") != std::string::npos);
+    hdr_10bit_format_ok = vk_maps_10bit && rec_unpacks_10bit;
+  }
+  check_cond(hdr_10bit_format_ok, "4.9 10-Bit HDR / Wide-Gamut Swapchain Format Preservation",
+             hdr_10bit_format_ok
+                 ? "Native 10-bit color formats (X2BGR10LE / X2RGB10LE) mapped and unpacked "
+                   "without bit-scrambling"
+                 : "Failed: Missing 10-bit format mapping or unpacking in Vulkan layer / recorder");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

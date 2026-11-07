@@ -83,7 +83,7 @@ struct ShmFrameHeader {
   uint32_t magic;  // kShmFrameMagic
   uint32_t width;
   uint32_t height;
-  uint32_t format;  // 0 = BGRA, 1 = RGBA
+  uint32_t format;  // 0 = BGRA, 1 = RGBA, 2 = X2BGR10LE, 3 = X2RGB10LE
   uint32_t flip_y;  // 0 = normal (Vulkan), 1 = flipped (OpenGL)
   uint32_t slot_size;
   std::atomic<uint32_t> write_slot{0};  // 0, 1, or 2 (Triple-buffering)
