@@ -1791,8 +1791,24 @@ void run_all_devices_and_features_suite() {
     apply_preset_standard(test_cfg);
     bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
     apply_preset_advance(test_cfg);
+    fs::path rroot = find_repo_root();
+    bool dead_cfg_fns_removed = true;
+    if (!rroot.empty()) {
+      std::string cfg_hpp = read_text_file(rroot / "src" / "core" / "config.hpp");
+      std::string cfg_cpp = read_text_file(rroot / "src" / "core" / "config.cpp");
+      dead_cfg_fns_removed =
+          (cfg_hpp.find("gui_keybind_name") == std::string::npos &&
+           cfg_hpp.find("hud_keybind_name") == std::string::npos &&
+           cfg_hpp.find("bench_keybind_name") == std::string::npos &&
+           cfg_hpp.find("record_keybind_name") == std::string::npos &&
+           cfg_hpp.find("metric_name(") == std::string::npos &&
+           cfg_hpp.find("background_name(") == std::string::npos &&
+           cfg_hpp.find("font_family_name(") == std::string::npos &&
+           cfg_cpp.find("LayoutPosition::CenterTop") == std::string::npos);
+    }
     bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 31 &&
-                   test_cfg.active_preset == "advance");
+                   test_cfg.active_preset == "advance" &&
+                   test_cfg.layout == LayoutPosition::TopCenter && dead_cfg_fns_removed);
 
     // Verify new MetricType entries (Battery, GpuVramClock, CpuAllCoreLoad, CpuAllCoreClock,
     // GpuModel, CpuModel) and layout_name(TopCenter)

@@ -529,7 +529,7 @@ void apply_preset_advance(HudConfig& cfg) {
   for (MetricType m : kCanonicalMetricsOrder) {
     cfg.metrics.try_push_back(m);
   }
-  cfg.layout = LayoutPosition::CenterTop;
+  cfg.layout = LayoutPosition::TopCenter;
   cfg.arrangement = ArrangementMode::Linear;
   cfg.background = BackgroundStyle::Translucent;
   cfg.bg_alpha = 0.42f;
@@ -605,74 +605,6 @@ HudConfig& get_mutable_config() {
 
 const HudConfig& get_global_config() { return get_mutable_config(); }
 
-const char* metric_name(MetricType m) {
-  switch (m) {
-    case MetricType::FPS:
-      return "FPS";
-    case MetricType::FpsAvg:
-      return "FPS.AVG";
-    case MetricType::Fps1Low:
-      return "FPS.1%";
-    case MetricType::Fps01Low:
-      return "FPS.0.1%";
-    case MetricType::FrameTimes:
-      return "FT";
-    case MetricType::GpuLoad:
-      return "GPU";
-    case MetricType::GpuClock:
-      return "G.CLK";
-    case MetricType::GpuVramClock:
-      return "VRAM.CLK";
-    case MetricType::GpuVram:
-      return "VRAM";
-    case MetricType::GpuBandwidth:
-      return "G.BW";
-    case MetricType::GpuTemp:
-      return "G.TMP";
-    case MetricType::GpuFan:
-      return "G.FAN";
-    case MetricType::GpuWatt:
-      return "G.PWR";
-    case MetricType::CpuLoad:
-      return "CPU";
-    case MetricType::CpuAllCoreLoad:
-      return "C.ALL";
-    case MetricType::CpuClock:
-      return "C.CLK";
-    case MetricType::CpuAllCoreClock:
-      return "C.ALL.CLK";
-    case MetricType::CpuWatt:
-      return "C.PWR";
-    case MetricType::CpuTemp:
-      return "C.TMP";
-    case MetricType::Ram:
-      return "RAM";
-    case MetricType::GameRam:
-      return "GAME.RAM";
-    case MetricType::SwapRam:
-      return "SWAP";
-    case MetricType::MemPressure:
-      return "MEM.PSI";
-    case MetricType::EngineApi:
-      return "API";
-    case MetricType::GpuModel:
-      return "GPU.MDL";
-    case MetricType::CpuModel:
-      return "CPU.MDL";
-    case MetricType::SystemClock:
-      return "CLOCK";
-    case MetricType::Battery:
-      return "BAT";
-    case MetricType::DiskIo:
-      return "Disk Read/Write";
-    case MetricType::DiskTemp:
-      return "Disk Temp";
-    case MetricType::NetSpeed:
-      return "Network Speed";
-  }
-  return "UNK";
-}
-
 const char* layout_name(LayoutPosition p) {
   switch (p) {
     case LayoutPosition::TopLeft:
@@ -701,80 +633,6 @@ const char* arrangement_name(ArrangementMode a) {
       return "Linear (Horizontal Grouped)";
   }
   return "Stack";
-}
-
-const char* background_name(BackgroundStyle b) {
-  switch (b) {
-    case BackgroundStyle::None:
-      return "None (Transparent)";
-    case BackgroundStyle::Translucent:
-      return "Translucent";
-    case BackgroundStyle::Solid:
-      return "Solid";
-  }
-  return "None";
-}
-
-const char* font_family_name(FontFamily f) {
-  switch (f) {
-    case FontFamily::SansBold:
-      return "Sans Bold (NVIDIA Style)";
-    case FontFamily::MonoBold:
-      return "DejaVu Mono Bold";
-    case FontFamily::VeraMono:
-      return "Vera Mono Bold";
-    case FontFamily::AdwaitaMono:
-      return "Adwaita Mono Bold";
-  }
-  return "Sans Bold";
-}
-
-const char* gui_keybind_name(int idx) {
-  switch (idx) {
-    case 0:
-      return "Insert / F12 / F10";
-    case 1:
-      return "Insert Only";
-    case 2:
-      return "F10 Only";
-    case 3:
-      return "Home Only";
-    case 4:
-      return "F12 Only";
-  }
-  return "Insert / F12";
-}
-
-const char* hud_keybind_name(int idx) {
-  switch (idx) {
-    case 0:
-      return "F11";
-    case 1:
-      return "End";
-  }
-  return "F11";
-}
-
-const char* bench_keybind_name(int idx) {
-  switch (idx) {
-    case 0:
-      return "F9";
-    case 1:
-      return "PageUp";
-  }
-  return "F9";
-}
-
-const char* record_keybind_name(int idx) {
-  switch (idx) {
-    case 0:
-      return "F7";
-    case 1:
-      return "Alt+F9";
-    case 2:
-      return "ScrollLock";
-  }
-  return "F7";
 }
 
 const char* linux_keycode_name(uint32_t code) noexcept {

@@ -216,15 +216,8 @@ const HudConfig& get_global_config();
 std::mutex& get_config_mutex();
 
 // Helper names for GUI & CLI diagnostics
-const char* metric_name(MetricType m);
 const char* layout_name(LayoutPosition p);
 const char* arrangement_name(ArrangementMode a);
-const char* background_name(BackgroundStyle b);
-const char* font_family_name(FontFamily f);
-const char* gui_keybind_name(int idx);
-const char* hud_keybind_name(int idx);
-const char* bench_keybind_name(int idx);
-const char* record_keybind_name(int idx);
 const char* linux_keycode_name(uint32_t code) noexcept;
 std::string format_keybind(const Keybind& kb);
 std::string get_default_record_dir();
