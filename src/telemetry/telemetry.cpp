@@ -321,7 +321,8 @@ bool TelemetryCollector::init_intel_level_zero() {
             dlsym(ze_lib_, "zesEngineGetActivity"));
   }
 
-  // Initialize Level Zero / Sysman
+  // Initialize Level Zero / Sysman (ensure ZES_ENABLE_SYSMAN=1 for older Compute Runtime drivers)
+  ::setenv("ZES_ENABLE_SYSMAN", "1", 0);
   int init_res = 1;
   if (ze_dispatch_.zesInit) {
     init_res = ze_dispatch_.zesInit(0);
@@ -484,6 +485,49 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
       }
       prev_ze_eng_active_ = stats.activeTime;
       prev_ze_eng_ts_ = stats.timestamp;
+    }
+  }
+
+  // 6. Hybrid sysfs / hwmon supplement (VRAM clock, bandwidth, fan speed, and fallback domains)
+  char buf[64]{};
+  int mclk_mhz = 0;
+  if (!drm_mclk_freq_path_.empty() &&
+      read_sysfs_buf(drm_mclk_freq_path_.c_str(), buf, sizeof(buf))) {
+    uint64_t raw_hz = std::strtoull(buf, nullptr, 10);
+    mclk_mhz = static_cast<int>((raw_hz + 500000) / 1000000);
+  }
+  int fan_pct = -1;
+  if (!drm_fan_pwm_path_.empty() && read_sysfs_buf(drm_fan_pwm_path_.c_str(), buf, sizeof(buf))) {
+    long pwm = std::strtol(buf, nullptr, 10);
+    fan_pct = std::clamp(static_cast<int>((pwm * 100 + 127) / 255), 0, 100);
+  } else if (!drm_fan_rpm_path_.empty() && !drm_fan_max_path_.empty() &&
+             read_sysfs_buf(drm_fan_rpm_path_.c_str(), buf, sizeof(buf))) {
+    long rpm = std::strtol(buf, nullptr, 10);
+    if (read_sysfs_buf(drm_fan_max_path_.c_str(), buf, sizeof(buf))) {
+      long max_rpm = std::strtol(buf, nullptr, 10);
+      if (max_rpm > 0) fan_pct = std::clamp(static_cast<int>((rpm * 100) / max_rpm), 0, 100);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (mclk_mhz > 0) hw_data_.gpu_vram_clock_mhz = mclk_mhz;
+    if (fan_pct >= 0) hw_data_.gpu_fan_pct = fan_pct;
+    int eff_clk = (hw_data_.gpu_vram_clock_mhz > 0) ? hw_data_.gpu_vram_clock_mhz
+                                                    : hw_data_.gpu_clock_mhz;
+    if (eff_clk > 0) {
+      float bus_bytes = (hw_data_.gpu_vram_total_gb >= 14.5f)
+                            ? 32.0f
+                            : ((hw_data_.gpu_vram_total_gb >= 10.5f) ? 24.0f : 16.0f);
+      float mult = (hw_data_.gpu_vram_clock_mhz > 0) ? 2.0f : 1.0f;
+      hw_data_.gpu_max_bandwidth_gbs = (static_cast<float>(eff_clk) * mult * bus_bytes) / 1000.0f;
+      float util_ratio =
+          (hw_data_.gpu_load_pct > 0.0f)
+              ? (hw_data_.gpu_load_pct / 100.0f)
+              : ((hw_data_.gpu_vram_total_gb > 0.0f)
+                     ? std::clamp(hw_data_.gpu_vram_used_gb / hw_data_.gpu_vram_total_gb, 0.05f,
+                                  1.0f)
+                     : 0.1f);
+      hw_data_.gpu_bandwidth_gbs = hw_data_.gpu_max_bandwidth_gbs * util_ratio;
     }
   }
 }
@@ -794,6 +838,8 @@ void TelemetryCollector::init_gpu_sensors_locked() {
     pfn_nvmlShutdown_ = reinterpret_cast<int (*)()>(dlsym(nvml_lib_, "nvmlShutdown"));
     pfn_nvmlSystemGetDriverVersion_ = reinterpret_cast<int (*)(char*, unsigned int)>(
         dlsym(nvml_lib_, "nvmlSystemGetDriverVersion"));
+    pfn_nvmlDeviceGetCount_v2_ =
+        reinterpret_cast<int (*)(unsigned int*)>(dlsym(nvml_lib_, "nvmlDeviceGetCount_v2"));
     pfn_nvmlDeviceGetHandleByIndex_v2_ = reinterpret_cast<int (*)(unsigned int, void**)>(
         dlsym(nvml_lib_, "nvmlDeviceGetHandleByIndex_v2"));
     pfn_nvmlDeviceGetName_ = reinterpret_cast<int (*)(void*, char*, unsigned int)>(
@@ -818,7 +864,33 @@ void TelemetryCollector::init_gpu_sensors_locked() {
     if (pfn_nvmlInit_v2_ && pfn_nvmlDeviceGetHandleByIndex_v2_) {
       if (pfn_nvmlInit_v2_() == NVML_SUCCESS) {
         nvml_initialized_ = true;
-        if (pfn_nvmlDeviceGetHandleByIndex_v2_(0, &nvml_device_) == NVML_SUCCESS && nvml_device_) {
+        unsigned int dev_count = 1;
+        if (pfn_nvmlDeviceGetCount_v2_) {
+          unsigned int cnt = 0;
+          if (pfn_nvmlDeviceGetCount_v2_(&cnt) == NVML_SUCCESS && cnt > 0) {
+            dev_count = std::min(cnt, 8U);
+          }
+        }
+        void* best_handle = nullptr;
+        unsigned long long best_vram = 0;
+        for (unsigned int idx = 0; idx < dev_count; ++idx) {
+          void* h = nullptr;
+          if (pfn_nvmlDeviceGetHandleByIndex_v2_(idx, &h) == NVML_SUCCESS && h) {
+            unsigned long long total_vram = 0;
+            if (pfn_nvmlDeviceGetMemoryInfo_) {
+              NvmlMemory mem{};
+              if (pfn_nvmlDeviceGetMemoryInfo_(h, &mem) == NVML_SUCCESS) {
+                total_vram = mem.total;
+              }
+            }
+            if (!best_handle || total_vram > best_vram) {
+              best_handle = h;
+              best_vram = total_vram;
+            }
+          }
+        }
+        nvml_device_ = best_handle;
+        if (nvml_device_) {
           gpu_backend_ = GpuBackendType::NvidiaNvml;
           std::lock_guard<std::mutex> lock(data_mutex_);
           hw_data_.gpu_available = true;
@@ -933,12 +1005,6 @@ void TelemetryCollector::init_gpu_sensors_locked() {
   bool is_amd = (best_vendor_num == 0x1002);
   bool is_intel = (best_vendor_num == 0x8086);
   bool is_nvidia = (best_vendor_num == 0x10de);
-
-  if (is_intel) {
-    if (init_intel_level_zero()) {
-      return;
-    }
-  }
 
   if (is_amd)
     gpu_backend_ = GpuBackendType::AmdSysfs;
@@ -1096,9 +1162,15 @@ void TelemetryCollector::init_gpu_sensors_locked() {
   // Fallback for Intel integrated GPUs: check RAPL uncore/iGPU energy counter (intel-rapl:0:1)
   if (drm_power_uw_path_.empty() && drm_energy_uj_path_.empty() && is_intel) {
     std::string uncore_rapl = root_prefix_ + "/sys/class/powercap/intel-rapl:0:1/energy_uj";
-    if (fs::exists(uncore_rapl, ec)) {
+    if (::access(uncore_rapl.c_str(), R_OK) == 0) {
       drm_energy_uj_path_ = std::move(uncore_rapl);
     }
+  }
+
+  // Upgrade Intel GPU to Level Zero Sysman if available, while keeping drm_sysfs/hwmon paths
+  // populated above for hybrid VRAM clock, bandwidth, and fan speed fallback!
+  if (is_intel) {
+    init_intel_level_zero();
   }
 }
 
@@ -2605,7 +2677,18 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     mem_util_ratio = std::clamp(std::strtof(buf, nullptr) / 100.0f, 0.0f, 1.0f);
   }
   if (mclk_mhz > 0) {
-    float bus_bytes = (vram_total_gb >= 11.5f) ? 32.0f : ((vram_total_gb >= 3.5f) ? 16.0f : 8.0f);
+    // Granular VRAM capacity -> bus width mapping across RDNA/GDDR6 tiers:
+    // >= 20GB (7900 XT/XTX): 48B (384-bit) | 16GB (7800 XT/6800 XT): 32B (256-bit)
+    // 12GB (6700 XT/7700 XT): 24B (192-bit) | 6-10GB (6600/7600): 16B (128-bit) | <= 4GB: 8B (64-bit)
+    float bus_bytes = 8.0f;
+    if (vram_total_gb >= 19.5f)
+      bus_bytes = 48.0f;
+    else if (vram_total_gb >= 14.5f)
+      bus_bytes = 32.0f;
+    else if (vram_total_gb >= 10.5f)
+      bus_bytes = 24.0f;
+    else if (vram_total_gb >= 5.5f)
+      bus_bytes = 16.0f;
     max_bw_gbs = (static_cast<float>(mclk_mhz) * 2.0f * bus_bytes) / 1000.0f;
     bw_gbs = max_bw_gbs * mem_util_ratio;
   } else if (clock_mhz > 0) {

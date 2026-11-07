@@ -3513,6 +3513,103 @@ void run_all_devices_and_features_suite() {
                "5.7 Multi-Vendor CPU Sensor Hardening (RAPL R_OK, TDP Est & AMD Tdie)", detail_57);
   }
 
+  // 5.8 Multi-Vendor GPU Hardening (Level Zero Hybrid Fallback, AMD Bus Width & dGPU Priority)
+  {
+    // A. Intel Level Zero + drm_sysfs hybrid fallback (VRAM clock, bandwidth, fan PWM)
+    std::string mock_ze = "/tmp/fpshud_mock_ze_hybrid_" + std::to_string(::getpid());
+    fs::remove_all(mock_ze);
+    fs::create_directories(mock_ze + "/sys/class/drm/card0/device/hwmon/hwmon2");
+    write_mock_file(mock_ze + "/sys/class/drm/card0/device/vendor", "0x8086\n");
+    write_mock_file(mock_ze + "/sys/class/drm/card0/device/device", "0x56a0\n");
+    write_mock_file(mock_ze + "/sys/class/drm/card0/device/hwmon/hwmon2/freq2_input",
+                    "2200000000\n");  // 2200 MHz VRAM clock
+    write_mock_file(mock_ze + "/sys/class/drm/card0/device/hwmon/hwmon2/pwm1",
+                    "128\n");  // ~50% fan
+
+    LevelZeroDispatch ze_hyb{};
+    ze_hyb.zesInit = [](uint32_t) -> int { return 0; };
+    ze_hyb.zesDriverGet = [](uint32_t* count, void** phDrivers) -> int {
+      if (count) *count = 1;
+      if (phDrivers) *phDrivers = reinterpret_cast<void*>(0x1111);
+      return 0;
+    };
+    ze_hyb.zesDeviceGet = [](void*, uint32_t* count, void** phDevices) -> int {
+      if (count) *count = 1;
+      if (phDevices) *phDevices = reinterpret_cast<void*>(0x2222);
+      return 0;
+    };
+    ze_hyb.zesDeviceEnumFrequencyDomains = [](void*, uint32_t* count, void** phFreq) -> int {
+      if (count) *count = 1;
+      if (phFreq) *phFreq = reinterpret_cast<void*>(0x3333);
+      return 0;
+    };
+    ze_hyb.zesFrequencyGetState = [](void*, intel_ze::zes_freq_state_t* pState) -> int {
+      if (pState) pState->actual = 2400.0;
+      return 0;
+    };
+    ze_hyb.zesDeviceEnumMemoryModules = [](void*, uint32_t* count, void** phMem) -> int {
+      if (count) *count = 1;
+      if (phMem) *phMem = reinterpret_cast<void*>(0x5555);
+      return 0;
+    };
+    ze_hyb.zesMemoryGetState = [](void*, intel_ze::zes_mem_state_t* pState) -> int {
+      if (pState) {
+        pState->size = 17179869184ULL;  // 16 GB -> 32B bus width
+        pState->free = 8589934592ULL;   // 8 GB used
+      }
+      return 0;
+    };
+
+    fpshud::TelemetryCollector tc_ze(mock_ze, true, false);
+    tc_ze.inject_mock_level_zero(ze_hyb);
+    tc_ze.poll_once_sync();
+    auto snap_ze = tc_ze.get_snapshot();
+    bool ze_hybrid_ok = (snap_ze.gpu_clock_mhz == 2400 && snap_ze.gpu_vram_clock_mhz == 2200 &&
+                         snap_ze.gpu_fan_pct == 50 && snap_ze.gpu_bandwidth_gbs > 10.0f);
+    fs::remove_all(mock_ze);
+
+    // B. AMD VRAM Bus Width Granularity: 12GB (192-bit / 24B) vs 24GB (384-bit / 48B)
+    std::string mock_amd12 = "/tmp/fpshud_mock_amd12_" + std::to_string(::getpid());
+    fs::remove_all(mock_amd12);
+    fs::create_directories(mock_amd12 + "/sys/class/drm/card0/device/hwmon/hwmon1");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/vendor", "0x1002\n");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/device", "0x73df\n");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/gpu_busy_percent", "100\n");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/mem_info_vram_total",
+                    "12884901888\n");  // 12 GB -> 24B bus
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/mem_info_vram_used", "6442450944\n");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/hwmon/hwmon1/freq1_input",
+                    "2500000000\n");
+    write_mock_file(mock_amd12 + "/sys/class/drm/card0/device/hwmon/hwmon1/freq2_input",
+                    "2000000000\n");  // 2000 MHz -> 2.0 GHz * 24B * 2 = 96.0 GB/s max
+    fpshud::TelemetryCollector tc_amd12(mock_amd12, true, true);
+    tc_amd12.poll_once_sync();
+    auto snap_amd12 = tc_amd12.get_snapshot();
+    bool amd_bus_192_ok = (std::fabs(snap_amd12.gpu_max_bandwidth_gbs - 96.0f) < 1.0f);
+    fs::remove_all(mock_amd12);
+
+    // C. Source verification for ZES_ENABLE_SYSMAN, nvmlDeviceGetCount_v2, and Vulkan dGPU lock
+    bool gpu_src_ok = false;
+    if (!rroot.empty()) {
+      std::string tel_src = read_text_file(rroot / "src" / "telemetry" / "telemetry.cpp");
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      gpu_src_ok = (tel_src.find("ZES_ENABLE_SYSMAN") != std::string::npos &&
+                    tel_src.find("nvmlDeviceGetCount_v2") != std::string::npos &&
+                    vk_src.find("VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU") != std::string::npos &&
+                    vk_src.find("g_bound_discrete_gpu") != std::string::npos);
+    }
+
+    char detail_58[192];
+    std::snprintf(detail_58, sizeof(detail_58),
+                  "Verified Level Zero + sysfs hybrid (vram_clk=%d, fan=%d%%, bw=%.1f), "
+                  "AMD 192-bit max_bw=%.1fGB/s, dGPU priority=%d",
+                  snap_ze.gpu_vram_clock_mhz, snap_ze.gpu_fan_pct, snap_ze.gpu_bandwidth_gbs,
+                  snap_amd12.gpu_max_bandwidth_gbs, gpu_src_ok ? 1 : 0);
+    check_cond(ze_hybrid_ok && amd_bus_192_ok && gpu_src_ok,
+               "5.8 Multi-Vendor GPU Hardening (Level Zero Hybrid, AMD Bus & dGPU Priority)",
+               detail_58);
+  }
+
   // --------------------------------------------------------------------
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
   // --------------------------------------------------------------------

@@ -298,6 +298,7 @@ private:
   int (*pfn_nvmlInit_v2_)() = nullptr;
   int (*pfn_nvmlShutdown_)() = nullptr;
   int (*pfn_nvmlSystemGetDriverVersion_)(char*, unsigned int) = nullptr;
+  int (*pfn_nvmlDeviceGetCount_v2_)(unsigned int*) = nullptr;
   int (*pfn_nvmlDeviceGetHandleByIndex_v2_)(unsigned int, void**) = nullptr;
   int (*pfn_nvmlDeviceGetName_)(void*, char*, unsigned int) = nullptr;
   int (*pfn_nvmlDeviceGetUtilizationRates_)(void*, void*) = nullptr;

@@ -124,6 +124,9 @@ struct DeviceData {
   // VRAM memory budget extension support (VK_EXT_memory_budget) & throttling
   bool has_memory_budget_ext = false;
   std::chrono::steady_clock::time_point last_vram_update{};
+  uint32_t vendor_id = 0;
+  uint32_t device_id = 0;
+  VkPhysicalDeviceType device_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
 };
 
 struct SwapchainData {
@@ -144,6 +147,7 @@ std::mutex g_map_mutex;
 std::unordered_map<void*, InstanceData*> g_instance_map;
 std::unordered_map<void*, DeviceData*> g_device_map;
 std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainData>> g_swapchain_map;
+std::atomic<bool> g_bound_discrete_gpu{false};
 
 InstanceData* find_instance_data(void* key) {
   std::lock_guard<std::mutex> lock(g_map_mutex);
@@ -929,14 +933,24 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
       copy_dispatch_key(dd->graphics_queue, *pDevice);
     }
 
-    // Bind Active GPU to Telemetry only if layer is enabled
-    if (fpshud::get_global_config().enabled) {
-      if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
-        VkPhysicalDeviceProperties props{};
-        dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
-        fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
+    // Bind Active GPU to Telemetry only if layer is enabled (prioritize Discrete GPU over iGPU probes)
+    if (dd->instance_data && dd->instance_data->GetPhysicalDeviceProperties) {
+      VkPhysicalDeviceProperties props{};
+      dd->instance_data->GetPhysicalDeviceProperties(physicalDevice, &props);
+      dd->vendor_id = props.vendorID;
+      dd->device_id = props.deviceID;
+      dd->device_type = props.deviceType;
+      if (fpshud::get_global_config().enabled) {
+        if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+          g_bound_discrete_gpu.store(true, std::memory_order_relaxed);
+          fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
+        } else if (!g_bound_discrete_gpu.load(std::memory_order_relaxed)) {
+          fpshud::get_telemetry().notify_active_gpu(props.vendorID, props.deviceID);
+        }
       }
+    }
 
+    if (fpshud::get_global_config().enabled) {
       // Query initial VRAM budget
       uint64_t total_vram = 0;
       uint64_t used_vram = 0;
@@ -1150,6 +1164,17 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
     // When overlay is disabled, bypass all imageUsage mutations and overlay allocations
     if (!fpshud::get_global_config().enabled) {
       return dd->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+    }
+
+    // Ensure Telemetry is bound to the GPU that actually creates the presentation swapchain
+    // (still prioritizing Discrete GPU if one was bound on hybrid/Optimus systems)
+    if (dd->vendor_id != 0) {
+      if (dd->device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        g_bound_discrete_gpu.store(true, std::memory_order_relaxed);
+        fpshud::get_telemetry().notify_active_gpu(dd->vendor_id, dd->device_id);
+      } else if (!g_bound_discrete_gpu.load(std::memory_order_relaxed)) {
+        fpshud::get_telemetry().notify_active_gpu(dd->vendor_id, dd->device_id);
+      }
     }
 
     VkSwapchainCreateInfoKHR modified_info = *pCreateInfo;
