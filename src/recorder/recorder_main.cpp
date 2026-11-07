@@ -472,8 +472,7 @@ int main(int argc, char* argv[]) {
       ctx->pix_fmt = AV_PIX_FMT_YUV420P;
     }
     ctx->gop_size = target_fps * 2;  // 2-second keyframe interval
-    ctx->max_b_frames =
-        0;  // Zero B-frames for real-time 1:1 stream (OBS Studio / ShadowPlay standard)
+    ctx->max_b_frames = 0;           // Zero B-frames (real-time stream)
     ctx->rc_max_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
     ctx->rc_buffer_size = static_cast<int>(ctx->rc_max_rate * 2);
 
@@ -818,11 +817,45 @@ int main(int argc, char* argv[]) {
   auto next_frame_time = std::chrono::steady_clock::now();
   int64_t next_pts = 0;
 
+  auto encode_frame_to_stream = [&](int64_t pts) {
+    vframe->pts = pts;
+    video_frame_idx.store(pts, std::memory_order_relaxed);
+    has_new_frame = false;
+
+    if (is_vaapi_encoder && hw_frame) {
+      if (av_hwframe_get_buffer(vctx->hw_frames_ctx, hw_frame, 0) >= 0) {
+        if (av_hwframe_transfer_data(hw_frame, vframe, 0) >= 0) {
+          hw_frame->pts = vframe->pts;
+          if (avcodec_send_frame(vctx, hw_frame) >= 0) {
+            while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+              av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
+              v_pkt->stream_index = vstream->index;
+              std::lock_guard<std::mutex> lock(mux_mutex);
+              av_interleaved_write_frame(oc, v_pkt);
+              av_packet_unref(v_pkt);
+            }
+          }
+        }
+        av_frame_unref(hw_frame);
+      }
+    } else {
+      if (avcodec_send_frame(vctx, vframe) >= 0) {
+        while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
+          av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
+          v_pkt->stream_index = vstream->index;
+          std::lock_guard<std::mutex> lock(mux_mutex);
+          av_interleaved_write_frame(oc, v_pkt);
+          av_packet_unref(v_pkt);
+        }
+      }
+    }
+  };
+
   while (g_running.load(std::memory_order_relaxed)) {
     struct timeval sel_tv{};
     if (has_received_game_frame) {
       auto now = std::chrono::steady_clock::now();
-      auto wait_deadline = has_new_frame ? next_frame_time : (next_frame_time + frame_interval / 4);
+      auto wait_deadline = next_frame_time + frame_interval / 2;
       if (wait_deadline > now) {
         auto diff =
             std::chrono::duration_cast<std::chrono::microseconds>(wait_deadline - now).count();
@@ -854,6 +887,9 @@ int main(int argc, char* argv[]) {
       if (in_hdr.is_valid()) {
         auto cmd = static_cast<fpshud::RecorderCommand>(in_hdr.command);
         if (cmd == fpshud::RecorderCommand::StopRecord) {
+          if (has_new_frame) {
+            encode_frame_to_stream(next_pts++);
+          }
           g_running.store(false, std::memory_order_relaxed);
           break;
         } else if (cmd == fpshud::RecorderCommand::SendFrame) {
@@ -922,6 +958,26 @@ int main(int argc, char* argv[]) {
                   next_frame_time = session_start;
                   next_pts = 0;
                 }
+
+                auto now = std::chrono::steady_clock::now();
+                int64_t target_pts =
+                    std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
+                        .count() /
+                    frame_interval.count();
+                // If game fell behind real-time (e.g. 50 FPS on 60 FPS target), duplicate previous
+                // frame up to target_pts to maintain exact 1:1 real-time audio sync
+                if (target_pts > next_pts + 4) {
+                  int64_t missed_frames = target_pts - next_pts;
+                  next_pts += missed_frames;
+                  next_frame_time = session_start + next_pts * frame_interval;
+                } else {
+                  while (next_pts < target_pts && g_running.load(std::memory_order_relaxed)) {
+                    encode_frame_to_stream(next_pts++);
+                    next_frame_time = session_start + next_pts * frame_interval;
+                  }
+                }
+                encode_frame_to_stream(next_pts++);
+                next_frame_time = session_start + next_pts * frame_interval;
               }
             }
           }
@@ -938,7 +994,8 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    // Emit frames locked to exact wall-clock intervals
+    // Emit duplicate frame only if the game paused or hitched (> 1.5 frame intervals without a new
+    // frame)
     if (has_received_game_frame) {
       auto cur_time = std::chrono::steady_clock::now();
       // Cap lag catch-up if game was paused or loading (> 4 frame intervals) to avoid massive
@@ -953,37 +1010,7 @@ int main(int argc, char* argv[]) {
         next_frame_time += missed_frames * frame_interval;
       }
       while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
-        vframe->pts = next_pts++;
-        video_frame_idx.store(next_pts, std::memory_order_relaxed);
-        has_new_frame = false;
-
-        if (is_vaapi_encoder && hw_frame) {
-          if (av_hwframe_get_buffer(vctx->hw_frames_ctx, hw_frame, 0) >= 0) {
-            if (av_hwframe_transfer_data(hw_frame, vframe, 0) >= 0) {
-              hw_frame->pts = vframe->pts;
-              if (avcodec_send_frame(vctx, hw_frame) >= 0) {
-                while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-                  av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-                  v_pkt->stream_index = vstream->index;
-                  std::lock_guard<std::mutex> lock(mux_mutex);
-                  av_interleaved_write_frame(oc, v_pkt);
-                  av_packet_unref(v_pkt);
-                }
-              }
-            }
-            av_frame_unref(hw_frame);
-          }
-        } else {
-          if (avcodec_send_frame(vctx, vframe) >= 0) {
-            while (avcodec_receive_packet(vctx, v_pkt) >= 0) {
-              av_packet_rescale_ts(v_pkt, vctx->time_base, vstream->time_base);
-              v_pkt->stream_index = vstream->index;
-              std::lock_guard<std::mutex> lock(mux_mutex);
-              av_interleaved_write_frame(oc, v_pkt);
-              av_packet_unref(v_pkt);
-            }
-          }
-        }
+        encode_frame_to_stream(next_pts++);
         next_frame_time += frame_interval;
       }
     }
