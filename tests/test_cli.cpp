@@ -2898,6 +2898,20 @@ void run_all_devices_and_features_suite() {
                  ? "Recorder daemon configures 1us timebase and 1:1 PTS encoding in VFR mode"
                  : "Failed: Missing VFR timebase setup or duplicate prevention in recorder daemon");
 
+  // 5.0.3 Layer Adaptive VFR Present Hook Integration
+  bool layer_vfr_hook_ok = false;
+  if (!rroot.empty()) {
+    std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+    std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
+    bool vk_has_vfr = (vk_src.find("AdaptiveVfrController::is_vfr_active") != std::string::npos);
+    bool gl_has_vfr = (gl_src.find("AdaptiveVfrController::is_vfr_active") != std::string::npos);
+    layer_vfr_hook_ok = vk_has_vfr && gl_has_vfr;
+  }
+  check_cond(layer_vfr_hook_ok, "5.0.3 Layer Adaptive VFR Present Hook Integration",
+             layer_vfr_hook_ok
+                 ? "AdaptiveVfrController integrated in Vulkan and OpenGL present loops"
+                 : "Failed: Missing AdaptiveVfrController present hook in Vulkan or OpenGL layer");
+
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

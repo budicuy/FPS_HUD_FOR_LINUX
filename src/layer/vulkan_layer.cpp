@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "adaptive_vfr.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -1365,17 +1366,25 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     dd->CmdEndRenderPass(frame.command_buffer);
 
     // Record GPU copy of swapchain image to staging buffer if recording is active (with
-    // jitter-resilient pacing)
+    // jitter-resilient pacing / adaptive VFR)
     bool should_capture_frame = false;
     if (fpshud::RecorderController::instance().is_recording() && sd->supports_transfer_src) {
       auto now = std::chrono::steady_clock::now();
-      int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
-      auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
-      auto min_interval = target_interval * 70 / 100;
-      if (sd->last_capture_time == std::chrono::steady_clock::time_point{} ||
-          now - sd->last_capture_time >= min_interval) {
-        sd->last_capture_time = now;
-        should_capture_frame = true;
+      if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
+        if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
+                now, sd->last_capture_time, cfg.record_vfr_max_fps)) {
+          sd->last_capture_time = now;
+          should_capture_frame = true;
+        }
+      } else {
+        int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
+        auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
+        auto min_interval = target_interval * 70 / 100;
+        if (sd->last_capture_time == std::chrono::steady_clock::time_point{} ||
+            now - sd->last_capture_time >= min_interval) {
+          sd->last_capture_time = now;
+          should_capture_frame = true;
+        }
       }
     } else {
       sd->last_capture_time = std::chrono::steady_clock::time_point{};

@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "adaptive_vfr.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -595,11 +596,22 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
 
   if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
     auto now = std::chrono::steady_clock::now();
-    int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
-    auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
-    auto min_interval = target_interval * 70 / 100;
-    if (g_gl_pbo_ring.last_capture_time() == std::chrono::steady_clock::time_point{} ||
-        now - g_gl_pbo_ring.last_capture_time() >= min_interval) {
+    bool should_capture = false;
+    if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
+      if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
+              now, g_gl_pbo_ring.last_capture_time(), cfg.record_vfr_max_fps)) {
+        should_capture = true;
+      }
+    } else {
+      int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
+      auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
+      auto min_interval = target_interval * 70 / 100;
+      if (g_gl_pbo_ring.last_capture_time() == std::chrono::steady_clock::time_point{} ||
+          now - g_gl_pbo_ring.last_capture_time() >= min_interval) {
+        should_capture = true;
+      }
+    }
+    if (should_capture) {
       g_gl_pbo_ring.set_last_capture_time(now);
       g_gl_pbo_ring.capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
                                   static_cast<uint32_t>(height));
