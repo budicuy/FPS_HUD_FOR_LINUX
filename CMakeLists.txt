@@ -45,6 +45,20 @@ option(FPSHUD_NATIVE_ARCH "Optimize for host CPU microarchitecture (-march=nativ
 option(ENABLE_ASAN "Enable AddressSanitizer and LeakSanitizer" OFF)
 option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(FPSHUD_ENABLE_EXPERIMENTAL "Enable isolated experimental features" ON)
+
+if(FPSHUD_ENABLE_EXPERIMENTAL)
+    add_compile_definitions(FPSHUD_ENABLE_EXPERIMENTAL=1)
+    set(FPSHUD_EXPERIMENTAL_SOURCES
+        src/experimental-feature/adaptive_vfr.cpp
+    )
+    set(FPSHUD_EXPERIMENTAL_INCLUDES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature
+    )
+else()
+    set(FPSHUD_EXPERIMENTAL_SOURCES "")
+    set(FPSHUD_EXPERIMENTAL_INCLUDES "")
+endif()
 
 if(FPSHUD_NATIVE_ARCH)
     add_compile_options(-march=native)
@@ -216,6 +230,7 @@ add_library(fpshud SHARED
     src/layer/opengl_hook.cpp
     ${IMGUI_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    ${FPSHUD_EXPERIMENTAL_SOURCES}
 )
 
 target_include_directories(fpshud PRIVATE
@@ -226,6 +241,7 @@ target_include_directories(fpshud PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
+    ${FPSHUD_EXPERIMENTAL_INCLUDES}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${Vulkan_INCLUDE_DIRS}
@@ -267,6 +283,7 @@ add_executable(fpshud_test
     src/recorder/recorder_ipc.cpp
     ${IMGUI_CORE_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    ${FPSHUD_EXPERIMENTAL_SOURCES}
 )
 
 target_include_directories(fpshud_test PRIVATE
@@ -277,6 +294,7 @@ target_include_directories(fpshud_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
+    ${FPSHUD_EXPERIMENTAL_INCLUDES}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
@@ -416,6 +434,8 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
     )
 

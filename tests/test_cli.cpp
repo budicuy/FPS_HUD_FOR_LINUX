@@ -4,6 +4,7 @@
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
+#include "adaptive_vfr.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -2822,7 +2823,31 @@ void run_all_devices_and_features_suite() {
                    "without bit-scrambling"
                  : "Failed: Missing 10-bit format mapping or unpacking in Vulkan layer / recorder");
 
-  // 5. High-Frequency Memory Allocation & Stress (Leak Check)
+  // 5.0 Experimental Adaptive Frame Rate (VFR 1:1 Capture) Controller
+  bool exp_vfr_logic_ok = false;
+  {
+    HudConfig test_cfg{};
+    test_cfg.record_adaptive_vfr = true;
+    test_cfg.record_vfr_max_fps = 120;
+    bool active = fpshud::experimental::AdaptiveVfrController::is_vfr_active(test_cfg);
+
+    auto now = std::chrono::steady_clock::now();
+    auto last_40fps = now - std::chrono::milliseconds(25);
+    bool cap_40fps =
+        fpshud::experimental::AdaptiveVfrController::should_capture_frame(now, last_40fps, 120);
+
+    auto last_500fps = now - std::chrono::milliseconds(2);
+    bool throttle_500fps =
+        !fpshud::experimental::AdaptiveVfrController::should_capture_frame(now, last_500fps, 120);
+
+    exp_vfr_logic_ok = active && cap_40fps && throttle_500fps;
+  }
+  check_cond(exp_vfr_logic_ok, "5.0 Experimental Adaptive VFR Pacing & Safety Cap",
+             exp_vfr_logic_ok
+                 ? "Adaptive VFR passes 40 FPS unthrottled and caps 500 FPS at 120 FPS ceiling"
+                 : "Failed: Adaptive VFR logic or pacing threshold incorrect");
+
+  // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {
     TelemetryCollector stress_tc("", true);

@@ -126,6 +126,10 @@ struct HudConfig {
   // record_directory: default ~/Videos/FPSHUD
   std::string record_directory;
 
+  // Experimental Features (Isolated in src/experimental-feature/)
+  bool record_adaptive_vfr = false;
+  int record_vfr_max_fps = 120;
+
   // GUI Menu & Render Scaling (0.50f .. 2.00f, default 1.0f = 100%)
   float gui_scale = 1.0f;
 
