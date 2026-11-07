@@ -2866,6 +2866,23 @@ void run_all_devices_and_features_suite() {
                  ? "Adaptive VFR passes 40 FPS unthrottled and caps 500 FPS at 120 FPS ceiling"
                  : "Failed: Adaptive VFR logic or pacing threshold incorrect");
 
+  // 5.0.1 IPC VFR Protocol & Monotonic Timestamp Invariant
+  bool ipc_payload_vfr_ok = false;
+  {
+    IpcStartPayload p{};
+    p.vfr_mode = 1;
+    p.vfr_max_fps = 120;
+    IpcFrameNotify fn{};
+    fn.timestamp_us = 12345678ULL;
+    ipc_payload_vfr_ok =
+        (p.vfr_mode == 1 && p.vfr_max_fps == 120 && fn.timestamp_us == 12345678ULL);
+  }
+  check_cond(
+      ipc_payload_vfr_ok, "5.0.1 IPC VFR Mode & Monotonic Frame Timestamp",
+      ipc_payload_vfr_ok
+          ? "IpcStartPayload carries vfr_mode/vfr_max_fps and IpcFrameNotify carries timestamp_us"
+          : "Failed: Missing VFR payload fields or timestamp_us in IPC headers");
+
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

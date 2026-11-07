@@ -60,9 +60,11 @@ struct IpcStartPayload {
   uint32_t bitrate_kbps = 18000;
   uint32_t audio_source = 0;
   uint32_t container = 0;
-  uint32_t codec = 1;         // 0 = H.264, 1 = HEVC (H.265)
-  uint32_t quality_mode = 0;  // 0 = CQP Adaptif, 1 = Fixed VBR
-  uint32_t cq_level = 22;     // CQP 16-30
+  uint32_t codec = 1;          // 0 = H.264, 1 = HEVC (H.265)
+  uint32_t quality_mode = 0;   // 0 = CQP Adaptif, 1 = Fixed VBR
+  uint32_t cq_level = 22;      // CQP 16-30
+  uint32_t vfr_mode = 0;       // 0 = CFR (statis 60 FPS), 1 = Pure Adaptive VFR (1:1 Capture)
+  uint32_t vfr_max_fps = 120;  // Safety maximum framerate cap in VFR mode
   char save_dir[256] = {0};
   char filename_prefix[64] = {0};
 };
@@ -99,6 +101,7 @@ struct IpcFrameNotify {
   uint32_t format = 0;
   uint32_t flip_y = 0;
   uint64_t seq = 0;
+  uint64_t timestamp_us = 0;
 };
 
 // Discovers container host paths for multiarch dynamic libraries (LD_LIBRARY_PATH)

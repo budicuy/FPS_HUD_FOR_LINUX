@@ -223,6 +223,9 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   payload.codec = static_cast<uint32_t>(cfg.record_codec);
   payload.quality_mode = static_cast<uint32_t>(cfg.record_quality_mode);
   payload.cq_level = static_cast<uint32_t>(cfg.record_cq_level);
+  payload.vfr_mode = cfg.record_adaptive_vfr ? 1 : 0;
+  payload.vfr_max_fps =
+      static_cast<uint32_t>(cfg.record_vfr_max_fps > 0 ? cfg.record_vfr_max_fps : 120);
 
   std::string save_dir = get_effective_record_dir(cfg);
   std::error_code ec;
@@ -668,6 +671,10 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
     notify.format = format;
     notify.flip_y = flip_y ? 1 : 0;
     notify.seq = s;
+    notify.timestamp_us =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
 
     send(socket_fd_, &notify, sizeof(notify), MSG_DONTWAIT | MSG_NOSIGNAL);
   }
