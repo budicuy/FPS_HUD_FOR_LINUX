@@ -134,33 +134,93 @@ ImU32 get_metric_value_color(MetricType m, const TelemetryData& d, const HudConf
     return base_col;
   }
 
-  if (m == MetricType::GpuTemp || m == MetricType::CpuTemp) {
-    int temp = (m == MetricType::GpuTemp) ? d.gpu_temp_c : d.cpu_temp_c;
-    if (temp >= 82) {
-      return IM_COL32(255, 70, 70, alpha);  // Critical Red
+  const ImU32 col_red = IM_COL32(255, 70, 70, alpha);
+  const ImU32 col_yellow = IM_COL32(255, 185, 0, alpha);
+
+  switch (m) {
+    case MetricType::FPS:
+    case MetricType::FpsAvg: {
+      float val = (m == MetricType::FPS) ? d.fps : d.fps_avg;
+      if (val > 0.1f && val < 30.0f) return col_red;
+      if (val > 0.1f && val < 45.0f) return col_yellow;
+      break;
     }
-    if (temp >= 72) {
-      return IM_COL32(255, 185, 0, alpha);  // Warning Amber/Orange
+    case MetricType::Fps1Low:
+    case MetricType::Fps01Low: {
+      float val = (m == MetricType::Fps1Low) ? d.fps_1pct_low : d.fps_01pct_low;
+      if (val > 0.1f && (val < 25.0f || (d.fps_avg > 10.0f && val < 0.45f * d.fps_avg))) {
+        return col_red;
+      }
+      if (val > 0.1f && (val < 45.0f || (d.fps_avg > 10.0f && val < 0.60f * d.fps_avg))) {
+        return col_yellow;
+      }
+      break;
     }
-  } else if (m == MetricType::GpuLoad || m == MetricType::CpuLoad) {
-    float load = (m == MetricType::GpuLoad) ? d.gpu_load_pct : d.cpu_load_pct;
-    if (load >= 97.0f) {
-      return IM_COL32(255, 185, 0, alpha);  // High Load Amber
+    case MetricType::FrameTimes:
+      if (d.frametime_ms > 33.3f) return col_red;
+      if (d.frametime_ms > 22.2f) return col_yellow;
+      break;
+    case MetricType::GpuLoad:
+    case MetricType::CpuLoad: {
+      float load = (m == MetricType::GpuLoad) ? d.gpu_load_pct : d.cpu_load_pct;
+      if (load >= 95.0f) return col_red;
+      if (load >= 80.0f) return col_yellow;
+      break;
     }
-  } else if (m == MetricType::Ram || m == MetricType::GameRam) {
-    // System RAM nearly full -> stutter / swapping risk
-    if (d.ram_used_pct >= 90.0f) return IM_COL32(255, 70, 70, alpha);
-    if (d.ram_used_pct >= 80.0f) return IM_COL32(255, 185, 0, alpha);
-  } else if (m == MetricType::SwapRam) {
-    if (d.swap_total_gb > 0.0f) {
-      float swap_pct = 100.0f * d.swap_used_gb / d.swap_total_gb;
-      if (swap_pct >= 80.0f) return IM_COL32(255, 70, 70, alpha);
-      if (swap_pct >= 50.0f) return IM_COL32(255, 185, 0, alpha);
+    case MetricType::GpuTemp:
+    case MetricType::CpuTemp: {
+      int temp = (m == MetricType::GpuTemp) ? d.gpu_temp_c : d.cpu_temp_c;
+      if (temp >= 82) return col_red;
+      if (temp >= 72) return col_yellow;
+      break;
     }
-  } else if (m == MetricType::MemPressure) {
-    // PSI "some" avg10: >= 5% noticeable hitching, >= 20% heavy memory stalls
-    if (d.mem_psi_some_pct >= 20.0f) return IM_COL32(255, 70, 70, alpha);
-    if (d.mem_psi_some_pct >= 5.0f) return IM_COL32(255, 185, 0, alpha);
+    case MetricType::GpuVram:
+      if (d.gpu_vram_total_gb > 0.1f) {
+        float pct = 100.0f * d.gpu_vram_used_gb / d.gpu_vram_total_gb;
+        if (pct >= 92.0f) return col_red;
+        if (pct >= 80.0f) return col_yellow;
+      }
+      break;
+    case MetricType::GpuFan:
+      if (d.gpu_fan_pct >= 90) return col_red;
+      if (d.gpu_fan_pct >= 75) return col_yellow;
+      break;
+    case MetricType::Ram:
+    case MetricType::GameRam:
+      if (d.ram_used_pct >= 90.0f) return col_red;
+      if (d.ram_used_pct >= 80.0f) return col_yellow;
+      break;
+    case MetricType::SwapRam:
+      if (d.swap_total_gb > 0.0f) {
+        float swap_pct = 100.0f * d.swap_used_gb / d.swap_total_gb;
+        if (swap_pct >= 80.0f || d.swap_used_gb >= 4.0f) return col_red;
+        if (swap_pct >= 50.0f || d.swap_used_gb >= 2.0f) return col_yellow;
+      }
+      break;
+    case MetricType::MemPressure:
+      if (d.mem_psi_some_pct >= 20.0f) return col_red;
+      if (d.mem_psi_some_pct >= 5.0f) return col_yellow;
+      break;
+    case MetricType::DiskTemp:
+      if (d.disk_temp_available) {
+        if (d.disk_temp_c >= 75) return col_red;
+        if (d.disk_temp_c >= 65) return col_yellow;
+      }
+      break;
+    case MetricType::DiskIo: {
+      float total_io = d.disk_read_mbs + d.disk_write_mbs;
+      if (total_io >= 1500.0f) return col_red;
+      if (total_io >= 500.0f) return col_yellow;
+      break;
+    }
+    case MetricType::Battery:
+      if (d.battery_available && !d.battery_charging) {
+        if (d.battery_pct <= 12.0f) return col_red;
+        if (d.battery_pct <= 25.0f) return col_yellow;
+      }
+      break;
+    default:
+      break;
   }
   return base_col;
 }
@@ -298,8 +358,29 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       }
       return;
     case MetricType::DiskIo:
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "DSK:");
+      std::snprintf(sv.number, sizeof(sv.number), "%.1fR %.1fW", d.disk_read_mbs, d.disk_write_mbs);
+      std::snprintf(sv.unit, sizeof(sv.unit), "MB/s");
+      return;
     case MetricType::DiskTemp:
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "NVME:");
+      if (d.disk_temp_available) {
+        std::snprintf(sv.number, sizeof(sv.number), "%d", d.disk_temp_c);
+        std::snprintf(sv.unit, sizeof(sv.unit), "\xC2\xB0" "C");
+      } else {
+        std::snprintf(sv.number, sizeof(sv.number), "N/A");
+      }
+      return;
     case MetricType::NetSpeed:
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "NET:");
+      if (std::max(d.net_rx_mbs, d.net_tx_mbs) < 1.0f) {
+        std::snprintf(sv.number, sizeof(sv.number), "%.0fD %.0fU", d.net_rx_mbs * 1024.0f,
+                      d.net_tx_mbs * 1024.0f);
+        std::snprintf(sv.unit, sizeof(sv.unit), "KB/s");
+      } else {
+        std::snprintf(sv.number, sizeof(sv.number), "%.1fD %.1fU", d.net_rx_mbs, d.net_tx_mbs);
+        std::snprintf(sv.unit, sizeof(sv.unit), "MB/s");
+      }
       return;
   }
 }
@@ -327,10 +408,13 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
               int pct = static_cast<int>(data.cpu_core_loads_pct[static_cast<size_t>(k)]);
               std::snprintf(sv.number, sizeof(sv.number), "%d", pct);
               std::snprintf(sv.unit, sizeof(sv.unit), "%%");
-              sv.color =
-                  (cfg.thermal_warnings_enabled && pct >= 97)
-                      ? IM_COL32(255, 185, 0, alpha)
-                      : IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+              if (cfg.thermal_warnings_enabled && pct >= 95) {
+                sv.color = IM_COL32(255, 70, 70, alpha);
+              } else if (cfg.thermal_warnings_enabled && pct >= 80) {
+                sv.color = IM_COL32(255, 185, 0, alpha);
+              } else {
+                sv.color = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+              }
             } else {
               int mhz = static_cast<int>(data.cpu_core_clocks_mhz[static_cast<size_t>(k)]);
               if (mhz <= 0) mhz = data.cpu_clock_mhz;

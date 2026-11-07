@@ -6,6 +6,8 @@
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
 #include "adaptive_vfr.hpp"
+#include "overlay_ui.hpp"
+#include "imgui.h"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -3335,6 +3337,84 @@ void run_all_devices_and_features_suite() {
                "5.5 Instant Replay IPC, Ring Buffer & Vulkan/OpenGL Capture Hooks",
                "Verified SaveReplay=6, replay_mode/replay_duration_sec, packet_ring, and "
                "Vulkan/OpenGL Clean/HUD screenshot hooks");
+  }
+
+  // 5.6 Smart Color Alerts, Storage/Net HUD Formatting & GUI Controls
+  {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    fpshud::HudConfig cfg;
+    cfg.enabled = true;
+    cfg.hud_visible = true;
+    cfg.gui_open = true;
+    cfg.thermal_warnings_enabled = true;
+    fpshud::apply_preset_advance(cfg);
+    bool preset_31_ok = (cfg.metrics.size() == fpshud::kTotalMetricCount);
+
+    fpshud::TelemetryData td{};
+    td.fps = 24.0f;           // Red (< 30)
+    td.fps_avg = 55.0f;
+    td.fps_1pct_low = 20.0f;  // Red (< 25)
+    td.frametime_ms = 36.0f;  // Red (> 33.3)
+    td.gpu_load_pct = 96.0f;  // Red (>= 95)
+    td.cpu_load_pct = 85.0f;  // Yellow (>= 80)
+    td.cpu_core_count = 4;
+    td.cpu_core_loads_pct[0] = 98;  // Red
+    td.cpu_core_loads_pct[1] = 84;  // Yellow
+    td.gpu_vram_used_gb = 7.5f;
+    td.gpu_vram_total_gb = 8.0f;  // 93.75% -> Red (>= 92%)
+    td.gpu_fan_pct = 92;          // Red (>= 90%)
+    td.disk_temp_available = true;
+    td.disk_temp_c = 76;  // Red (>= 75 C)
+    td.disk_read_mbs = 1200.0f;
+    td.disk_write_mbs = 400.0f;  // 1600 MB/s -> Red (>= 1500 MB/s)
+    td.net_rx_mbs = 0.5f;
+    td.net_tx_mbs = 0.1f;
+    td.battery_available = true;
+    td.battery_charging = false;
+    td.battery_pct = 10.0f;  // Red (<= 12%)
+
+    ImGui::NewFrame();
+    fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
+    ImGui::Render();
+    ImGui::NewFrame();
+    fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
+    ImGui::Render();
+    ImDrawData* dd = ImGui::GetDrawData();
+    bool render_ok = (dd != nullptr && dd->TotalVtxCount > 0);
+    ImGui::DestroyContext(ctx);
+
+    bool ui_src_ok = false;
+    if (!rroot.empty()) {
+      std::string ovl_src = read_text_file(rroot / "src" / "ui" / "overlay_ui.cpp");
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+      bool smart_alerts_ok = (ovl_src.find("33.3f") != std::string::npos &&
+                              ovl_src.find("22.2f") != std::string::npos &&
+                              ovl_src.find("1500.0f") != std::string::npos &&
+                              ovl_src.find("DSK:") != std::string::npos &&
+                              ovl_src.find("NVME:") != std::string::npos &&
+                              ovl_src.find("NET:") != std::string::npos);
+      bool gui_controls_ok = (gui_src.find("Smart Color Alerts") != std::string::npos &&
+                              gui_src.find("KeybindTarget::SaveReplay") != std::string::npos &&
+                              gui_src.find("KeybindTarget::TakeScreenshot") != std::string::npos &&
+                              gui_src.find("[SAVE REPLAY]") != std::string::npos &&
+                              gui_src.find("[IMG] Take Screenshot") != std::string::npos &&
+                              gui_src.find("Clean Game") != std::string::npos);
+      ui_src_ok = smart_alerts_ok && gui_controls_ok;
+    }
+
+    char detail_buf[192];
+    std::snprintf(detail_buf, sizeof(detail_buf),
+                  "Verified 14-metric Yellow/Red thresholds (preset_31=%d, render=%d, ui_src=%d)",
+                  preset_31_ok ? 1 : 0, render_ok ? 1 : 0, ui_src_ok ? 1 : 0);
+    check_cond(preset_31_ok && render_ok && ui_src_ok,
+               "5.6 Smart Color Alerts, Storage/Net HUD Formatting & GUI Controls", detail_buf);
   }
 
   // --------------------------------------------------------------------

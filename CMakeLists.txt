@@ -283,6 +283,8 @@ add_executable(fpshud_test
     src/input/input_manager.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
+    src/ui/gui_menu.cpp
+    src/ui/overlay_ui.cpp
     ${IMGUI_CORE_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
     ${FPSHUD_EXPERIMENTAL_SOURCES}

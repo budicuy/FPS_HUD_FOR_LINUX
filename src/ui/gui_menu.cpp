@@ -585,7 +585,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TableSetColumnIndex(1);
       ImGui::Checkbox("Category Colors", &cfg.category_colors_enabled);
       ImGui::SameLine(0.0f, 12.0f * scale);
-      ImGui::Checkbox("Thermal Alerts", &cfg.thermal_warnings_enabled);
+      ImGui::Checkbox("Smart Color Alerts (Yellow/Red)", &cfg.thermal_warnings_enabled);
 
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -609,6 +609,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
                        gui_default_hint, scale);
       draw_keybind_row("HUD Toggle Key", KeybindTarget::ToggleHud, cfg.bind_toggle_hud, nullptr,
                        scale);
+      draw_keybind_row("Replay Key", KeybindTarget::SaveReplay, cfg.bind_save_replay, nullptr,
+                       scale);
+      draw_keybind_row("Screenshot Key", KeybindTarget::TakeScreenshot, cfg.bind_screenshot,
+                       nullptr, scale);
 
       ImGui::EndTable();
     }
@@ -698,6 +702,25 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_bat, sizeof(b_bat), "N/A (Desktop)");
     }
 
+    char b_dsk_io[40] = {0};
+    std::snprintf(b_dsk_io, sizeof(b_dsk_io), "%.1fR / %.1fW MB/s", data.disk_read_mbs,
+                  data.disk_write_mbs);
+
+    char b_dsk_tmp[32] = {0};
+    if (data.disk_temp_available) {
+      std::snprintf(b_dsk_tmp, sizeof(b_dsk_tmp), "%d °C", data.disk_temp_c);
+    } else {
+      std::snprintf(b_dsk_tmp, sizeof(b_dsk_tmp), "N/A (hwmon)");
+    }
+
+    char b_net[40] = {0};
+    if (std::max(data.net_rx_mbs, data.net_tx_mbs) < 1.0f) {
+      std::snprintf(b_net, sizeof(b_net), "%.0fD / %.0fU KB/s", data.net_rx_mbs * 1024.0f,
+                    data.net_tx_mbs * 1024.0f);
+    } else {
+      std::snprintf(b_net, sizeof(b_net), "%.1fD / %.1fU MB/s", data.net_rx_mbs, data.net_tx_mbs);
+    }
+
     if (ImGui::BeginTable("##SensorsSplitGrid", 2,
                           ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
       ImGui::TableNextRow();
@@ -728,6 +751,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       draw_metric_checkbox_row(cfg, MetricType::GpuModel, "GPU Model", data.gpu_name);
       draw_metric_checkbox_row(cfg, MetricType::CpuModel, "CPU Model", data.cpu_name);
       draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock", data.local_time_str);
+      draw_metric_checkbox_row(cfg, MetricType::DiskIo, "Disk Read/Write", b_dsk_io);
+      draw_metric_checkbox_row(cfg, MetricType::DiskTemp, "Disk Temp (NVMe)", b_dsk_tmp);
+      draw_metric_checkbox_row(cfg, MetricType::NetSpeed, "Network Speed", b_net);
       draw_metric_checkbox_row(cfg, MetricType::Battery, "Battery & Power", b_bat,
                                data.battery_available,
                                "(Disabled - No Battery Detected / Desktop PC)");
@@ -965,6 +991,91 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TableSetColumnIndex(1);
       ImGui::AlignTextToFramePadding();
       ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.95f, 1.0f), "%s", cur_dir.c_str());
+
+      // Instant Replay Section
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      draw_section_header("Instant Replay");
+      ImGui::TableSetColumnIndex(1);
+      draw_section_header("");
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Replay Buffer");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(-1.0f);
+      const char* replay_items[] = {"OFF (Disabled - 0 MB RAM)", "15 Seconds", "30 Seconds",
+                                    "60 Seconds", "120 Seconds"};
+      int replay_idx = 0;
+      if (cfg.replay_enabled) {
+        if (cfg.replay_duration_sec <= 15)
+          replay_idx = 1;
+        else if (cfg.replay_duration_sec <= 30)
+          replay_idx = 2;
+        else if (cfg.replay_duration_sec <= 60)
+          replay_idx = 3;
+        else
+          replay_idx = 4;
+      }
+      if (ImGui::Combo("##ReplayModeCombo", &replay_idx, replay_items,
+                       IM_ARRAYSIZE(replay_items))) {
+        if (replay_idx == 0) {
+          cfg.replay_enabled = false;
+        } else {
+          cfg.replay_enabled = true;
+          const int durs[] = {0, 15, 30, 60, 120};
+          cfg.replay_duration_sec = durs[replay_idx];
+        }
+      }
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Save Clip");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::BeginDisabled(!cfg.replay_enabled);
+      std::string rep_kb = format_keybind(cfg.bind_save_replay);
+      char save_rep_lbl[64];
+      std::snprintf(save_rep_lbl, sizeof(save_rep_lbl), "[SAVE REPLAY] (%s)", rep_kb.c_str());
+      if (ImGui::Button(save_rep_lbl, ImVec2(-1.0f, 26.0f * scale))) {
+        RecorderController::instance().trigger_save_replay();
+        set_status_message("Menyimpan klip Instant Replay...");
+      }
+      ImGui::EndDisabled();
+
+      // Screenshot Section
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      draw_section_header("Screenshot");
+      ImGui::TableSetColumnIndex(1);
+      draw_section_header("");
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Capture Mode");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(-1.0f);
+      const char* shot_modes[] = {"Clean Game (Tanpa HUD)", "With HUD (Dengan HUD)"};
+      int shot_mode_idx = cfg.screenshot_with_hud ? 1 : 0;
+      if (ImGui::Combo("##ScreenshotMode", &shot_mode_idx, shot_modes, IM_ARRAYSIZE(shot_modes))) {
+        cfg.screenshot_with_hud = (shot_mode_idx == 1);
+      }
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Snapshot");
+      ImGui::TableSetColumnIndex(1);
+      std::string shot_kb = format_keybind(cfg.bind_screenshot);
+      char take_shot_lbl[64];
+      std::snprintf(take_shot_lbl, sizeof(take_shot_lbl), "[IMG] Take Screenshot (%s)",
+                    shot_kb.c_str());
+      if (ImGui::Button(take_shot_lbl, ImVec2(-1.0f, 26.0f * scale))) {
+        RecorderController::instance().request_screenshot();
+        set_status_message("Screenshot dijadwalkan pada frame berikutnya!");
+      }
 
       ImGui::EndTable();
     }
