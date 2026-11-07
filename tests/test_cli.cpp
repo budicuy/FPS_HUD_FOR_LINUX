@@ -1910,6 +1910,57 @@ void run_all_devices_and_features_suite() {
                    : "Failed: [Experimental] section persistence or parsing failure");
   }
 
+  {
+    InputManager im;
+    HudConfig kcfg{};
+    kcfg.hud_visible = true;
+    kcfg.gui_open = false;
+
+    // 1. Single-key capture: capture KEY_F8 (66) for ToggleHud
+    im.start_keybind_capture(KeybindTarget::ToggleHud);
+    bool cap_started =
+        im.is_capturing_keybind() && (im.capturing_target() == KeybindTarget::ToggleHud);
+    im.handle_key_event(66, true, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(66, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    bool single_cap_ok = cap_started && !im.is_capturing_keybind() &&
+                         (kcfg.bind_toggle_hud.mod_key == 0 && kcfg.bind_toggle_hud.main_key == 66);
+
+    // 2. Two-key combo capture: capture LeftAlt (56) + F (33) for ToggleHud
+    im.start_keybind_capture(KeybindTarget::ToggleHud);
+    im.handle_key_event(56, true, kcfg, 1920.0f, 1080.0f, nullptr);  // Press LeftAlt
+    bool still_cap_after_mod = im.is_capturing_keybind();
+    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);  // Press F
+    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(56, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    bool combo_cap_ok = still_cap_after_mod && !im.is_capturing_keybind() &&
+                        (kcfg.bind_toggle_hud.mod_key == 56 && kcfg.bind_toggle_hud.main_key == 33);
+
+    // 3. Triggering custom 2-key combo: pressing F alone does NOT toggle hud_visible, pressing
+    // LeftAlt + F DOES toggle hud_visible
+    kcfg.hud_visible = true;
+    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    bool no_false_trigger = (kcfg.hud_visible == true);
+
+    im.handle_key_event(56, true, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(56, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    bool combo_trigger_ok = no_false_trigger && (kcfg.hud_visible == false);
+
+    // 4. Cancel capture via KEY_ESC (1)
+    im.start_keybind_capture(KeybindTarget::ToggleHud);
+    im.handle_key_event(1, true, kcfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(1, false, kcfg, 1920.0f, 1080.0f, nullptr);
+    bool esc_cancel_ok = !im.is_capturing_keybind() && (kcfg.bind_toggle_hud.mod_key == 56 &&
+                                                        kcfg.bind_toggle_hud.main_key == 33);
+
+    check_cond(single_cap_ok && combo_cap_ok && combo_trigger_ok && esc_cancel_ok,
+               "0.5 Interactive 1-or-2-Key Shortcut Capture & Combo Matching",
+               "Verified 1-key capture (F8), 2-key capture (Alt + F), combo trigger, and ESC "
+               "cancellation");
+  }
+
   const fs::path base = "/tmp/fpshud_mock_hw";
   std::error_code ec;
 

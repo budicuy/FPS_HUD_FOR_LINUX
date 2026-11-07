@@ -6,6 +6,9 @@
 
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
+#ifdef None
+#undef None
+#endif
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -185,6 +188,37 @@ bool is_record_toggle_key(unsigned int code, int mode, bool alt_down) {
     default:
       return code == KEY_F7;
   }
+}
+
+bool is_modifier_key(uint32_t code) noexcept {
+  return code == KEY_LEFTALT || code == KEY_RIGHTALT || code == KEY_LEFTCTRL ||
+         code == KEY_RIGHTCTRL || code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT ||
+         code == KEY_LEFTMETA || code == KEY_RIGHTMETA;
+}
+
+bool is_mod_held(uint32_t mod_key, const std::bitset<512>& keys_down) noexcept {
+  if (mod_key == 0) return true;
+  if (mod_key == KEY_LEFTALT || mod_key == KEY_RIGHTALT) {
+    return keys_down.test(KEY_LEFTALT) || keys_down.test(KEY_RIGHTALT);
+  }
+  if (mod_key == KEY_LEFTCTRL || mod_key == KEY_RIGHTCTRL) {
+    return keys_down.test(KEY_LEFTCTRL) || keys_down.test(KEY_RIGHTCTRL);
+  }
+  if (mod_key == KEY_LEFTSHIFT || mod_key == KEY_RIGHTSHIFT) {
+    return keys_down.test(KEY_LEFTSHIFT) || keys_down.test(KEY_RIGHTSHIFT);
+  }
+  if (mod_key == KEY_LEFTMETA || mod_key == KEY_RIGHTMETA) {
+    return keys_down.test(KEY_LEFTMETA) || keys_down.test(KEY_RIGHTMETA);
+  }
+  return (mod_key < 512) ? keys_down.test(mod_key) : false;
+}
+
+bool matches_keybind(uint32_t code, const Keybind& kb, const std::bitset<512>& keys_down) noexcept {
+  if (kb.main_key == 0 || code != kb.main_key) return false;
+  if (kb.mod_key != 0) {
+    return is_mod_held(kb.mod_key, keys_down);
+  }
+  return true;
 }
 
 // Forward-declared listener callback trampolines
@@ -402,21 +436,98 @@ void InputManager::detach_wayland_display(void* display) noexcept {
   teardown_wayland_locked();
 }
 
+void InputManager::start_keybind_capture(KeybindTarget target) noexcept {
+  capture_target_ = target;
+  capture_mod_key_ = 0;
+}
+
+void InputManager::cancel_keybind_capture() noexcept {
+  capture_target_ = KeybindTarget::None;
+  capture_mod_key_ = 0;
+}
+
 void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, float display_width,
                                     float display_height, ImGuiIO* io) noexcept {
+  if (code < 512) {
+    keys_down_.set(code, down);
+  }
   if (code == KEY_LEFTALT || code == KEY_RIGHTALT) {
-    alt_pressed_ = down;
+    alt_pressed_ = keys_down_.test(KEY_LEFTALT) || keys_down_.test(KEY_RIGHTALT);
+  }
+
+  // Interactive 1-or-2-key shortcut capture mode
+  if (capture_target_ != KeybindTarget::None) {
+    if (code >= BTN_MISC) return;  // Ignore mouse/gamepad buttons during keyboard capture
+    if (down && code == KEY_ESC) {
+      cancel_keybind_capture();
+      return;
+    }
+
+    auto commit_capture = [&](Keybind kb) noexcept {
+      switch (capture_target_) {
+        case KeybindTarget::ToggleGui:
+          cfg.bind_toggle_gui = kb;
+          cfg.key_toggle_gui = -1;
+          break;
+        case KeybindTarget::ToggleHud:
+          cfg.bind_toggle_hud = kb;
+          cfg.key_toggle_hud = -1;
+          break;
+        case KeybindTarget::ToggleBenchmark:
+          cfg.bind_benchmark = kb;
+          cfg.key_benchmark = -1;
+          break;
+        case KeybindTarget::ToggleRecord:
+          cfg.bind_record = kb;
+          cfg.key_record = -1;
+          break;
+        case KeybindTarget::None:
+          break;
+      }
+      capture_target_ = KeybindTarget::None;
+      capture_mod_key_ = 0;
+    };
+
+    if (down) {
+      if (capture_mod_key_ == 0 && is_modifier_key(code)) {
+        capture_mod_key_ = code;
+      } else if (capture_mod_key_ != 0 && code != capture_mod_key_) {
+        commit_capture(Keybind{capture_mod_key_, code});
+      } else if (capture_mod_key_ == 0 && !is_modifier_key(code)) {
+        commit_capture(Keybind{0, code});
+      }
+    } else if (capture_mod_key_ != 0 && code == capture_mod_key_) {
+      // User pressed and released a modifier key by itself -> bind as single key
+      commit_capture(Keybind{0, capture_mod_key_});
+    }
+    return;
   }
 
   // Hotkey toggle shortcuts trigger on key press (down == true)
   if (down) {
-    if (is_gui_toggle_key(code, cfg.key_toggle_gui)) {
+    const bool gui_default_bind =
+        (cfg.bind_toggle_gui.mod_key == 0 && cfg.bind_toggle_gui.main_key == KEY_F12 &&
+         cfg.key_toggle_gui >= 0);
+    const bool hud_default_bind =
+        (cfg.bind_toggle_hud.mod_key == 0 && cfg.bind_toggle_hud.main_key == KEY_F11 &&
+         cfg.key_toggle_hud >= 0);
+    const bool bench_default_bind =
+        (cfg.bind_benchmark.mod_key == 0 && cfg.bind_benchmark.main_key == KEY_F9 &&
+         cfg.key_benchmark >= 0);
+    const bool rec_default_bind =
+        (cfg.bind_record.mod_key == 0 && cfg.bind_record.main_key == KEY_F7 && cfg.key_record >= 0);
+
+    if (matches_keybind(code, cfg.bind_toggle_gui, keys_down_) ||
+        (gui_default_bind && is_gui_toggle_key(code, cfg.key_toggle_gui))) {
       cfg.gui_open = !cfg.gui_open;
-    } else if (is_hud_toggle_key(code, cfg.key_toggle_hud)) {
+    } else if (matches_keybind(code, cfg.bind_toggle_hud, keys_down_) ||
+               (hud_default_bind && is_hud_toggle_key(code, cfg.key_toggle_hud))) {
       cfg.hud_visible = !cfg.hud_visible;
-    } else if (is_bench_toggle_key(code, cfg.key_benchmark)) {
+    } else if (matches_keybind(code, cfg.bind_benchmark, keys_down_) ||
+               (bench_default_bind && is_bench_toggle_key(code, cfg.key_benchmark))) {
       get_telemetry().toggle_benchmark();
-    } else if (is_record_toggle_key(code, cfg.key_record, alt_pressed_)) {
+    } else if (matches_keybind(code, cfg.bind_record, keys_down_) ||
+               (rec_default_bind && is_record_toggle_key(code, cfg.key_record, alt_pressed_))) {
       RecorderController::instance().toggle_recording(cfg, display_width, display_height);
     } else if (code == KEY_ESC && cfg.gui_open) {
       cfg.gui_open = false;
@@ -795,23 +906,18 @@ void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_
     char keys[32] = {0};
     fnQueryKeymap(dpy, keys);
 
-    KeyCode kc_f12 = fnKeysymToKeycode(dpy, XK_F12);
-    KeyCode kc_ins = fnKeysymToKeycode(dpy, XK_Insert);
-    KeyCode kc_f7 = fnKeysymToKeycode(dpy, XK_F7);
-
-    bool f12_down = kc_f12 && (keys[kc_f12 >> 3] & (1 << (kc_f12 & 7)));
-    bool ins_down = kc_ins && (keys[kc_ins >> 3] & (1 << (kc_ins & 7)));
-    bool f7_down = kc_f7 && (keys[kc_f7 >> 3] & (1 << (kc_f7 & 7)));
-
-    if ((f12_down && !prev_x11_f12_) || (ins_down && !prev_x11_insert_)) {
-      cfg.gui_open = !cfg.gui_open;
+    // On Linux X11/Xwayland (evdev XKB), X11 KeyCode == Linux evdev code + 8.
+    // Forward any key state transitions through handle_key_event so custom 1/2-key
+    // shortcuts and interactive keybind capture work identically on X11 fallback.
+    for (unsigned int xkc = 8; xkc < 256; ++xkc) {
+      bool down = (keys[xkc >> 3] & (1 << (xkc & 7))) != 0;
+      bool prev_down = (prev_x11_keymap_[xkc >> 3] & (1 << (xkc & 7))) != 0;
+      if (down != prev_down) {
+        uint32_t evdev_code = xkc - 8;
+        handle_key_event(evdev_code, down, cfg, display_width, display_height, &io);
+      }
     }
-    if (f7_down && !prev_x11_f7_) {
-      RecorderController::instance().toggle_recording(cfg, display_width, display_height);
-    }
-    prev_x11_f12_ = f12_down;
-    prev_x11_insert_ = ins_down;
-    prev_x11_f7_ = f7_down;
+    std::memcpy(prev_x11_keymap_, keys, sizeof(prev_x11_keymap_));
   }
 
   if (cfg.gui_open && fnDefaultRoot && fnQueryPointer && evdev_devices_.empty() &&

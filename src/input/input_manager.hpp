@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include <bitset>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -9,6 +10,14 @@
 struct ImGuiIO;
 
 namespace fpshud {
+
+enum class KeybindTarget {
+  None = 0,
+  ToggleGui,
+  ToggleHud,
+  ToggleBenchmark,
+  ToggleRecord,
+};
 
 struct EvdevDevice {
   int fd = -1;
@@ -48,6 +57,11 @@ public:
 
   bool has_evdev_access() const { return !evdev_devices_.empty(); }
 
+  void start_keybind_capture(KeybindTarget target) noexcept;
+  void cancel_keybind_capture() noexcept;
+  bool is_capturing_keybind() const noexcept { return capture_target_ != KeybindTarget::None; }
+  KeybindTarget capturing_target() const noexcept { return capture_target_; }
+
   ImGuiIO* current_io() const noexcept { return current_io_; }
   HudConfig* current_cfg() const noexcept { return current_cfg_; }
   float current_width() const noexcept { return current_w_; }
@@ -77,14 +91,15 @@ private:
   float cursor_y_ = -1.0f;
   bool mouse_buttons_[3] = {false, false, false};
   bool alt_pressed_ = false;
+  std::bitset<512> keys_down_{};
+  KeybindTarget capture_target_ = KeybindTarget::None;
+  uint32_t capture_mod_key_ = 0;
 
   // Dynamic X11 fallback state
   void* x11_lib_ = nullptr;
   void* x11_display_ = nullptr;
   bool x11_attempted_ = false;
-  bool prev_x11_f12_ = false;
-  bool prev_x11_insert_ = false;
-  bool prev_x11_f7_ = false;
+  char prev_x11_keymap_[32] = {0};
 
   // Dynamic Wayland client state (100% sudo-free in-process)
   mutable std::recursive_mutex wayland_mutex_;
