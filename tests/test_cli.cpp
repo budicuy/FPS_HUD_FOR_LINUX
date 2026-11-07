@@ -1973,10 +1973,21 @@ void run_all_devices_and_features_suite() {
     bool esc_cancel_ok = !im.is_capturing_keybind() && (kcfg.bind_toggle_hud.mod_key == 56 &&
                                                         kcfg.bind_toggle_hud.main_key == 33);
 
-    check_cond(single_cap_ok && combo_cap_ok && combo_trigger_ok && esc_cancel_ok,
+    // 5. Default F10 (68) must trigger Screenshot without toggling GUI open
+    HudConfig f10_cfg{};
+    f10_cfg.enabled = true;
+    f10_cfg.gui_open = false;
+    RecorderController::instance().consume_screenshot_request();
+    im.handle_key_event(68, true, f10_cfg, 1920.0f, 1080.0f, nullptr);
+    im.handle_key_event(68, false, f10_cfg, 1920.0f, 1080.0f, nullptr);
+    bool f10_screenshot_ok =
+        (!f10_cfg.gui_open && RecorderController::instance().consume_screenshot_request());
+
+    check_cond(single_cap_ok && combo_cap_ok && combo_trigger_ok && esc_cancel_ok &&
+                   f10_screenshot_ok,
                "0.5 Interactive 1-or-2-Key Shortcut Capture & Combo Matching",
-               "Verified 1-key capture (F8), 2-key capture (Alt + F), combo trigger, and ESC "
-               "cancellation");
+               "Verified 1-key capture (F8), 2-key capture (Alt + F), combo trigger, ESC "
+               "cancellation, and F10 screenshot dispatch");
   }
 
   const fs::path base = "/tmp/fpshud_mock_hw";

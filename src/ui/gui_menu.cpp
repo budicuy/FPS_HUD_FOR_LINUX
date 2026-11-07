@@ -172,18 +172,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     if (gui_font) ImGui::PushFont(gui_font);
     if (ImGui::Begin("##FPSHUD_ToastHint", nullptr, toast_flags)) {
       ImGui::SetWindowFontScale(16.0f / base_gui_font_px);
-      if (get_input_manager().has_evdev_access()) {
-        std::string g_kb = format_keybind(cfg.bind_toggle_gui);
-        std::string h_kb = format_keybind(cfg.bind_toggle_hud);
-        std::string b_kb = format_keybind(cfg.bind_benchmark);
-        ImGui::TextColored(ImVec4(0.4f, 0.92f, 1.0f, 1.0f),
-                           "FPSHUD Active  |  GUI: %s  |  Hide HUD: %s  |  Benchmark: %s",
-                           g_kb.c_str(), h_kb.c_str(), b_kb.c_str());
-      } else {
-        ImGui::TextColored(
-            ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-            "[FPSHUD GUI] Hotkeys need input access: re-run the installer and allow sudo");
-      }
+      std::string g_kb = format_keybind(cfg.bind_toggle_gui);
+      std::string h_kb = format_keybind(cfg.bind_toggle_hud);
+      std::string b_kb = format_keybind(cfg.bind_benchmark);
+      ImGui::TextColored(ImVec4(0.4f, 0.92f, 1.0f, 1.0f),
+                         "FPSHUD Active  |  GUI: %s  |  Hide HUD: %s  |  Benchmark: %s",
+                         g_kb.c_str(), h_kb.c_str(), b_kb.c_str());
     }
     ImGui::End();
     if (gui_font) ImGui::PopFont();
@@ -595,7 +589,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
       const char* gui_default_hint = (cfg.key_toggle_gui == 0 && cfg.bind_toggle_gui.mod_key == 0 &&
                                       cfg.bind_toggle_gui.main_key == 88)
-                                         ? "Insert / F12 / F10"
+                                         ? "Insert / F12"
                                          : nullptr;
       draw_keybind_row("GUI Menu Key", KeybindTarget::ToggleGui, cfg.bind_toggle_gui,
                        gui_default_hint, scale);

@@ -57,8 +57,6 @@ public:
   // Called right after render_gui_menu() in case GUI was closed via a button click
   void sync_grab_state(ImGuiIO& io, const HudConfig& cfg);
 
-  bool has_evdev_access() const { return !evdev_devices_.empty(); }
-
   void start_keybind_capture(KeybindTarget target) noexcept;
   void cancel_keybind_capture() noexcept;
   bool is_capturing_keybind() const noexcept { return capture_target_ != KeybindTarget::None; }
@@ -112,7 +110,6 @@ private:
   void* wayland_seat_ = nullptr;
   void* wayland_keyboard_ = nullptr;
   void* wayland_pointer_ = nullptr;
-  uint32_t wayland_seat_id_ = 0;
   bool wayland_attempted_ = false;
   bool wayland_attached_ = false;
 

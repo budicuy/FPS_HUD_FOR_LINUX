@@ -141,7 +141,7 @@ void release_imgui_inputs(ImGuiIO& io) {
 bool is_gui_toggle_key(unsigned int code, int mode) {
   switch (mode) {
     case 0:
-      return code == KEY_INSERT || code == KEY_F12 || code == KEY_F10;
+      return code == KEY_INSERT || code == KEY_F12;
     case 1:
       return code == KEY_INSERT;
     case 2:
@@ -381,7 +381,6 @@ void InputManager::teardown_wayland_locked() noexcept {
   }
   wayland_display_ = nullptr;
   wayland_attached_ = false;
-  wayland_seat_id_ = 0;
 }
 
 void InputManager::attach_wayland_display(void* display) noexcept {
@@ -607,10 +606,10 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
 }
 
 void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
+  (void)id;
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!seat || !wayland_queue_) return;
   wayland_seat_ = seat;
-  wayland_seat_id_ = id;
   if (g_wl.fn_proxy_set_queue) {
     g_wl.fn_proxy_set_queue(static_cast<struct wl_proxy*>(seat),
                             static_cast<struct wl_event_queue*>(wayland_queue_));
@@ -898,21 +897,18 @@ void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_
   init_x11_fallback();
   if (!x11_display_ || !x11_lib_) return;
 
-  using PFN_XKeysymToKeycode = KeyCode (*)(Display*, KeySym);
   using PFN_XQueryKeymap = int (*)(Display*, char[32]);
   using PFN_XDefaultRootWindow = Window (*)(Display*);
   using PFN_XQueryPointer =
       Bool (*)(Display*, Window, Window*, Window*, int*, int*, int*, int*, unsigned int*);
 
-  auto fnKeysymToKeycode =
-      reinterpret_cast<PFN_XKeysymToKeycode>(dlsym(x11_lib_, "XKeysymToKeycode"));
   auto fnQueryKeymap = reinterpret_cast<PFN_XQueryKeymap>(dlsym(x11_lib_, "XQueryKeymap"));
   auto fnDefaultRoot =
       reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
   auto fnQueryPointer = reinterpret_cast<PFN_XQueryPointer>(dlsym(x11_lib_, "XQueryPointer"));
 
   auto* dpy = static_cast<Display*>(x11_display_);
-  if (fnKeysymToKeycode && fnQueryKeymap && evdev_devices_.empty()) {
+  if (fnQueryKeymap && evdev_devices_.empty()) {
     char keys[32] = {0};
     fnQueryKeymap(dpy, keys);
 
