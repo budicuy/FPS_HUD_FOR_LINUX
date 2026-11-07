@@ -3390,11 +3390,9 @@ void run_all_devices_and_features_suite() {
 
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
-    fpshud::render_gui_menu(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
-    fpshud::render_gui_menu(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
     ImDrawData* dd = ImGui::GetDrawData();
     bool render_ok = (dd != nullptr && dd->TotalVtxCount > 0);

@@ -300,7 +300,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     float presets_col_w = 395.0f * scale;
     if (ImGui::BeginTable("##TopHeaderBar", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("PresetsCol", ImGuiTableColumnFlags_WidthFixed, presets_col_w);
-      ImGui::TableSetupColumn("GraphCol", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("GraphCol", ImGuiTableColumnFlags_WidthStretch, 1.0f);
       ImGui::TableNextRow();
 
       ImGui::TableSetColumnIndex(0);
@@ -367,7 +367,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
     if (ImGui::BeginTable("##Col1FormTable", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 120.0f * scale);
-      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
       // Section 1: Layout & Grouping
       ImGui::TableNextRow();
@@ -882,7 +882,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     // Screenshot settings remain unlocked even during video recording
     if (ImGui::BeginTable("##Col3ScreenshotTable", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f * scale);
-      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -914,7 +914,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::BeginDisabled(is_rec);
     if (ImGui::BeginTable("##Col3RecorderTable", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f * scale);
-      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
       // Instant Replay Section
       ImGui::TableNextRow();
