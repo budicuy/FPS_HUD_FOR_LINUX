@@ -1960,6 +1960,11 @@ void run_all_devices_and_features_suite() {
     RamExpect ram2{4.00f, 2.00f, 2.50f};
     verify_all_features_on_device(
         amd_tc, "PROFILE 2 [SIMULATED AMD PC]: Ryzen 7 7800X3D + Radeon RX 7800 XT", &ram2);
+    auto amd_snap = amd_tc.get_snapshot();
+    check_cond(
+        amd_snap.gpu_vram_clock_mhz == 2438 && amd_snap.cpu_core_clocks_mhz[0] == 5050,
+        "2.1 AMD GPU VRAM Clock (2438 MHz) & Per-Core CPU Clock",
+        "Parsed hwmon1/freq2_input into gpu_vram_clock_mhz=2438 and cpu_core_clocks_mhz[0]=5050");
   }
 
   // ------------------------------------------------------------------------
@@ -2410,10 +2415,39 @@ void run_all_devices_and_features_suite() {
     bool hybrid_flag_ok = hybrid_snap.hybrid_cpu;
     bool p_load_ok = std::fabs(hybrid_snap.cpu_p_core_load_pct - 60.0f) < 1.0f;
     bool e_load_ok = std::fabs(hybrid_snap.cpu_e_core_load_pct - 25.0f) < 1.0f;
+    bool all_core_ok =
+        (hybrid_snap.cpu_core_count == 24 && hybrid_snap.cpu_core_loads_pct[0] == 60 &&
+         hybrid_snap.cpu_core_loads_pct[8] == 25);
 
-    check_cond(hybrid_flag_ok && p_count_ok && e_count_ok && p_load_ok && e_load_ok,
-               "PROFILE 9.4: Intel Hybrid CPU Topology (P-Core & E-Core)",
-               "Parsed 16 P-threads (60% load) and 8 E-threads (25% load) from sysfs PMU topology");
+    check_cond(hybrid_flag_ok && p_count_ok && e_count_ok && p_load_ok && e_load_ok && all_core_ok,
+               "PROFILE 9.4: All-Core CPU Load & Intel Hybrid Topology",
+               "Parsed 24 per-core loads (C0=60%, C8=25%) and hybrid topology from /proc/stat");
+
+    // Verify DX11 / DX12 / DX9 / Vulkan / OpenGL Render API Detection
+    fs::path maps_dx12 = "/tmp/fpshud_mock_maps_dx12_" + std::to_string(::getpid());
+    fs::path maps_dx11 = "/tmp/fpshud_mock_maps_dx11_" + std::to_string(::getpid());
+    fs::path maps_dx9 = "/tmp/fpshud_mock_maps_dx9_" + std::to_string(::getpid());
+    fs::path maps_vk = "/tmp/fpshud_mock_maps_vk_" + std::to_string(::getpid());
+    write_mock_file(maps_dx12,
+                    "7f000000-7f001000 r-xp 00000000 00:00 0 /path/to/vkd3d-proton/d3d12.dll\n");
+    write_mock_file(maps_dx11, "7f000000-7f001000 r-xp 00000000 00:00 0 /path/to/dxvk/d3d11.dll\n");
+    write_mock_file(maps_dx9, "7f000000-7f001000 r-xp 00000000 00:00 0 /path/to/d3d9.dll\n");
+    write_mock_file(maps_vk, "7f000000-7f001000 r-xp 00000000 00:00 0 /usr/lib/libvulkan.so.1\n");
+
+    bool api_det_ok =
+        (std::strcmp(detect_effective_render_api("VULKAN", maps_dx12.c_str()), "DX12") == 0 &&
+         std::strcmp(detect_effective_render_api("VULKAN", maps_dx11.c_str()), "DX11") == 0 &&
+         std::strcmp(detect_effective_render_api("VULKAN", maps_dx9.c_str()), "DX9") == 0 &&
+         std::strcmp(detect_effective_render_api("VULKAN", maps_vk.c_str()), "VULKAN") == 0 &&
+         std::strcmp(detect_effective_render_api("OPENGL", maps_dx12.c_str()), "OPENGL") == 0);
+
+    fs::remove(maps_dx12, ec);
+    fs::remove(maps_dx11, ec);
+    fs::remove(maps_dx9, ec);
+    fs::remove(maps_vk, ec);
+
+    check_cond(api_det_ok, "PROFILE 9.4.1: DirectX (DX11/DX12/DX9) & Vulkan/OpenGL API Detection",
+               "Accurately distinguished DX12 (vkd3d), DX11 (dxvk), DX9, VULKAN, and OPENGL");
   }
 
   // ------------------------------------------------------------------------

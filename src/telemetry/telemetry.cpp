@@ -665,6 +665,7 @@ void TelemetryCollector::init_gpu_sensors_locked() {
   drm_mclk_freq_path_.clear();
   drm_max_freq_path_.clear();
   drm_pp_dpm_sclk_path_.clear();
+  drm_pp_dpm_mclk_path_.clear();
   drm_temp_path_.clear();
   drm_temp_fallback_path_.clear();
   drm_fan_pwm_path_.clear();
@@ -946,6 +947,9 @@ void TelemetryCollector::init_gpu_sensors_locked() {
   }
   if (fs::exists(dev_dir / "pp_dpm_sclk", ec)) {
     drm_pp_dpm_sclk_path_ = (dev_dir / "pp_dpm_sclk").string();
+  }
+  if (fs::exists(dev_dir / "pp_dpm_mclk", ec)) {
+    drm_pp_dpm_mclk_path_ = (dev_dir / "pp_dpm_mclk").string();
   }
 
   // Intel i915 / xe specific frequency paths
@@ -1461,13 +1465,64 @@ void TelemetryCollector::toggle_benchmark() {
   }
 }
 
+namespace {
+
+bool contains_icase(const char* haystack, const char* needle) noexcept {
+  if (!haystack || !needle || !*needle) return false;
+  size_t nlen = std::strlen(needle);
+  for (const char* p = haystack; *p; ++p) {
+    if (strncasecmp(p, needle, nlen) == 0) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+const char* detect_effective_render_api(const char* base_api, const char* maps_path) noexcept {
+  if (!base_api || !*base_api) return "VULKAN";
+  if (std::strcmp(base_api, "VULKAN") != 0) return base_api;
+  if (!maps_path || !*maps_path) return "VULKAN";
+
+  FILE* fp = std::fopen(maps_path, "re");
+  if (!fp) return "VULKAN";
+
+  bool has_dx12 = false;
+  bool has_dx11 = false;
+  bool has_dx9 = false;
+  char line[1024];
+  while (std::fgets(line, sizeof(line), fp)) {
+    if (contains_icase(line, "vkd3d") || contains_icase(line, "d3d12.dll") ||
+        contains_icase(line, "d3d12core.dll")) {
+      has_dx12 = true;
+      break;
+    }
+    if (contains_icase(line, "dxvk") || contains_icase(line, "d3d11.dll")) {
+      has_dx11 = true;
+    } else if (contains_icase(line, "d3d9.dll")) {
+      has_dx9 = true;
+    }
+  }
+  std::fclose(fp);
+
+  if (has_dx12) return "DX12";
+  if (has_dx11) return "DX11";
+  if (has_dx9) return "DX9";
+  return "VULKAN";
+}
+
 TelemetryData TelemetryCollector::get_snapshot() const {
   TelemetryData out;
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     out = hw_data_;
   }
-  out.render_api = active_api_.load(std::memory_order_relaxed);
+  const char* base_api = active_api_.load(std::memory_order_relaxed);
+  const char* trans_api = translated_api_.load(std::memory_order_relaxed);
+  if (base_api && std::strcmp(base_api, "VULKAN") == 0 && trans_api) {
+    out.render_api = trans_api;
+  } else {
+    out.render_api = base_api ? base_api : "VULKAN";
+  }
   out.fps = displayed_fps_.load(std::memory_order_relaxed);
   out.fps_avg = displayed_fps_avg_.load(std::memory_order_relaxed);
   out.fps_1pct_low = displayed_fps_1low_.load(std::memory_order_relaxed);
@@ -1540,6 +1595,10 @@ void TelemetryCollector::poll_local_clock() {
   localtime_r(&t, &tm_buf);
   char buf[8];
   std::strftime(buf, sizeof(buf), "%H:%M", &tm_buf);
+  std::string maps_path =
+      root_prefix_.empty() ? "/proc/self/maps" : (root_prefix_ + "/proc/self/maps");
+  translated_api_.store(detect_effective_render_api("VULKAN", maps_path.c_str()),
+                        std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(data_mutex_);
   std::memcpy(hw_data_.local_time_str, buf, sizeof(hw_data_.local_time_str));
 }
@@ -1656,33 +1715,6 @@ void TelemetryCollector::poll_battery() {
 void TelemetryCollector::poll_cpu_load() {
   std::string stat_path = root_prefix_ + "/proc/stat";
 
-  if (!hybrid_cpu_) {
-    char buf[256];
-    if (!read_sysfs_buf(stat_path.c_str(), buf, sizeof(buf))) return;
-
-    uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
-    if (std::sscanf(buf, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
-                    &iowait, &irq, &softirq, &steal) < 4) {
-      return;
-    }
-
-    uint64_t idle_all = idle + iowait;
-    uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
-
-    if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
-      uint64_t total_d = total - prev_cpu_total_;
-      uint64_t idle_d = idle_all - prev_cpu_idle_;
-      float usage = 100.0f * static_cast<float>(total_d - idle_d) / static_cast<float>(total_d);
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      hw_data_.cpu_load_pct = usage;
-    }
-
-    prev_cpu_total_ = total;
-    prev_cpu_idle_ = idle_all;
-    return;
-  }
-
-  // Hybrid CPU: parse /proc/stat lines to break down P-Core and E-Core cluster loads
   int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
   char buf[16384];
@@ -1693,6 +1725,9 @@ void TelemetryCollector::poll_cpu_load() {
 
   uint64_t p_busy_sum = 0, p_total_sum = 0;
   uint64_t e_busy_sum = 0, e_total_sum = 0;
+  int max_core_seen = 0;
+  std::array<uint8_t, TelemetryData::kMaxCpuCores> core_loads{};
+  std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
 
   const char* line = buf;
   while (*line) {
@@ -1730,12 +1765,31 @@ void TelemetryCollector::poll_cpu_load() {
             uint64_t idle_all = idle + iowait;
             uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
             uint64_t busy = (total > idle_all) ? (total - idle_all) : 0;
-            if (p_core_mask_.test(static_cast<size_t>(cpu_idx))) {
-              p_total_sum += total;
-              p_busy_sum += busy;
-            } else if (e_core_mask_.test(static_cast<size_t>(cpu_idx))) {
-              e_total_sum += total;
-              e_busy_sum += busy;
+
+            if (cpu_idx < static_cast<long>(TelemetryData::kMaxCpuCores)) {
+              size_t cidx = static_cast<size_t>(cpu_idx);
+              max_core_seen = std::max(max_core_seen, static_cast<int>(cpu_idx) + 1);
+              if (prev_core_total_[cidx] != 0 && total > prev_core_total_[cidx]) {
+                uint64_t tot_d = total - prev_core_total_[cidx];
+                uint64_t idle_d =
+                    (idle_all > prev_core_idle_[cidx]) ? (idle_all - prev_core_idle_[cidx]) : 0;
+                uint64_t busy_d = (tot_d > idle_d) ? (tot_d - idle_d) : 0;
+                int pct = std::clamp(static_cast<int>((busy_d * 100 + tot_d / 2) / tot_d), 0, 100);
+                core_loads[cidx] = static_cast<uint8_t>(pct);
+                core_updated.set(cidx);
+              }
+              prev_core_total_[cidx] = total;
+              prev_core_idle_[cidx] = idle_all;
+            }
+
+            if (hybrid_cpu_) {
+              if (p_core_mask_.test(static_cast<size_t>(cpu_idx))) {
+                p_total_sum += total;
+                p_busy_sum += busy;
+              } else if (e_core_mask_.test(static_cast<size_t>(cpu_idx))) {
+                e_total_sum += total;
+                e_busy_sum += busy;
+              }
             }
           }
         }
@@ -1745,6 +1799,18 @@ void TelemetryCollector::poll_cpu_load() {
     if (!next_line) break;
     line = next_line + 1;
   }
+
+  if (max_core_seen > 0) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_data_.cpu_core_count = std::max(hw_data_.cpu_core_count, max_core_seen);
+    for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
+      if (core_updated.test(i)) {
+        hw_data_.cpu_core_loads_pct[i] = core_loads[i];
+      }
+    }
+  }
+
+  if (!hybrid_cpu_) return;
 
   // Calculate P-Core load delta
   float p_load = 0.0f;
@@ -1777,6 +1843,9 @@ void TelemetryCollector::poll_cpu_load() {
 
 void TelemetryCollector::poll_cpu_clock() {
   int max_mhz = 0;
+  int max_core_seen = 0;
+  std::array<uint16_t, TelemetryData::kMaxCpuCores> core_clocks{};
+  std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
   char buf[32];
   char path_buf[512];
   for (const auto& sensor : cpu_freq_sensors_) {
@@ -1790,12 +1859,23 @@ void TelemetryCollector::poll_cpu_clock() {
       long khz = std::strtol(buf, nullptr, 10);
       int mhz = static_cast<int>((khz + 500) / 1000);
       if (mhz > max_mhz) max_mhz = mhz;
+      if (sensor.cpu_id < TelemetryData::kMaxCpuCores) {
+        core_clocks[sensor.cpu_id] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
+        core_updated.set(sensor.cpu_id);
+        max_core_seen = std::max(max_core_seen, static_cast<int>(sensor.cpu_id) + 1);
+      }
     }
   }
 
-  if (max_mhz > 0) {
+  if (max_mhz > 0 || max_core_seen > 0) {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.cpu_clock_mhz = max_mhz;
+    if (max_mhz > 0) hw_data_.cpu_clock_mhz = max_mhz;
+    hw_data_.cpu_core_count = std::max(hw_data_.cpu_core_count, max_core_seen);
+    for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
+      if (core_updated.test(i)) {
+        hw_data_.cpu_core_clocks_mhz[i] = core_clocks[i];
+      }
+    }
   }
 }
 
@@ -1999,6 +2079,7 @@ void TelemetryCollector::poll_nvidia_gpu() {
       hw_data_.gpu_vram_total_gb = static_cast<float>(mem.total) / (1024.0f * 1024.0f * 1024.0f);
     }
     if (ok_mem_clk) {
+      hw_data_.gpu_vram_clock_mhz = static_cast<int>(mem_clock_mhz);
       float max_bw_gbs = (static_cast<float>(mem_clock_mhz) * 2.0f *
                           (static_cast<float>(gpu_bus_width_bits_) / 8.0f)) /
                          1000.0f;
@@ -2222,12 +2303,27 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     }
   }
 
-  // 4. Memory Bandwidth (GB/s)
+  // 4. Memory Bandwidth (GB/s) & VRAM Clock (MHz)
   int mclk_mhz = 0;
   if (!drm_mclk_freq_path_.empty() &&
       read_sysfs_buf(drm_mclk_freq_path_.c_str(), buf, sizeof(buf))) {
     uint64_t raw_hz = std::strtoull(buf, nullptr, 10);
     mclk_mhz = static_cast<int>((raw_hz + 500000) / 1000000);
+  } else if (!drm_pp_dpm_mclk_path_.empty()) {
+    if (FILE* fp = std::fopen(drm_pp_dpm_mclk_path_.c_str(), "r")) {
+      char line_buf[128];
+      while (std::fgets(line_buf, sizeof(line_buf), fp)) {
+        std::string line(line_buf);
+        if (line.find('*') != std::string::npos) {
+          auto colon = line.find(':');
+          if (colon != std::string::npos) {
+            mclk_mhz = static_cast<int>(std::strtol(line.c_str() + colon + 1, nullptr, 10));
+            break;
+          }
+        }
+      }
+      std::fclose(fp);
+    }
   }
   float mem_util_ratio = load_pct / 100.0f;
   if (!drm_mem_busy_path_.empty() && read_sysfs_buf(drm_mem_busy_path_.c_str(), buf, sizeof(buf))) {
@@ -2298,6 +2394,7 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     hw_data_.gpu_available = true;
     hw_data_.gpu_load_pct = load_pct;
     hw_data_.gpu_clock_mhz = clock_mhz;
+    hw_data_.gpu_vram_clock_mhz = mclk_mhz;
     hw_data_.gpu_vram_used_gb = vram_used_gb;
     hw_data_.gpu_vram_total_gb = vram_total_gb;
     hw_data_.gpu_bandwidth_gbs = bw_gbs;

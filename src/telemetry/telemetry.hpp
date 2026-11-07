@@ -132,6 +132,7 @@ struct TelemetryData {
 
   float gpu_load_pct = 0.0f;
   int gpu_clock_mhz = 0;
+  int gpu_vram_clock_mhz = 0;
   float gpu_vram_used_gb = 0.0f;
   float gpu_vram_total_gb = 0.0f;
   float gpu_bandwidth_gbs = 0.0f;
@@ -145,6 +146,12 @@ struct TelemetryData {
   int cpu_clock_mhz = 0;
   int cpu_temp_c = 0;
   float cpu_power_w = 0.0f;
+
+  // Per-core CPU load (%) and clock (MHz) for All-Core indicators (zero-heap fixed arrays)
+  static constexpr size_t kMaxCpuCores = 64;
+  int cpu_core_count = 0;
+  std::array<uint8_t, kMaxCpuCores> cpu_core_loads_pct{};
+  std::array<uint16_t, kMaxCpuCores> cpu_core_clocks_mhz{};
 
   // Intel Hybrid P-Core vs E-Core CPU metrics
   bool hybrid_cpu = false;
@@ -319,6 +326,7 @@ private:
   std::string drm_mclk_freq_path_;    // hwmon/freq2_input (Hz, AMD VRAM clock)
   std::string drm_max_freq_path_;     // gt_max_freq_mhz or rps_max_freq_mhz (Intel i915)
   std::string drm_pp_dpm_sclk_path_;  // AMD fallback: device/pp_dpm_sclk ("1: 2400Mhz *")
+  std::string drm_pp_dpm_mclk_path_;  // AMD fallback: device/pp_dpm_mclk ("1: 1200Mhz *")
   bool drm_sclk_in_hz_ = true;
   std::string drm_temp_path_;           // hwmon/temp1_input (millidegrees C)
   std::string drm_temp_fallback_path_;  // fallback edge temp if junction temp2_input used
@@ -362,6 +370,8 @@ private:
   // Previous counters for delta calculation
   uint64_t prev_cpu_total_ = 0;
   uint64_t prev_cpu_idle_ = 0;
+  std::array<uint64_t, TelemetryData::kMaxCpuCores> prev_core_total_{};
+  std::array<uint64_t, TelemetryData::kMaxCpuCores> prev_core_idle_{};
   uint64_t prev_rapl_uj_ = 0;
   std::chrono::steady_clock::time_point prev_rapl_time_{};
   uint64_t prev_gpu_energy_uj_ = 0;
@@ -382,6 +392,7 @@ private:
   int graph_offset_ = 0;
 
   std::atomic<const char*> active_api_{"VULKAN"};
+  std::atomic<const char*> translated_api_{nullptr};
   std::atomic<float> displayed_fps_{0.0f};
   std::atomic<float> displayed_fps_avg_{0.0f};
   std::atomic<float> displayed_fps_1low_{0.0f};
@@ -410,5 +421,9 @@ private:
 
 // Global singleton accessor
 TelemetryCollector& get_telemetry();
+
+// Detect translated graphics API (DX12 / DX11 / DX9) under Wine/Proton or native VULKAN / OPENGL
+const char* detect_effective_render_api(const char* base_api,
+                                        const char* maps_path = "/proc/self/maps") noexcept;
 
 }  // namespace fpshud
