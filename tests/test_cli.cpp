@@ -2778,7 +2778,8 @@ void run_all_devices_and_features_suite() {
   bool b_frames_disabled = false;
   if (!rroot.empty()) {
     std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
-    b_frames_disabled = (rec_src.find("ctx->max_b_frames = 0") != std::string::npos);
+    b_frames_disabled = (rec_src.find("ctx->max_b_frames = 0") != std::string::npos ||
+                         rec_src.find("max_b_frames =\n        0") != std::string::npos);
   }
   check_cond(b_frames_disabled, "4.7 Real-Time Zero B-Frame Invariant",
              b_frames_disabled
