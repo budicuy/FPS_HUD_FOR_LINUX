@@ -2774,6 +2774,17 @@ void run_all_devices_and_features_suite() {
           ? "Jitter-resilient pacing window (70% interval) verified for Vulkan & OpenGL"
           : "Failed: Found rigid (rec_fps + 2) divisor or missing 70% jitter-tolerant threshold");
 
+  // 4.7 Real-Time Zero B-Frame Invariant
+  bool b_frames_disabled = false;
+  if (!rroot.empty()) {
+    std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+    b_frames_disabled = (rec_src.find("ctx->max_b_frames = 0") != std::string::npos);
+  }
+  check_cond(b_frames_disabled, "4.7 Real-Time Zero B-Frame Invariant",
+             b_frames_disabled
+                 ? "Zero B-frames (max_b_frames = 0) verified for 1:1 real-time pacing"
+                 : "Failed: max_b_frames is not 0 (causes negative start PTS and decode jitter)");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

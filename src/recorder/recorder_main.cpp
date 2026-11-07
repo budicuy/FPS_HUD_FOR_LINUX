@@ -472,7 +472,8 @@ int main(int argc, char* argv[]) {
       ctx->pix_fmt = AV_PIX_FMT_YUV420P;
     }
     ctx->gop_size = target_fps * 2;  // 2-second keyframe interval
-    ctx->max_b_frames = 2;           // Low latency B-frames to reduce file size significantly
+    ctx->max_b_frames =
+        0;  // Zero B-frames for real-time 1:1 stream (OBS Studio / ShadowPlay standard)
     ctx->rc_max_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
     ctx->rc_buffer_size = static_cast<int>(ctx->rc_max_rate * 2);
 
