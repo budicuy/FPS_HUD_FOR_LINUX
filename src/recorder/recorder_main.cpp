@@ -78,6 +78,24 @@ std::string get_default_monitor_source() {
   return "@DEFAULT_MONITOR@";
 }
 
+// Automatically discovers the active default microphone input source
+std::string get_default_mic_source() {
+  FILE* fp = popen("pactl get-default-source 2>/dev/null", "r");
+  if (fp) {
+    char buf[256] = {0};
+    if (std::fgets(buf, sizeof(buf), fp)) {
+      std::string s(buf);
+      while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+      if (!s.empty() && s.rfind(".monitor") == std::string::npos) {
+        pclose(fp);
+        return s;
+      }
+    }
+    pclose(fp);
+  }
+  return "@DEFAULT_SOURCE@";
+}
+
 AVBufferRef* create_vaapi_device() {
   for (int node_id = 128; node_id <= 135; ++node_id) {
     std::string dev_node = "/dev/dri/renderD" + std::to_string(node_id);
@@ -374,8 +392,10 @@ int main(int argc, char* argv[]) {
 
   std::string ext =
       (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
+  std::string rec_prefix =
+      (start_cfg.filename_prefix[0] != '\0') ? start_cfg.filename_prefix : "FPSHUD";
   std::string out_filename =
-      (fs::path(save_dir) / generate_timestamp_filename("FPSHUD", ext)).string();
+      (fs::path(save_dir) / generate_timestamp_filename(rec_prefix, ext)).string();
 
   std::fprintf(stderr, "[FPSHUD Recorder] Starting session: %dx%d @ %d FPS [%s, %s] -> %s\n",
                target_width, target_height, target_fps, codec_choice.c_str(),
@@ -600,6 +620,7 @@ int main(int argc, char* argv[]) {
   AVCodecContext* actx = nullptr;
   bool audio_enabled = (start_cfg.audio_source != 3);  // 3 = Mute
   std::string monitor_source;
+  std::string mic_source;
 
   if (audio_enabled) {
     const AVCodec* acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -618,7 +639,14 @@ int main(int argc, char* argv[]) {
 
       if (avcodec_open2(actx, acodec, nullptr) >= 0) {
         avcodec_parameters_from_context(astream->codecpar, actx);
-        monitor_source = get_default_monitor_source();
+        if (start_cfg.audio_source == 1) {
+          monitor_source = get_default_mic_source();
+        } else if (start_cfg.audio_source == 2) {
+          monitor_source = get_default_monitor_source();
+          mic_source = get_default_mic_source();
+        } else {
+          monitor_source = get_default_monitor_source();
+        }
       }
     }
   }
@@ -767,12 +795,17 @@ int main(int argc, char* argv[]) {
       return;
     }
 
-    std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s\n",
-                 monitor_source.c_str());
+    PulseAudioCapture pulse_mic;
+    bool has_mic = (!mic_source.empty() && pulse_mic.init(mic_source, g_running));
+
+    std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s%s\n",
+                 monitor_source.c_str(), has_mic ? (" + " + mic_source).c_str() : "");
 
     constexpr int kAudioSamplesPerFrame = 1024;
     std::vector<int16_t> pcm_ring;
+    std::vector<int16_t> mic_ring;
     pcm_ring.reserve(kAudioSamplesPerFrame * 8);
+    if (has_mic) mic_ring.reserve(kAudioSamplesPerFrame * 8);
     int64_t audio_pts = 0;
 
     // Resampler from S16 to FLTP
@@ -795,6 +828,9 @@ int main(int argc, char* argv[]) {
 
     while (g_running.load(std::memory_order_relaxed)) {
       pa_mainloop_iterate(pulse.ml, 0, nullptr);
+      if (has_mic && pulse_mic.ml) {
+        pa_mainloop_iterate(pulse_mic.ml, 0, nullptr);
+      }
 
       if (!PA_STREAM_IS_GOOD(pa_stream_get_state(pulse.stream))) {
         break;
@@ -815,15 +851,38 @@ int main(int argc, char* argv[]) {
         pa_stream_drop(pulse.stream);
       }
 
+      if (has_mic && pulse_mic.stream && PA_STREAM_IS_GOOD(pa_stream_get_state(pulse_mic.stream))) {
+        const void* mdata = nullptr;
+        size_t mnbytes = 0;
+        if (pa_stream_peek(pulse_mic.stream, &mdata, &mnbytes) == 0 && mnbytes > 0) {
+          if (mdata == nullptr) {
+            mic_ring.insert(mic_ring.end(), mnbytes / sizeof(int16_t), 0);
+          } else {
+            const int16_t* msamples = static_cast<const int16_t*>(mdata);
+            mic_ring.insert(mic_ring.end(), msamples, msamples + (mnbytes / sizeof(int16_t)));
+          }
+          pa_stream_drop(pulse_mic.stream);
+        }
+      }
+
       // A/V Sync Guard (I1): Discard pre-roll audio samples until the first game video frame
       // arrives so audio starts in exact lockstep with video PTS at 0.0s
       if (!g_has_received_game_frame.load(std::memory_order_relaxed)) {
         pcm_ring.clear();
+        mic_ring.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
       }
 
       while (pcm_ring.size() >= static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
+        if (has_mic && !mic_ring.empty()) {
+          size_t mix_n = std::min<size_t>(kAudioSamplesPerFrame * 2, mic_ring.size());
+          for (size_t i = 0; i < mix_n; ++i) {
+            int mixed = static_cast<int>(pcm_ring[i]) + static_cast<int>(mic_ring[i]);
+            pcm_ring[i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
+          }
+          mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mix_n);
+        }
         av_frame_make_writable(aframe);
         const uint8_t* in_data[1] = {reinterpret_cast<const uint8_t*>(pcm_ring.data())};
         if (swr) {
@@ -858,6 +917,7 @@ int main(int argc, char* argv[]) {
     av_packet_free(&pkt);
     av_frame_free(&aframe);
     if (swr) swr_free(&swr);
+    pulse_mic.cleanup();
     pulse.cleanup();
   });
 
@@ -866,7 +926,6 @@ int main(int argc, char* argv[]) {
   auto session_start = std::chrono::steady_clock::now();
   uint64_t session_start_us = 0;
   bool has_received_game_frame = false;
-  bool has_new_frame = false;
   AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
   int last_src_w = 0, last_src_h = 0;
 
@@ -879,7 +938,6 @@ int main(int argc, char* argv[]) {
     vframe->pts = pts;
     total_encoded_frames++;
     video_frame_idx.store(total_encoded_frames, std::memory_order_relaxed);
-    has_new_frame = false;
 
     if (is_vaapi_encoder && hw_frame) {
       if (av_hwframe_get_buffer(vctx->hw_frames_ctx, hw_frame, 0) >= 0) {

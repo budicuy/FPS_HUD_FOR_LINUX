@@ -142,9 +142,6 @@ public:
   bool get_recent_toast(std::string& out_msg) const;
   void set_toast(const std::string& msg);
 
-  // Called from render loop to provide frame dimensions & handle on-demand frame transfers
-  void on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd = -1);
-
   // Submits an uncompressed frame buffer (Vulkan staging buffer or OpenGL read pixels) to shared
   // memory
   void submit_frame(const void* pixels, uint32_t width, uint32_t height, uint32_t format = 0,
@@ -167,13 +164,11 @@ private:
   void connect_socket();
   void disconnect_socket();
   void send_command(RecorderCommand cmd, const void* payload = nullptr, size_t payload_sz = 0);
-  void update_status_sync();
 
   mutable std::recursive_mutex mutex_;
   std::atomic<bool> is_recording_{false};
   std::atomic<bool> is_replay_active_{false};
   int active_replay_duration_sec_ = 0;
-  std::atomic<float> elapsed_sec_{0.0f};
   std::atomic<uint32_t> recorded_frames_{0};
   std::string last_saved_file_;
   int socket_fd_ = -1;
@@ -201,5 +196,29 @@ private:
   std::string toast_msg_;
   std::chrono::steady_clock::time_point toast_time_{};
 };
+
+constexpr void resolve_recording_dimensions(int res_mode, int display_w, int display_h,
+                                            uint32_t& out_w, uint32_t& out_h) noexcept {
+  switch (res_mode) {
+    case 1:
+      out_w = 2560;
+      out_h = 1440;
+      break;
+    case 2:
+      out_w = 1920;
+      out_h = 1080;
+      break;
+    case 3:
+      out_w = 1280;
+      out_h = 720;
+      break;
+    default:
+      out_w = static_cast<uint32_t>(display_w > 0 ? display_w : 1920);
+      out_h = static_cast<uint32_t>(display_h > 0 ? display_h : 1080);
+      break;
+  }
+  out_w &= ~1u;
+  out_h &= ~1u;
+}
 
 }  // namespace fpshud

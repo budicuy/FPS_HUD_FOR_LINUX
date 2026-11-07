@@ -1877,8 +1877,20 @@ void run_all_devices_and_features_suite() {
                    loaded_rec_cfg.record_cq_level == 20 && loaded_rec_cfg.record_fps == 60 &&
                    loaded_rec_cfg.record_container == 0);
 
-    check_cond(rec_ok, "0.2 Industry-Standard HEVC + CQP Config",
-               "HEVC (hvc1), Adaptive CQP & Rate Control INI persistence verified");
+    uint32_t rw = 0, rh = 0;
+    resolve_recording_dimensions(0, 1920, 1080, rw, rh);
+    bool res0_ok = (rw == 1920 && rh == 1080);
+    resolve_recording_dimensions(1, 1920, 1080, rw, rh);
+    bool res1_ok = (rw == 2560 && rh == 1440);
+    resolve_recording_dimensions(2, 2560, 1440, rw, rh);
+    bool res2_ok = (rw == 1920 && rh == 1080);
+    resolve_recording_dimensions(3, 1920, 1080, rw, rh);
+    bool res3_ok = (rw == 1280 && rh == 720);
+
+    check_cond(rec_ok && res0_ok && res1_ok && res2_ok && res3_ok,
+               "0.2 Industry-Standard HEVC + CQP Config & Resolution Scaling",
+               "HEVC (hvc1), Adaptive CQP, Rate Control & 720p/1080p/1440p/Native resolution "
+               "mapping verified");
   }
 
   {
@@ -2732,7 +2744,6 @@ void run_all_devices_and_features_suite() {
   std::vector<uint8_t> dummy_pixel(64, 0xFF);
   RecorderController::instance().submit_frame(dummy_pixel.data(), 4, 4, 0,
                                               false);  // inactive recording
-  RecorderController::instance().on_frame_present(1920, 1080, -1);
   bool present_no_double_inc =
       (RecorderController::instance().get_recorded_frames() == frames_initial);
 
@@ -2882,8 +2893,8 @@ void run_all_devices_and_features_suite() {
     // Verify PTS compensation on lag / hitch to prevent A/V drift
     bool pts_drift_protected = (rec_src.find("missed_frames") != std::string::npos ||
                                 rec_src.find("wall_pts") != std::string::npos);
-    // Verify fresh frame tracking (has_new_frame) to eliminate phase-jitter judder
-    bool judder_free_pacing = (rec_src.find("has_new_frame") != std::string::npos);
+    // Verify fresh frame tracking (has_received_game_frame) to eliminate phase-jitter judder
+    bool judder_free_pacing = (rec_src.find("has_received_game_frame") != std::string::npos);
 
     av_sync_engine_ok = audio_preroll_clean && pts_drift_protected && judder_free_pacing;
   }

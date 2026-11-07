@@ -165,7 +165,7 @@ bool RecorderController::is_capturing_frames() const noexcept {
 
 float RecorderController::get_recording_duration() const {
   if (!is_recording_.load(std::memory_order_relaxed)) {
-    return elapsed_sec_.load(std::memory_order_relaxed);
+    return 0.0f;
   }
   auto now = std::chrono::steady_clock::now();
   return std::chrono::duration<float>(now - record_start_time_).count();
@@ -278,8 +278,8 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   }
 
   IpcStartPayload payload{};
-  payload.width = static_cast<uint32_t>(display_w);
-  payload.height = static_cast<uint32_t>(display_h);
+  resolve_recording_dimensions(cfg.record_resolution, static_cast<int>(display_w),
+                               static_cast<int>(display_h), payload.width, payload.height);
   payload.fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
   payload.bitrate_kbps = cfg.record_bitrate_kbps;
   payload.audio_source = cfg.record_audio_source;
@@ -301,7 +301,6 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
 
   is_recording_.store(true, std::memory_order_relaxed);
   record_start_time_ = std::chrono::steady_clock::now();
-  elapsed_sec_.store(0.0f, std::memory_order_relaxed);
   recorded_frames_.store(0, std::memory_order_relaxed);
 
   toast_msg_ = "[REC] Perekaman dimulai (F7 untuk berhenti)";
@@ -744,12 +743,6 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
   }
 }
 
-void RecorderController::on_frame_present(uint32_t width, uint32_t height, int dmabuf_fd) {
-  (void)width;
-  (void)height;
-  (void)dmabuf_fd;
-}
-
 void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w, float display_h) {
   // Fast lock-free check on common steady-state path
   bool want_replay = cfg.replay_enabled && !is_recording_.load(std::memory_order_relaxed);
@@ -840,8 +833,8 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     }
 
     IpcStartPayload payload{};
-    payload.width = static_cast<uint32_t>(display_w);
-    payload.height = static_cast<uint32_t>(display_h);
+    resolve_recording_dimensions(cfg.record_resolution, static_cast<int>(display_w),
+                                 static_cast<int>(display_h), payload.width, payload.height);
     payload.fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
     payload.bitrate_kbps = cfg.record_bitrate_kbps;
     payload.audio_source = cfg.record_audio_source;

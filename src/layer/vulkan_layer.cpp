@@ -1561,7 +1561,6 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     }
 
     fpshud::RecorderController::instance().sync_replay_state(cfg, w, h);
-    fpshud::RecorderController::instance().on_frame_present(sd->extent.width, sd->extent.height);
     return pres_res;
   } catch (...) {
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
