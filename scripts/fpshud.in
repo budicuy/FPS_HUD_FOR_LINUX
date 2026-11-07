@@ -119,11 +119,11 @@ run_setup() {
         fi
     fi
 
-    # 1. RAPL CPU Wattage udev rule
+    # 1. RAPL CPU Wattage udev rule (scoped to 'render' group 0440 instead of world-readable 0444)
     echo "[*] Memasang udev rule untuk CPU Wattage (/etc/udev/rules.d/99-fpshud-rapl.rules)..."
     $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "EOF"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", MODE="0444"
-SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", MODE="0444"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
+SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
 EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 

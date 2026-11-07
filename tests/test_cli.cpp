@@ -3432,6 +3432,87 @@ void run_all_devices_and_features_suite() {
                "5.6 Smart Color Alerts, Storage/Net HUD Formatting & GUI Controls", detail_buf);
   }
 
+  // 5.7 Multi-Vendor CPU Sensor Hardening (Locked RAPL Fallback, Intel TDP Estimation & AMD Tdie)
+  {
+    // A. AMD system with locked RAPL energy_uj (0000), k10temp Tctl(75C) vs Tdie(65C), and
+    // amd_energy hwmon fallback (48W)
+    std::string mock_amd = "/tmp/fpshud_mock_amd_hardening_" + std::to_string(::getpid());
+    fs::remove_all(mock_amd);
+    fs::create_directories(mock_amd + "/proc");
+    fs::create_directories(mock_amd + "/sys/class/powercap/intel-rapl:0");
+    fs::create_directories(mock_amd + "/sys/class/hwmon/hwmon0");
+    fs::create_directories(mock_amd + "/sys/class/hwmon/hwmon1");
+
+    write_mock_file(mock_amd + "/proc/cpuinfo", "model name\t: AMD Ryzen 7 5800X\n");
+    write_mock_file(mock_amd + "/proc/stat", "cpu  1000 0 500 8500 0 0 0 0 0 0\n");
+    write_mock_file(mock_amd + "/sys/class/powercap/intel-rapl:0/energy_uj", "99999999\n");
+    ::chmod((mock_amd + "/sys/class/powercap/intel-rapl:0/energy_uj").c_str(), 0000);
+
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon0/name", "k10temp\n");
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon0/temp1_label", "Tctl\n");
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon0/temp1_input", "75000\n");
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon0/temp2_label", "Tdie\n");
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon0/temp2_input", "65000\n");
+
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon1/name", "amd_energy\n");
+    write_mock_file(mock_amd + "/sys/class/hwmon/hwmon1/power1_average", "48000000\n");
+
+    fpshud::TelemetryCollector tc_amd(mock_amd, true, true);
+    tc_amd.poll_once_sync();
+    auto snap_amd = tc_amd.get_snapshot();
+    bool amd_tdie_ok = (snap_amd.cpu_temp_c == 65);
+    bool amd_pwr_fallback_ok = (std::fabs(snap_amd.cpu_power_w - 48.0f) < 0.5f);
+    ::chmod((mock_amd + "/sys/class/powercap/intel-rapl:0/energy_uj").c_str(), 0644);
+    fs::remove_all(mock_amd);
+
+    // B. Intel system with locked RAPL energy_uj (0000), readable constraint_0_max_power_uw (58W),
+    // and no hwmon power file -> Tier 3 TDP estimation
+    std::string mock_intel = "/tmp/fpshud_mock_intel_tdp_" + std::to_string(::getpid());
+    fs::remove_all(mock_intel);
+    fs::create_directories(mock_intel + "/proc");
+    fs::create_directories(mock_intel + "/sys/class/powercap/intel-rapl:0");
+    fs::create_directories(mock_intel + "/sys/class/hwmon/hwmon0");
+    fs::create_directories(mock_intel + "/sys/devices/system/cpu/cpu0/cpufreq");
+
+    write_mock_file(mock_intel + "/proc/cpuinfo", "model name\t: 12th Gen Intel Core i3-12100F\n");
+    write_mock_file(mock_intel + "/proc/stat", "cpu  1000 0 500 8500 0 0 0 0 0 0\n");
+    write_mock_file(mock_intel + "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq",
+                    "4100000\n");
+    write_mock_file(mock_intel + "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq",
+                    "4300000\n");
+    write_mock_file(mock_intel + "/sys/class/powercap/intel-rapl:0/energy_uj", "99999999\n");
+    ::chmod((mock_intel + "/sys/class/powercap/intel-rapl:0/energy_uj").c_str(), 0000);
+    write_mock_file(mock_intel + "/sys/class/powercap/intel-rapl:0/constraint_0_max_power_uw",
+                    "58000000\n");
+    write_mock_file(mock_intel + "/sys/class/hwmon/hwmon0/name", "coretemp\n");
+    write_mock_file(mock_intel + "/sys/class/hwmon/hwmon0/temp1_label", "Package id 0\n");
+    write_mock_file(mock_intel + "/sys/class/hwmon/hwmon0/temp1_input", "52000\n");
+
+    fpshud::TelemetryCollector tc_intel(mock_intel, true, true);
+    write_mock_file(mock_intel + "/proc/stat", "cpu  1600 0 700 8700 0 0 0 0 0 0\n");
+    tc_intel.poll_once_sync();
+    auto snap_intel = tc_intel.get_snapshot();
+    bool intel_tdp_est_ok = (snap_intel.cpu_power_w > 5.0f && snap_intel.cpu_power_w <= 58.0f &&
+                             snap_intel.cpu_temp_c == 52);
+    ::chmod((mock_intel + "/sys/class/powercap/intel-rapl:0/energy_uj").c_str(), 0644);
+    fs::remove_all(mock_intel);
+
+    bool udev_0440_ok = false;
+    if (!rroot.empty()) {
+      std::string fpshud_in = read_text_file(rroot / "scripts" / "fpshud.in");
+      udev_0440_ok = (fpshud_in.find("GROUP=\"render\", MODE=\"0440\"") != std::string::npos);
+    }
+
+    char detail_57[192];
+    std::snprintf(detail_57, sizeof(detail_57),
+                  "Verified R_OK RAPL fallback (amd_tdie=%d, amd_pwr=%d, intel_tdp_est=%.1fW, "
+                  "udev_0440=%d)",
+                  amd_tdie_ok ? 1 : 0, amd_pwr_fallback_ok ? 1 : 0, snap_intel.cpu_power_w,
+                  udev_0440_ok ? 1 : 0);
+    check_cond(amd_tdie_ok && amd_pwr_fallback_ok && intel_tdp_est_ok && udev_0440_ok,
+               "5.7 Multi-Vendor CPU Sensor Hardening (RAPL R_OK, TDP Est & AMD Tdie)", detail_57);
+  }
+
   // --------------------------------------------------------------------
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
   // --------------------------------------------------------------------

@@ -80,6 +80,16 @@ bool read_sysfs_buf(const char* path, char* buf, size_t buf_size) noexcept {
   return true;
 }
 
+bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
+  char buf[64]{};
+  if (!read_sysfs_buf(path, buf, sizeof(buf))) return false;
+  char* end = nullptr;
+  unsigned long long val = std::strtoull(buf, &end, 10);
+  if (end == buf) return false;
+  out = static_cast<uint64_t>(val);
+  return true;
+}
+
 // Parses sysfs CPU range string (e.g. "0-7,16-23") into bitmask and returns count of CPUs.
 static int parse_cpu_list_mask(const char* str, std::bitset<512>& mask) noexcept {
   mask.reset();
@@ -494,6 +504,7 @@ void TelemetryCollector::init_sensors() {
 
   // Prime initial counters for delta metrics
   poll_cpu_load();
+  poll_cpu_clock();
   poll_cpu_power();
   poll_battery();
   poll_disk_temp();
@@ -554,6 +565,16 @@ void TelemetryCollector::init_cpu_sensors() {
       if (!cpu_freq_sensors_.try_push_back(CpuFreqSensor{static_cast<uint16_t>(cpu_idx), true}))
         break;
     }
+    if (cpu_idx == 0) {
+      n_len = std::snprintf(path_buf, sizeof(path_buf),
+                            "%s/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq",
+                            root_prefix_.c_str());
+      uint64_t max_khz = 0;
+      if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) &&
+          read_sysfs_u64(path_buf, max_khz) && max_khz > 0) {
+        cpu_max_freq_mhz_ = static_cast<int>(max_khz / 1000ULL);
+      }
+    }
   }
 
   // 3. Discover CPU temperature & hwmon power sensors across Intel (coretemp), AMD (k10temp,
@@ -570,25 +591,46 @@ void TelemetryCollector::init_cpu_sensors() {
            std::strcmp(buf, "cpu_thermal") == 0 || std::strcmp(buf, "acpitz") == 0);
 
       if (is_cpu_hwmon && cpu_temp_path_.empty()) {
-        // Prefer Tctl/Tdie or Package temp1_input
-        fs::path t1 = entry.path() / "temp1_input";
-        if (fs::exists(t1, ec)) {
-          cpu_temp_path_ = t1.string();
+        // Scan temp1_label..temp8_label to prioritize AMD Tdie (true die temp without offset)
+        // or Intel Package id 0, falling back to temp1_input (Tctl).
+        std::string fallback_t1;
+        for (int ti = 1; ti <= 8; ++ti) {
+          char t_in_name[32];
+          char t_lbl_name[32];
+          std::snprintf(t_in_name, sizeof(t_in_name), "temp%d_input", ti);
+          std::snprintf(t_lbl_name, sizeof(t_lbl_name), "temp%d_label", ti);
+          fs::path t_in = entry.path() / t_in_name;
+          if (!fs::exists(t_in, ec)) continue;
+          if (fallback_t1.empty()) fallback_t1 = t_in.string();
+
+          fs::path t_lbl = entry.path() / t_lbl_name;
+          char lbl_buf[64]{};
+          if (read_sysfs_buf(t_lbl.c_str(), lbl_buf, sizeof(lbl_buf))) {
+            if (std::strstr(lbl_buf, "Tdie") != nullptr ||
+                std::strstr(lbl_buf, "Package id 0") != nullptr) {
+              cpu_temp_path_ = t_in.string();
+              break;
+            }
+          }
+        }
+        if (cpu_temp_path_.empty() && !fallback_t1.empty()) {
+          cpu_temp_path_ = std::move(fallback_t1);
         }
       }
 
-      if (is_cpu_hwmon || std::strcmp(buf, "amd_energy") == 0) {
+      if (is_cpu_hwmon || std::strcmp(buf, "amd_energy") == 0 ||
+          std::strcmp(buf, "zenergy") == 0) {
         if (cpu_hwmon_power_uw_path_.empty()) {
           fs::path p_avg = entry.path() / "power1_average";
           fs::path p_inp = entry.path() / "power1_input";
-          if (fs::exists(p_avg, ec))
+          if (::access(p_avg.c_str(), R_OK) == 0)
             cpu_hwmon_power_uw_path_ = p_avg.string();
-          else if (fs::exists(p_inp, ec))
+          else if (::access(p_inp.c_str(), R_OK) == 0)
             cpu_hwmon_power_uw_path_ = p_inp.string();
         }
         if (cpu_hwmon_energy_uj_path_.empty()) {
           fs::path e_inp = entry.path() / "energy1_input";
-          if (fs::exists(e_inp, ec)) cpu_hwmon_energy_uj_path_ = e_inp.string();
+          if (::access(e_inp.c_str(), R_OK) == 0) cpu_hwmon_energy_uj_path_ = e_inp.string();
         }
       }
     }
@@ -603,15 +645,27 @@ void TelemetryCollector::init_cpu_sensors() {
   }
 
   // 4. Discover RAPL package energy counter (supported by both Intel & modern AMD Zen CPUs via
-  // powercap)
+  // powercap). Check R_OK so a root-locked (0400) energy_uj does not block hwmon/TDP fallback!
   const char* rapl_rel_candidates[] = {"/sys/class/powercap/intel-rapl:0/energy_uj",
                                        "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
                                        "/sys/class/powercap/amd-rapl:0/energy_uj"};
   for (const char* rel : rapl_rel_candidates) {
     std::string candidate = root_prefix_ + rel;
-    if (fs::exists(candidate, ec)) {
+    fs::path parent_dir = fs::path(candidate).parent_path();
+
+    // Read world-readable (0444) PL1 / TDP limit for sudo-free estimation fallback
+    uint64_t tdp_uw = 0;
+    if (read_sysfs_u64((parent_dir / "constraint_0_max_power_uw").c_str(), tdp_uw) &&
+        tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
+      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
+    } else if (read_sysfs_u64((parent_dir / "constraint_0_power_limit_uw").c_str(), tdp_uw) &&
+               tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
+      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
+    }
+
+    if (::access(candidate.c_str(), R_OK) == 0) {
       rapl_energy_path_ = candidate;
-      fs::path max_path = fs::path(candidate).parent_path() / "max_energy_range_uj";
+      fs::path max_path = parent_dir / "max_energy_range_uj";
       if (read_sysfs_buf(max_path.c_str(), buf, sizeof(buf))) {
         rapl_max_range_uj_ = std::strtoull(buf, nullptr, 10);
       }
@@ -2128,6 +2182,27 @@ void TelemetryCollector::poll_cpu_power() {
       read_sysfs_buf(cpu_hwmon_power_uw_path_.c_str(), buf, sizeof(buf))) {
     uint64_t uw = std::strtoull(buf, nullptr, 10);
     watts = static_cast<float>(uw) / 1e6f;
+  }
+
+  // 3. Tier-3 Fallback: Sudo-free TDP estimation (constraint_0_max_power_uw + load & boost ratio)
+  // Active when RAPL energy_uj is locked (0400) and no hwmon power counter exists (e.g. Intel
+  // coretemp)
+  if (watts < 0.0f && energy_path.empty() && cpu_hwmon_power_uw_path_.empty()) {
+    float load_ratio = 0.0f;
+    int cur_mhz = 0;
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      load_ratio = std::clamp(hw_data_.cpu_load_pct / 100.0f, 0.0f, 1.0f);
+      cur_mhz = hw_data_.cpu_clock_mhz;
+    }
+    float freq_ratio = 1.0f;
+    if (cur_mhz > 0 && cpu_max_freq_mhz_ > 0) {
+      freq_ratio = std::clamp(static_cast<float>(cur_mhz) / static_cast<float>(cpu_max_freq_mhz_),
+                              0.35f, 1.25f);
+    }
+    float idle_w = std::clamp(cpu_tdp_watts_ * 0.12f, 4.0f, 18.0f);
+    float dyn_w = (cpu_tdp_watts_ - idle_w) * load_ratio * std::pow(freq_ratio, 1.5f);
+    watts = std::clamp(idle_w + dyn_w, idle_w, cpu_tdp_watts_ * 1.35f);
   }
 
   if (watts >= 0.0f && watts < 500.0f) {

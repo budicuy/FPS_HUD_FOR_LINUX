@@ -357,6 +357,8 @@ private:
   std::string cpu_temp_path_;
   std::string rapl_energy_path_;
   uint64_t rapl_max_range_uj_ = 0;
+  float cpu_tdp_watts_ = 65.0f;
+  int cpu_max_freq_mhz_ = 0;
   std::string cpu_hwmon_power_uw_path_;   // Fallback direct microwatt sensor (AMD zenpower/k10temp)
   std::string cpu_hwmon_energy_uj_path_;  // Fallback microjoule counter (amd_energy)
 
