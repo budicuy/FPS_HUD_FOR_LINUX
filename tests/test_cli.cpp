@@ -3316,11 +3316,17 @@ void run_all_devices_and_features_suite() {
     bool hooks_ok = false;
     if (!rroot.empty()) {
       std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+      std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
       std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
       bool ring_ok = (rec_src.find("packet_ring") != std::string::npos &&
                       rec_src.find("RecorderCommand::SaveReplay") != std::string::npos &&
-                      rec_src.find("\"Replay\"") != std::string::npos);
+                      rec_src.find("\"Replay\"") != std::string::npos &&
+                      rec_src.find("packet_ring[i].timestamp_us <= win_start_us") !=
+                          std::string::npos);
+      bool ipc_fix_ok = (ipc_src.find("replay_save_thread_") != std::string::npos &&
+                         ipc_src.find("is_saving_replay_") != std::string::npos &&
+                         ipc_src.find("if (cfg.replay_enabled)") != std::string::npos);
       bool vk_hook_ok = (vk_src.find("is_capturing_frames()") != std::string::npos &&
                          vk_src.find("sync_replay_state(") != std::string::npos &&
                          vk_src.find("consume_screenshot_request()") != std::string::npos &&
@@ -3329,7 +3335,7 @@ void run_all_devices_and_features_suite() {
                          gl_src.find("sync_replay_state(") != std::string::npos &&
                          gl_src.find("consume_screenshot_request()") != std::string::npos &&
                          gl_src.find("screenshot_with_hud") != std::string::npos);
-      hooks_ok = ring_ok && vk_hook_ok && gl_hook_ok;
+      hooks_ok = ring_ok && ipc_fix_ok && vk_hook_ok && gl_hook_ok;
     }
 
     check_cond(cmd_ok && payload_ok && idle_ok && toast_off_ok && shot_once && shot_reset &&

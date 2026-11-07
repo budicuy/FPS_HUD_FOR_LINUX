@@ -184,6 +184,8 @@ private:
   // Background save thread state
   std::thread save_thread_;
   std::atomic<bool> is_finalizing_{false};
+  std::thread replay_save_thread_;
+  std::atomic<bool> is_saving_replay_{false};
   std::atomic<bool> screenshot_requested_{false};
   std::thread screenshot_thread_;
 

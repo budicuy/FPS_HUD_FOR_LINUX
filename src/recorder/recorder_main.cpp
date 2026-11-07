@@ -1116,7 +1116,7 @@ int main(int argc, char* argv[]) {
                 (fs::path(save_dir) / generate_timestamp_filename("Replay", ext)).string();
             std::lock_guard<std::mutex> lock(mux_mutex);
 
-            // Find oldest keyframe within replay_sec window
+            // Find newest keyframe at or before win_start_us (or fallback to oldest keyframe)
             auto now_tp = std::chrono::steady_clock::now();
             int64_t now_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(now_tp - replay_clock_start)
@@ -1124,15 +1124,13 @@ int main(int argc, char* argv[]) {
             int64_t win_start_us = now_us - static_cast<int64_t>(replay_sec) * 1000000LL;
             size_t start_idx = packet_ring.size();
             for (size_t i = 0; i < packet_ring.size(); ++i) {
-              if (packet_ring[i].is_keyframe && packet_ring[i].timestamp_us >= win_start_us) {
-                start_idx = i;
-                break;
-              }
-            }
-            if (start_idx == packet_ring.size()) {
-              for (size_t i = 0; i < packet_ring.size(); ++i) {
-                if (packet_ring[i].is_keyframe) {
+              if (packet_ring[i].is_keyframe) {
+                if (packet_ring[i].timestamp_us <= win_start_us) {
                   start_idx = i;
+                } else {
+                  if (start_idx == packet_ring.size()) {
+                    start_idx = i;
+                  }
                   break;
                 }
               }

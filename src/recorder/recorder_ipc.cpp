@@ -125,6 +125,12 @@ RecorderController::RecorderController() {
 
 RecorderController::~RecorderController() {
   stop_recording();
+  if (socket_fd_ >= 0) {
+    ::shutdown(socket_fd_, SHUT_RDWR);
+  }
+  if (replay_save_thread_.joinable()) {
+    replay_save_thread_.join();
+  }
   if (is_replay_active_.load(std::memory_order_relaxed)) {
     is_replay_active_.store(false, std::memory_order_relaxed);
     disconnect_socket();
@@ -201,6 +207,24 @@ void RecorderController::toggle_recording(const HudConfig& cfg, float display_w,
 }
 
 void RecorderController::start_recording(const HudConfig& cfg, float display_w, float display_h) {
+  std::thread prev_replay_save;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (is_recording_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    if (socket_fd_ >= 0 && is_replay_active_.load(std::memory_order_relaxed) &&
+        is_saving_replay_.load(std::memory_order_relaxed)) {
+      ::shutdown(socket_fd_, SHUT_RDWR);
+    }
+    if (replay_save_thread_.joinable()) {
+      prev_replay_save = std::move(replay_save_thread_);
+    }
+  }
+  if (prev_replay_save.joinable()) {
+    prev_replay_save.join();
+  }
+
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (is_recording_.load(std::memory_order_relaxed)) {
     return;
@@ -736,10 +760,28 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
   if (want_replay && cur_replay && active_replay_duration_sec_ == cfg.replay_duration_sec) {
     return;
   }
+  if (is_saving_replay_.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  std::thread finished_replay_save;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (is_saving_replay_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    if (replay_save_thread_.joinable()) {
+      finished_replay_save = std::move(replay_save_thread_);
+    }
+  }
+  if (finished_replay_save.joinable()) {
+    finished_replay_save.join();
+  }
 
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (is_recording_.load(std::memory_order_relaxed) ||
-      is_finalizing_.load(std::memory_order_relaxed)) {
+      is_finalizing_.load(std::memory_order_relaxed) ||
+      is_saving_replay_.load(std::memory_order_relaxed)) {
     return;
   }
 
@@ -753,10 +795,15 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
       pid_t rpid = helper_pid_;
       helper_pid_ = -1;
       kill(rpid, SIGTERM);
-      std::thread([rpid]() {
+      if (cfg.replay_enabled) {
         int status = 0;
         ::waitpid(rpid, &status, 0);
-      }).detach();
+      } else {
+        std::thread([rpid]() {
+          int status = 0;
+          ::waitpid(rpid, &status, 0);
+        }).detach();
+      }
     }
     if (!socket_path_.empty()) {
       ::unlink(socket_path_.c_str());
@@ -827,9 +874,24 @@ void RecorderController::trigger_save_replay() {
     set_toast("[!] Instant Replay is OFF");
     return;
   }
+  if (is_saving_replay_.exchange(true, std::memory_order_acq_rel)) {
+    return;
+  }
+
+  std::thread prev_thread;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (replay_save_thread_.joinable()) {
+      prev_thread = std::move(replay_save_thread_);
+    }
+  }
+  if (prev_thread.joinable()) {
+    prev_thread.join();
+  }
 
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (!is_replay_active_.load(std::memory_order_relaxed) || socket_fd_ < 0) {
+    is_saving_replay_.store(false, std::memory_order_release);
     set_toast("[!] Instant Replay is OFF");
     return;
   }
@@ -840,16 +902,22 @@ void RecorderController::trigger_save_replay() {
   setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   send_command(RecorderCommand::SaveReplay, nullptr, 0);
+  set_toast("[REPLAY] Menyimpan klip replay...");
+  int sfd = socket_fd_;
 
-  IpcStatusResponse resp{};
-  ssize_t n = ::recv(socket_fd_, &resp, sizeof(resp), 0);
-  if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic &&
-      resp.last_saved_file[0] != '\0') {
-    last_saved_file_ = resp.last_saved_file;
-    set_toast("[✓] Replay tersimpan: " + last_saved_file_);
-  } else {
-    set_toast("[!] Buffer replay belum memiliki keyframe yang cukup.");
-  }
+  replay_save_thread_ = std::thread([this, sfd]() {
+    IpcStatusResponse resp{};
+    ssize_t n = ::recv(sfd, &resp, sizeof(resp), 0);
+    if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic &&
+        resp.last_saved_file[0] != '\0') {
+      std::lock_guard<std::recursive_mutex> guard(mutex_);
+      last_saved_file_ = resp.last_saved_file;
+      set_toast("[✓] Replay tersimpan: " + last_saved_file_);
+    } else {
+      set_toast("[!] Buffer replay belum memiliki keyframe yang cukup.");
+    }
+    is_saving_replay_.store(false, std::memory_order_release);
+  });
 }
 
 void RecorderController::request_screenshot() noexcept {
