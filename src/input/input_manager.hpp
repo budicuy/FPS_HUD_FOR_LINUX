@@ -17,6 +17,8 @@ enum class KeybindTarget {
   ToggleHud,
   ToggleBenchmark,
   ToggleRecord,
+  SaveReplay,
+  TakeScreenshot,
 };
 
 struct EvdevDevice {

@@ -36,7 +36,10 @@ enum class MetricType {
   GpuModel,
   CpuModel,
   SystemClock,
-  Battery  // Laptop / Handheld battery % & discharge power (W)
+  Battery,   // Laptop / Handheld battery % & discharge power (W)
+  DiskIo,    // Physical disk Read/Write throughput (MB/s)
+  DiskTemp,  // NVMe / SSD temperature (°C)
+  NetSpeed   // Active network interface RX/TX throughput (MB/s or KB/s)
 };
 
 enum class LayoutPosition {
@@ -83,7 +86,7 @@ enum class FontFamily {
 constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
-constexpr std::size_t kTotalMetricCount = 28;
+constexpr std::size_t kTotalMetricCount = 31;
 constexpr std::size_t kMaxMetricsCapacity = 32;
 static_assert(kTotalMetricCount <= kMaxMetricsCapacity,
               "kMaxMetricsCapacity must accommodate all MetricType sensors");
@@ -120,11 +123,18 @@ struct HudConfig {
   int key_benchmark = 0;
   int key_record = 0;
 
-  // Linux evdev keycodes: KEY_F12=88, KEY_F11=87, KEY_F9=67, KEY_F7=65
+  // Linux evdev keycodes: KEY_F12=88, KEY_F11=87, KEY_F9=67, KEY_F7=65, KEY_F8=66, KEY_F10=68
   Keybind bind_toggle_gui{0, 88};
   Keybind bind_toggle_hud{0, 87};
   Keybind bind_benchmark{0, 67};
   Keybind bind_record{0, 65};
+  Keybind bind_save_replay{0, 66};
+  Keybind bind_screenshot{0, 68};
+
+  // Instant Replay & Screenshot Settings
+  bool replay_enabled = false;     // Default OFF (0 MB RAM, 0% CPU/GPU overhead)
+  int replay_duration_sec = 30;    // 15, 30, 60, 120 seconds
+  bool screenshot_with_hud = false; // false = Clean Game (Tanpa HUD), true = With HUD (Dengan HUD)
 
   // Screen Recorder Settings
   // record_resolution: 0=Native (100%), 1=1440p, 2=1080p, 3=720p

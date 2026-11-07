@@ -481,6 +481,12 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
           cfg.bind_record = kb;
           cfg.key_record = -1;
           break;
+        case KeybindTarget::SaveReplay:
+          cfg.bind_save_replay = kb;
+          break;
+        case KeybindTarget::TakeScreenshot:
+          cfg.bind_screenshot = kb;
+          break;
         case KeybindTarget::None:
           break;
       }

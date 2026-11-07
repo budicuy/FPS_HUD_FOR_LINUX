@@ -46,7 +46,10 @@ constexpr MetricType kCanonicalMetricsOrder[] = {MetricType::FPS,
                                                  MetricType::GpuModel,
                                                  MetricType::CpuModel,
                                                  MetricType::SystemClock,
-                                                 MetricType::Battery};
+                                                 MetricType::Battery,
+                                                 MetricType::DiskIo,
+                                                 MetricType::DiskTemp,
+                                                 MetricType::NetSpeed};
 static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0]) ==
                   kTotalMetricCount,
               "kTotalMetricCount must match the number of MetricType entries");
@@ -138,6 +141,12 @@ const char* metric_id_key(MetricType m) {
       return "clock";
     case MetricType::Battery:
       return "battery";
+    case MetricType::DiskIo:
+      return "disk_io";
+    case MetricType::DiskTemp:
+      return "disk_temp";
+    case MetricType::NetSpeed:
+      return "net_speed";
   }
   return "fps";
 }
@@ -246,6 +255,13 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "bind_benchmark=%u,%u\n", cfg.bind_benchmark.mod_key,
                cfg.bind_benchmark.main_key);
   std::fprintf(fp, "bind_record=%u,%u\n", cfg.bind_record.mod_key, cfg.bind_record.main_key);
+  std::fprintf(fp, "bind_save_replay=%u,%u\n", cfg.bind_save_replay.mod_key,
+               cfg.bind_save_replay.main_key);
+  std::fprintf(fp, "bind_screenshot=%u,%u\n", cfg.bind_screenshot.mod_key,
+               cfg.bind_screenshot.main_key);
+  std::fprintf(fp, "replay_enabled=%d\n", cfg.replay_enabled ? 1 : 0);
+  std::fprintf(fp, "replay_duration_sec=%d\n", cfg.replay_duration_sec);
+  std::fprintf(fp, "screenshot_with_hud=%d\n", cfg.screenshot_with_hud ? 1 : 0);
   std::fprintf(fp, "record_resolution=%d\n", cfg.record_resolution);
   std::fprintf(fp, "record_fps=%d\n", cfg.record_fps);
   std::fprintf(fp, "record_bitrate_kbps=%d\n", cfg.record_bitrate_kbps);
@@ -381,7 +397,7 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.key_record = std::clamp(safe_strtoi(val, 0), 0, 2);
       parsed_any = true;
     } else if (key == "bind_toggle_gui" || key == "bind_toggle_hud" || key == "bind_benchmark" ||
-               key == "bind_record") {
+               key == "bind_record" || key == "bind_save_replay" || key == "bind_screenshot") {
       unsigned int mod_k = 0, main_k = 0;
       if (std::sscanf(val.c_str(), "%u,%u", &mod_k, &main_k) == 2 && main_k > 0 && main_k < 512 &&
           mod_k < 512) {
@@ -394,7 +410,22 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
           cfg.bind_benchmark = kb;
         else if (key == "bind_record")
           cfg.bind_record = kb;
+        else if (key == "bind_save_replay")
+          cfg.bind_save_replay = kb;
+        else if (key == "bind_screenshot")
+          cfg.bind_screenshot = kb;
       }
+      parsed_any = true;
+    } else if (key == "replay_enabled") {
+      cfg.replay_enabled = (safe_strtoi(val, 0) != 0);
+      parsed_any = true;
+    } else if (key == "replay_duration_sec") {
+      int d = safe_strtoi(val, 30);
+      if (d != 15 && d != 30 && d != 60 && d != 120) d = 30;
+      cfg.replay_duration_sec = d;
+      parsed_any = true;
+    } else if (key == "screenshot_with_hud") {
+      cfg.screenshot_with_hud = (safe_strtoi(val, 0) != 0);
       parsed_any = true;
     } else if (key == "record_resolution") {
       cfg.record_resolution = std::clamp(safe_strtoi(val, 0), 0, 3);
@@ -632,6 +663,12 @@ const char* metric_name(MetricType m) {
       return "CLOCK";
     case MetricType::Battery:
       return "BAT";
+    case MetricType::DiskIo:
+      return "Disk Read/Write";
+    case MetricType::DiskTemp:
+      return "Disk Temp";
+    case MetricType::NetSpeed:
+      return "Network Speed";
   }
   return "UNK";
 }

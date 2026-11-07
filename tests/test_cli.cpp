@@ -1787,7 +1787,7 @@ void run_all_devices_and_features_suite() {
     apply_preset_standard(test_cfg);
     bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
     apply_preset_advance(test_cfg);
-    bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 28 &&
+    bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 31 &&
                    test_cfg.active_preset == "advance");
 
     // Verify new MetricType entries (Battery, GpuVramClock, CpuAllCoreLoad, CpuAllCoreClock,
@@ -1832,8 +1832,8 @@ void run_all_devices_and_features_suite() {
                     format_keybind(loaded_cfg.bind_record) == "Alt + F";
 
     check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok,
-               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=28, Scale=1.35x)",
-               "All 3 built-in presets, 28 metrics, dim_labels & Keybind INI persistence verified");
+               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=31, Scale=1.35x)",
+               "All 3 built-in presets, 31 metrics, dim_labels & Keybind INI persistence verified");
   }
 
   {
@@ -3113,6 +3113,57 @@ void run_all_devices_and_features_suite() {
   }
   check_cond(stress_ok, "5. Dynamic Allocator Stress & Leak-Free Run",
              "500 rapid cycles of config alloc & telemetry snapshot verified clean");
+
+  // 5.2 Replay, Screenshot, Storage/Net Config & Keybind Capture
+  {
+    fpshud::HudConfig cfg;
+    bool defaults_ok = (fpshud::kTotalMetricCount == 31 && !cfg.replay_enabled &&
+                        cfg.replay_duration_sec == 30 && !cfg.screenshot_with_hud &&
+                        cfg.bind_save_replay == (fpshud::Keybind{0, 66}) &&
+                        cfg.bind_screenshot == (fpshud::Keybind{0, 68}));
+    cfg.replay_enabled = true;
+    cfg.replay_duration_sec = 60;
+    cfg.screenshot_with_hud = true;
+    cfg.bind_save_replay = {29, 66};  // Ctrl+F8
+    cfg.bind_screenshot = {56, 68};   // Alt+F10
+    cfg.set_metric(fpshud::MetricType::DiskIo, true);
+    cfg.set_metric(fpshud::MetricType::DiskTemp, true);
+    cfg.set_metric(fpshud::MetricType::NetSpeed, true);
+
+    std::string tmp_ini = "/tmp/fpshud_test_replay_shot.ini";
+    bool save_ok = fpshud::save_ini_file(tmp_ini, cfg);
+    fpshud::HudConfig loaded;
+    bool load_ok = fpshud::load_ini_file(tmp_ini, loaded);
+    std::remove(tmp_ini.c_str());
+
+    bool roundtrip_ok =
+        save_ok && load_ok && loaded.replay_enabled && loaded.replay_duration_sec == 60 &&
+        loaded.screenshot_with_hud && loaded.bind_save_replay == (fpshud::Keybind{29, 66}) &&
+        loaded.bind_screenshot == (fpshud::Keybind{56, 68}) &&
+        loaded.has_metric(fpshud::MetricType::DiskIo) &&
+        loaded.has_metric(fpshud::MetricType::DiskTemp) &&
+        loaded.has_metric(fpshud::MetricType::NetSpeed);
+
+    fpshud::InputManager im;
+    im.start_keybind_capture(fpshud::KeybindTarget::SaveReplay);
+    im.handle_key_event(42, true, loaded, 1920.0f, 1080.0f);   // Left Shift down
+    im.handle_key_event(66, true, loaded, 1920.0f, 1080.0f);   // F8 down
+    im.handle_key_event(66, false, loaded, 1920.0f, 1080.0f);  // F8 up
+    im.handle_key_event(42, false, loaded, 1920.0f, 1080.0f);  // Left Shift up
+    bool cap1_ok =
+        (!im.is_capturing_keybind() && loaded.bind_save_replay == (fpshud::Keybind{42, 66}));
+
+    im.start_keybind_capture(fpshud::KeybindTarget::TakeScreenshot);
+    im.handle_key_event(68, true, loaded, 1920.0f, 1080.0f);   // F10 down
+    im.handle_key_event(68, false, loaded, 1920.0f, 1080.0f);  // F10 up
+    bool cap2_ok =
+        (!im.is_capturing_keybind() && loaded.bind_screenshot == (fpshud::Keybind{0, 68}));
+
+    check_cond(defaults_ok && roundtrip_ok && cap1_ok && cap2_ok,
+               "5.2 Replay, Screenshot & Storage/Net Config + Keybind Capture",
+               "Verified 31 metrics, replay_enabled=false default, INI roundtrip, and SaveReplay/"
+               "TakeScreenshot keybind capture");
+  }
 
   // --------------------------------------------------------------------
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load

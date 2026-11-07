@@ -84,6 +84,9 @@ GroupCategory get_metric_category(MetricType m) noexcept {
     case MetricType::CpuModel:
     case MetricType::SystemClock:
     case MetricType::Battery:
+    case MetricType::DiskIo:
+    case MetricType::DiskTemp:
+    case MetricType::NetSpeed:
       return GroupCategory::SYS;
   }
   return GroupCategory::FPS;
@@ -293,6 +296,10 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       } else {
         std::snprintf(sv.unit, sizeof(sv.unit), "%%%s", d.battery_charging ? "(+)" : "");
       }
+      return;
+    case MetricType::DiskIo:
+    case MetricType::DiskTemp:
+    case MetricType::NetSpeed:
       return;
   }
 }
