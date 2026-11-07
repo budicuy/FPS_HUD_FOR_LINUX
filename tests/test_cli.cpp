@@ -2855,16 +2855,23 @@ void run_all_devices_and_features_suite() {
     bool cap_40fps =
         fpshud::experimental::AdaptiveVfrController::should_capture_frame(now, last_40fps, 120);
 
+    // I1 Fix Test: 120 FPS game with VSync micro-jitter (8.0ms) must NOT be dropped by 120 FPS cap
+    auto last_120fps_jitter = now - std::chrono::microseconds(8000);
+    bool cap_120fps_jitter = fpshud::experimental::AdaptiveVfrController::should_capture_frame(
+        now, last_120fps_jitter, 120);
+
     auto last_500fps = now - std::chrono::milliseconds(2);
     bool throttle_500fps =
         !fpshud::experimental::AdaptiveVfrController::should_capture_frame(now, last_500fps, 120);
 
-    exp_vfr_logic_ok = active && cap_40fps && throttle_500fps;
+    exp_vfr_logic_ok = active && cap_40fps && cap_120fps_jitter && throttle_500fps;
   }
-  check_cond(exp_vfr_logic_ok, "5.0 Experimental Adaptive VFR Pacing & Safety Cap",
-             exp_vfr_logic_ok
-                 ? "Adaptive VFR passes 40 FPS unthrottled and caps 500 FPS at 120 FPS ceiling"
-                 : "Failed: Adaptive VFR logic or pacing threshold incorrect");
+  check_cond(
+      exp_vfr_logic_ok, "5.0 Experimental Adaptive VFR Pacing & Safety Cap",
+      exp_vfr_logic_ok
+          ? "Adaptive VFR passes 40 FPS & 120 FPS jitter unthrottled and caps 500 FPS at 120 FPS "
+            "ceiling"
+          : "Failed: Adaptive VFR logic or pacing threshold incorrect (jitter aliasing detected)");
 
   // 5.0.1 IPC VFR Protocol & Monotonic Timestamp Invariant
   bool ipc_payload_vfr_ok = false;
@@ -2891,12 +2898,25 @@ void run_all_devices_and_features_suite() {
     bool uses_us_timebase = (rec_src.find("1000000") != std::string::npos);
     bool skips_duplicate_in_vfr = (rec_src.find("!is_vfr") != std::string::npos ||
                                    rec_src.find("start_cfg.vfr_mode == 0") != std::string::npos);
-    vfr_recorder_logic_ok = checks_vfr && uses_us_timebase && skips_duplicate_in_vfr;
+    // I2 Check: Must use notify.timestamp_us
+    bool uses_notify_timestamp = (rec_src.find("notify.timestamp_us") != std::string::npos);
+    // I3 Check: ctx->gop_size must not be unconditionally overwritten after is_vfr check
+    size_t gop_vfr_pos = rec_src.find("ctx->gop_size = max_fps * 2;");
+    size_t gop_cfr_pos = rec_src.find("ctx->gop_size = target_fps * 2;", gop_vfr_pos + 1);
+    size_t next_gop = (gop_cfr_pos != std::string::npos)
+                          ? rec_src.find("ctx->gop_size = target_fps * 2;", gop_cfr_pos + 1)
+                          : std::string::npos;
+    bool no_gop_overwrite = (next_gop == std::string::npos);
+
+    vfr_recorder_logic_ok = checks_vfr && uses_us_timebase && skips_duplicate_in_vfr &&
+                            uses_notify_timestamp && no_gop_overwrite;
   }
-  check_cond(vfr_recorder_logic_ok, "5.0.2 Daemon VFR Microsecond Timebase & 1:1 Pacing",
-             vfr_recorder_logic_ok
-                 ? "Recorder daemon configures 1us timebase and 1:1 PTS encoding in VFR mode"
-                 : "Failed: Missing VFR timebase setup or duplicate prevention in recorder daemon");
+  check_cond(
+      vfr_recorder_logic_ok, "5.0.2 Daemon VFR Microsecond Timebase & 1:1 Pacing",
+      vfr_recorder_logic_ok
+          ? "Recorder daemon configures 1us timebase, uses notify.timestamp_us, and avoids GOP "
+            "overwrite"
+          : "Failed: Missing VFR timebase, notify.timestamp_us usage, or GOP overwrite detected");
 
   // 5.0.3 Layer Adaptive VFR Present Hook Integration
   bool layer_vfr_hook_ok = false;
@@ -2905,12 +2925,16 @@ void run_all_devices_and_features_suite() {
     std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
     bool vk_has_vfr = (vk_src.find("AdaptiveVfrController::is_vfr_active") != std::string::npos);
     bool gl_has_vfr = (gl_src.find("AdaptiveVfrController::is_vfr_active") != std::string::npos);
-    layer_vfr_hook_ok = vk_has_vfr && gl_has_vfr;
+    // C1 Check: Must have #if FPSHUD_ENABLE_EXPERIMENTAL guards
+    bool vk_guarded = (vk_src.find("#if FPSHUD_ENABLE_EXPERIMENTAL") != std::string::npos);
+    bool gl_guarded = (gl_src.find("#if FPSHUD_ENABLE_EXPERIMENTAL") != std::string::npos);
+    layer_vfr_hook_ok = vk_has_vfr && gl_has_vfr && vk_guarded && gl_guarded;
   }
   check_cond(layer_vfr_hook_ok, "5.0.3 Layer Adaptive VFR Present Hook Integration",
-             layer_vfr_hook_ok
-                 ? "AdaptiveVfrController integrated in Vulkan and OpenGL present loops"
-                 : "Failed: Missing AdaptiveVfrController present hook in Vulkan or OpenGL layer");
+             layer_vfr_hook_ok ? "AdaptiveVfrController integrated in Vulkan/OpenGL present loops "
+                                 "with #if FPSHUD_ENABLE_EXPERIMENTAL guards"
+                               : "Failed: Missing AdaptiveVfrController present hook or #if "
+                                 "FPSHUD_ENABLE_EXPERIMENTAL guard");
 
   // 5.0.4 In-Game GUI Dedicated Experimental Menu Isolation
   bool gui_experimental_ok = false;
@@ -2918,12 +2942,14 @@ void run_all_devices_and_features_suite() {
     std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
     bool has_exp_menu = (gui_src.find("draw_experimental_menu") != std::string::npos);
     bool has_exp_menu_item = (gui_src.find("\"Experimental\"") != std::string::npos);
-    gui_experimental_ok = has_exp_menu && has_exp_menu_item;
+    bool gui_guarded = (gui_src.find("#if FPSHUD_ENABLE_EXPERIMENTAL") != std::string::npos);
+    gui_experimental_ok = has_exp_menu && has_exp_menu_item && gui_guarded;
   }
   check_cond(gui_experimental_ok, "5.0.4 In-Game GUI Dedicated Experimental Menu Isolation",
-             gui_experimental_ok
-                 ? "Experimental features isolated under MenuBar 'Experimental' menu"
-                 : "Failed: Missing dedicated Experimental menu item in GUI MenuBar");
+             gui_experimental_ok ? "Experimental features isolated under MenuBar 'Experimental' "
+                                   "menu with conditional guards"
+                                 : "Failed: Missing dedicated Experimental menu item or #if "
+                                   "FPSHUD_ENABLE_EXPERIMENTAL guard");
 
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;

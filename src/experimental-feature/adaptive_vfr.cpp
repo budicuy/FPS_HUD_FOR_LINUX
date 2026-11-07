@@ -17,7 +17,9 @@ bool AdaptiveVfrController::should_capture_frame(std::chrono::steady_clock::time
   if (max_fps <= 0) {
     return true;  // Uncapped VFR
   }
-  int64_t min_interval_us = 1000000 / max_fps;
+  // Allow a 10% sub-frame jitter window (90% threshold) so 120 FPS games are not decimated by 8.0ms
+  // presents
+  int64_t min_interval_us = (1000000LL * 90) / (static_cast<int64_t>(max_fps) * 100);
   auto elapsed_us =
       std::chrono::duration_cast<std::chrono::microseconds>(now - last_capture).count();
   return elapsed_us >= min_interval_us;

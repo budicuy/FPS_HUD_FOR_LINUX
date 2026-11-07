@@ -1,5 +1,7 @@
 #include "config.hpp"
+#if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
+#endif
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -1370,13 +1372,16 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     bool should_capture_frame = false;
     if (fpshud::RecorderController::instance().is_recording() && sd->supports_transfer_src) {
       auto now = std::chrono::steady_clock::now();
+#if FPSHUD_ENABLE_EXPERIMENTAL
       if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
         if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
                 now, sd->last_capture_time, cfg.record_vfr_max_fps)) {
           sd->last_capture_time = now;
           should_capture_frame = true;
         }
-      } else {
+      } else
+#endif
+      {
         int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
         auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
         auto min_interval = target_interval * 70 / 100;

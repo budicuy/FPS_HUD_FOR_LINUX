@@ -1,5 +1,7 @@
 #include "gui_menu.hpp"
+#if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
+#endif
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -239,10 +241,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImGui::MenuItem("Thermal & Load Warnings", nullptr, &cfg.thermal_warnings_enabled);
         ImGui::EndMenu();
       }
+#if FPSHUD_ENABLE_EXPERIMENTAL
       if (ImGui::BeginMenu("Experimental")) {
         fpshud::experimental::draw_experimental_menu(cfg);
         ImGui::EndMenu();
       }
+#endif
       ImGui::EndMenuBar();
     }
 
@@ -804,11 +808,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       int current_fps_idx = (cfg.record_fps == 30)
                                 ? 1
                                 : ((cfg.record_fps == 120) ? 2 : ((cfg.record_fps == 0) ? 3 : 0));
+      ImGui::BeginDisabled(cfg.record_adaptive_vfr);
       if (ImGui::Combo("##RecordFps", &current_fps_idx, fps_items, IM_ARRAYSIZE(fps_items))) {
         cfg.record_fps = (current_fps_idx == 1)
                              ? 30
                              : ((current_fps_idx == 2) ? 120 : ((current_fps_idx == 3) ? 0 : 60));
       }
+      ImGui::EndDisabled();
       if (cfg.record_adaptive_vfr) {
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.20f, 1.0f), "[VFR Mode Active: 1:1 Adaptive]");
       }

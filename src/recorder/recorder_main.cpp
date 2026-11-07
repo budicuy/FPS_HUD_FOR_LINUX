@@ -481,8 +481,7 @@ int main(int argc, char* argv[]) {
     } else {
       ctx->pix_fmt = AV_PIX_FMT_YUV420P;
     }
-    ctx->gop_size = target_fps * 2;  // 2-second keyframe interval
-    ctx->max_b_frames = 0;           // Zero B-frames (real-time stream)
+    ctx->max_b_frames = 0;  // Zero B-frames (real-time stream)
     ctx->rc_max_rate = static_cast<int64_t>(target_bitrate_kbps) * 1000;
     ctx->rc_buffer_size = static_cast<int>(ctx->rc_max_rate * 2);
 
@@ -818,6 +817,7 @@ int main(int argc, char* argv[]) {
   // 6. Main Socket Event Loop: Handle Frame Signals & Stop Commands
   AVPacket* v_pkt = av_packet_alloc();
   auto session_start = std::chrono::steady_clock::now();
+  uint64_t session_start_us = 0;
   bool has_received_game_frame = false;
   bool has_new_frame = false;
   AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
@@ -963,6 +963,13 @@ int main(int argc, char* argv[]) {
                   has_received_game_frame = true;
                   g_has_received_game_frame.store(true, std::memory_order_relaxed);
                   session_start = std::chrono::steady_clock::now();
+                  session_start_us =
+                      (notify.timestamp_us > 0)
+                          ? notify.timestamp_us
+                          : static_cast<uint64_t>(
+                                std::chrono::duration_cast<std::chrono::microseconds>(
+                                    session_start.time_since_epoch())
+                                    .count());
                   last_encoded_pts = 0;
 
                   av_frame_make_writable(vframe);
@@ -995,10 +1002,15 @@ int main(int argc, char* argv[]) {
                               vframe->linesize);
                   }
 
-                  auto now = std::chrono::steady_clock::now();
-                  int64_t elapsed_us =
-                      std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
-                          .count();
+                  int64_t elapsed_us = 0;
+                  if (notify.timestamp_us > 0 && notify.timestamp_us >= session_start_us) {
+                    elapsed_us = static_cast<int64_t>(notify.timestamp_us - session_start_us);
+                  } else {
+                    auto now = std::chrono::steady_clock::now();
+                    elapsed_us =
+                        std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
+                            .count();
+                  }
                   int64_t pts =
                       (elapsed_us > last_encoded_pts) ? elapsed_us : (last_encoded_pts + 1);
                   last_encoded_pts = pts;

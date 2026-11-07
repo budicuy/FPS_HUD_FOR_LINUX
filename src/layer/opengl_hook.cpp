@@ -1,5 +1,7 @@
 #include "config.hpp"
+#if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
+#endif
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -597,12 +599,15 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
     auto now = std::chrono::steady_clock::now();
     bool should_capture = false;
+#if FPSHUD_ENABLE_EXPERIMENTAL
     if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
       if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
               now, g_gl_pbo_ring.last_capture_time(), cfg.record_vfr_max_fps)) {
         should_capture = true;
       }
-    } else {
+    } else
+#endif
+    {
       int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
       auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
       auto min_interval = target_interval * 70 / 100;
