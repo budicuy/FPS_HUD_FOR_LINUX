@@ -28,13 +28,13 @@ enum class GroupCategory { FPS = 0, GPU = 1, CPU = 2, RAM = 3, SYS = 4 };
 // allocation!)
 struct StyledValue {
   char prefix[12] = {0};  // e.g., "AVG ", "1% ", "0.1% ", "FAN "
-  char number[24] = {0};  // e.g., "60", "39", "1320", "1.7", "56"
+  char number[36] = {0};  // e.g., "60", "39", "1320", "Radeon RX 7800 XT"
   char unit[12] = {0};    // e.g., "%", "MHz", "GB", "°C", "W", "ms"
   ImU32 color = 0;
 };
 
 constexpr size_t kMaxMetricsPerGroup = 16;
-constexpr size_t kMaxMetricGroups = 32;
+constexpr size_t kMaxMetricGroups = 40;
 
 struct MetricGroup {
   GroupCategory category = GroupCategory::FPS;
