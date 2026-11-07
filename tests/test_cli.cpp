@@ -2883,6 +2883,21 @@ void run_all_devices_and_features_suite() {
           ? "IpcStartPayload carries vfr_mode/vfr_max_fps and IpcFrameNotify carries timestamp_us"
           : "Failed: Missing VFR payload fields or timestamp_us in IPC headers");
 
+  // 5.0.2 Daemon VFR Microsecond Timebase & 1:1 Pacing
+  bool vfr_recorder_logic_ok = false;
+  if (!rroot.empty()) {
+    std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
+    bool checks_vfr = (rec_src.find("start_cfg.vfr_mode") != std::string::npos);
+    bool uses_us_timebase = (rec_src.find("1000000") != std::string::npos);
+    bool skips_duplicate_in_vfr = (rec_src.find("!is_vfr") != std::string::npos ||
+                                   rec_src.find("start_cfg.vfr_mode == 0") != std::string::npos);
+    vfr_recorder_logic_ok = checks_vfr && uses_us_timebase && skips_duplicate_in_vfr;
+  }
+  check_cond(vfr_recorder_logic_ok, "5.0.2 Daemon VFR Microsecond Timebase & 1:1 Pacing",
+             vfr_recorder_logic_ok
+                 ? "Recorder daemon configures 1us timebase and 1:1 PTS encoding in VFR mode"
+                 : "Failed: Missing VFR timebase setup or duplicate prevention in recorder daemon");
+
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

@@ -459,11 +459,21 @@ int main(int argc, char* argv[]) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
     }
 
+    bool is_vfr = (start_cfg.vfr_mode == 1);
+    int max_fps = (start_cfg.vfr_max_fps > 0) ? static_cast<int>(start_cfg.vfr_max_fps) : 120;
+
     ctx->codec_id = c->id;
     ctx->width = target_width;
     ctx->height = target_height;
-    ctx->time_base = AVRational{1, target_fps};
-    ctx->framerate = AVRational{target_fps, 1};
+    if (is_vfr) {
+      ctx->time_base = AVRational{1, 1000000};  // Microsecond timebase for native VFR
+      ctx->framerate = AVRational{max_fps, 1};  // Nominal max framerate
+      ctx->gop_size = max_fps * 2;
+    } else {
+      ctx->time_base = AVRational{1, target_fps};
+      ctx->framerate = AVRational{target_fps, 1};
+      ctx->gop_size = target_fps * 2;  // 2-second keyframe interval
+    }
     if (is_va) {
       ctx->pix_fmt = AV_PIX_FMT_VAAPI;
     } else if (is_nv) {
@@ -813,12 +823,15 @@ int main(int argc, char* argv[]) {
   AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
   int last_src_w = 0, last_src_h = 0;
 
+  bool is_vfr = (start_cfg.vfr_mode == 1);
+  int64_t total_encoded_frames = 0;
   auto frame_interval = std::chrono::microseconds(1000000 / target_fps);
   int64_t last_encoded_pts = -1;
 
   auto encode_frame_to_stream = [&](int64_t pts) {
     vframe->pts = pts;
-    video_frame_idx.store(pts + 1, std::memory_order_relaxed);
+    total_encoded_frames++;
+    video_frame_idx.store(total_encoded_frames, std::memory_order_relaxed);
     has_new_frame = false;
 
     if (is_vaapi_encoder && hw_frame) {
@@ -853,17 +866,23 @@ int main(int argc, char* argv[]) {
   while (g_running.load(std::memory_order_relaxed)) {
     struct timeval sel_tv{};
     if (has_received_game_frame) {
-      // Watchdog deadline: wake up if no frame arrives after 1.5 frame intervals from
-      // last_encoded_pts
-      auto deadline = session_start + (last_encoded_pts + 1) * frame_interval + frame_interval / 2;
-      auto now = std::chrono::steady_clock::now();
-      if (deadline > now) {
-        auto diff = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
-        sel_tv.tv_sec = static_cast<long>(diff / 1000000);
-        sel_tv.tv_usec = static_cast<long>(diff % 1000000);
-      } else {
+      if (is_vfr) {
         sel_tv.tv_sec = 0;
-        sel_tv.tv_usec = 1000;  // 1ms
+        sel_tv.tv_usec = 20000;  // 20ms poll in VFR mode
+      } else {
+        // Watchdog deadline: wake up if no frame arrives after 1.5 frame intervals from
+        // last_encoded_pts
+        auto deadline =
+            session_start + (last_encoded_pts + 1) * frame_interval + frame_interval / 2;
+        auto now = std::chrono::steady_clock::now();
+        if (deadline > now) {
+          auto diff = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+          sel_tv.tv_sec = static_cast<long>(diff / 1000000);
+          sel_tv.tv_usec = static_cast<long>(diff % 1000000);
+        } else {
+          sel_tv.tv_sec = 0;
+          sel_tv.tv_usec = 1000;  // 1ms
+        }
       }
     } else {
       sel_tv.tv_sec = 0;
@@ -960,6 +979,30 @@ int main(int argc, char* argv[]) {
                               vframe->linesize);
                   }
                   encode_frame_to_stream(0);
+                } else if (is_vfr) {
+                  // Pure VFR Mode: 1:1 frame capture at exact presentation timestamp
+                  av_frame_make_writable(vframe);
+                  if (notify.flip_y) {
+                    const uint8_t* src_slice[1] = {src +
+                                                   static_cast<size_t>(notify.height - 1) * stride};
+                    int src_stride[1] = {-stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
+                  } else {
+                    const uint8_t* src_slice[1] = {src};
+                    int src_stride[1] = {stride};
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
+                              vframe->linesize);
+                  }
+
+                  auto now = std::chrono::steady_clock::now();
+                  int64_t elapsed_us =
+                      std::chrono::duration_cast<std::chrono::microseconds>(now - session_start)
+                          .count();
+                  int64_t pts =
+                      (elapsed_us > last_encoded_pts) ? elapsed_us : (last_encoded_pts + 1);
+                  last_encoded_pts = pts;
+                  encode_frame_to_stream(pts);
                 } else {
                   auto now = std::chrono::steady_clock::now();
                   int64_t elapsed_us =
@@ -1024,8 +1067,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Watchdog fallback: if game paused, frozen, or stopped sending frames (> 1.5 intervals),
-    // emit duplicate frames locked to real time to prevent video from falling behind audio
-    if (has_received_game_frame && ret == 0) {
+    // emit duplicate frames locked to real time to prevent video from falling behind audio (CFR
+    // only)
+    if (has_received_game_frame && ret == 0 && !is_vfr) {
       auto cur_time = std::chrono::steady_clock::now();
       int64_t target_pts =
           (std::chrono::duration_cast<std::chrono::microseconds>(cur_time - session_start).count() +
