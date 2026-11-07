@@ -1,6 +1,8 @@
 #include "recorder_ipc.hpp"
 #include "config.hpp"
+#include "png_writer.hpp"
 
+#include <ctime>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -125,6 +127,9 @@ RecorderController::~RecorderController() {
   stop_recording();
   if (save_thread_.joinable()) {
     save_thread_.join();
+  }
+  if (screenshot_thread_.joinable()) {
+    screenshot_thread_.join();
   }
   cleanup_shm();
 }
@@ -684,6 +689,68 @@ void RecorderController::on_frame_present(uint32_t width, uint32_t height, int d
   (void)width;
   (void)height;
   (void)dmabuf_fd;
+}
+
+void RecorderController::request_screenshot() noexcept {
+  screenshot_requested_.store(true, std::memory_order_release);
+}
+
+bool RecorderController::consume_screenshot_request() noexcept {
+  return screenshot_requested_.exchange(false, std::memory_order_acq_rel);
+}
+
+void RecorderController::submit_screenshot(const void* pixels, uint32_t width, uint32_t height,
+                                           uint32_t format, bool flip_y,
+                                           const std::string& save_dir) {
+  if (!pixels || width == 0 || height == 0 || width > 16384 || height > 16384) {
+    return;
+  }
+
+  size_t total_bytes = static_cast<size_t>(width) * height * 4;
+  std::vector<uint8_t> raw_copy(total_bytes);
+  std::memcpy(raw_copy.data(), pixels, total_bytes);
+
+  std::string target_dir = save_dir;
+  if (target_dir.empty()) {
+    HudConfig def_cfg;
+    target_dir = get_effective_record_dir(def_cfg);
+  }
+
+  std::thread prev_thread;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (screenshot_thread_.joinable()) {
+      prev_thread = std::move(screenshot_thread_);
+    }
+  }
+  if (prev_thread.joinable()) {
+    prev_thread.join();
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  screenshot_thread_ = std::thread(
+      [this, buf = std::move(raw_copy), width, height, format, flip_y, target_dir]() {
+        std::error_code ec;
+        fs::create_directories(target_dir, ec);
+
+        std::time_t now_t = std::time(nullptr);
+        struct tm tm_buf{};
+        localtime_r(&now_t, &tm_buf);
+        char ts[64] = {0};
+        std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &tm_buf);
+
+        std::string out_path = target_dir + "/Screenshot_" + ts + ".png";
+        bool ok = write_rgba_to_png(out_path, buf.data(), width, height, format, flip_y);
+
+        std::lock_guard<std::recursive_mutex> lk(this->mutex_);
+        if (ok) {
+          this->last_saved_file_ = out_path;
+          this->toast_msg_ = "[✓] Screenshot tersimpan: " + out_path;
+        } else {
+          this->toast_msg_ = "[!] Gagal menyimpan screenshot PNG.";
+        }
+        this->toast_time_ = std::chrono::steady_clock::now();
+      });
 }
 
 }  // namespace fpshud

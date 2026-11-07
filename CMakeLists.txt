@@ -222,6 +222,7 @@ set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 add_library(fpshud SHARED
     src/core/config.cpp
     src/telemetry/telemetry.cpp
+    src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     src/input/input_manager.cpp
     src/ui/gui_menu.cpp
@@ -280,6 +281,7 @@ add_executable(fpshud_test
     src/core/config.cpp
     src/telemetry/telemetry.cpp
     src/input/input_manager.cpp
+    src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     ${IMGUI_CORE_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
@@ -392,6 +394,7 @@ if(CLANG_TIDY_EXE)
     set(SRC_FILES_FOR_TIDY
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
@@ -427,6 +430,8 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c

@@ -141,6 +141,12 @@ public:
   void submit_frame(const void* pixels, uint32_t width, uint32_t height, uint32_t format = 0,
                     bool flip_y = false);
 
+  // Screenshot capture pipeline (dependency-free lossless PNG on background worker thread)
+  void request_screenshot() noexcept;
+  bool consume_screenshot_request() noexcept;
+  void submit_screenshot(const void* pixels, uint32_t width, uint32_t height, uint32_t format,
+                         bool flip_y, const std::string& save_dir);
+
 private:
   RecorderController();
   ~RecorderController();
@@ -167,6 +173,8 @@ private:
   // Background save thread state
   std::thread save_thread_;
   std::atomic<bool> is_finalizing_{false};
+  std::atomic<bool> screenshot_requested_{false};
+  std::thread screenshot_thread_;
 
   // Shared Memory state
   std::string shm_path_;

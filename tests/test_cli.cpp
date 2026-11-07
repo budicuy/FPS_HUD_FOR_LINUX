@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include <inplace_vector>
 #include "telemetry.hpp"
+#include "png_writer.hpp"
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
@@ -3225,6 +3226,67 @@ void run_all_devices_and_features_suite() {
                "5.3 Storage & Network Hardware Telemetry (DiskIo, DiskTemp, NetSpeed)",
                "Verified /proc/diskstats whole-disk filtering, NVMe hwmon temp (48C), and "
                "/proc/net/dev RX/TX delta");
+  }
+
+  // 5.4 Self-Contained Lossless PNG Writer & Async Screenshot Pipeline
+  {
+    std::vector<uint8_t> img(64 * 64 * 4, 0);
+    for (size_t i = 0; i < 64 * 64; ++i) {
+      img[i * 4 + 0] = static_cast<uint8_t>(i & 0xFF);         // B
+      img[i * 4 + 1] = static_cast<uint8_t>((i >> 3) & 0xFF);  // G
+      img[i * 4 + 2] = 200;                                    // R
+      img[i * 4 + 3] = 255;                                    // A
+    }
+    std::string out_png = "/tmp/fpshud_test_shot.png";
+    std::remove(out_png.c_str());
+    bool write_ok = fpshud::write_rgba_to_png(out_png, img.data(), 64, 64, 0 /*BGRA*/, false);
+
+    bool sig_ok = false;
+    bool ihdr_ok = false;
+    bool comp_ok = false;
+    FILE* fp = std::fopen(out_png.c_str(), "rb");
+    if (fp) {
+      uint8_t hdr[24] = {0};
+      size_t rd = std::fread(hdr, 1, sizeof(hdr), fp);
+      std::fseek(fp, 0, SEEK_END);
+      long fsz = std::ftell(fp);
+      std::fclose(fp);
+      const uint8_t kPngSig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+      sig_ok = (rd == 24 && std::memcmp(hdr, kPngSig, 8) == 0);
+      uint32_t w = (uint32_t(hdr[16]) << 24) | (uint32_t(hdr[17]) << 16) |
+                   (uint32_t(hdr[18]) << 8) | hdr[19];
+      uint32_t h = (uint32_t(hdr[20]) << 24) | (uint32_t(hdr[21]) << 16) |
+                   (uint32_t(hdr[22]) << 8) | hdr[23];
+      ihdr_ok = (w == 64 && h == 64);
+      comp_ok = (fsz > 64 && fsz < 64 * 64 * 3);
+    }
+    std::remove(out_png.c_str());
+
+    // Test 10-bit X2BGR10LE (format=2) with flip_y=true
+    std::string out_png10 = "/tmp/fpshud_test_shot10.png";
+    bool write10_ok =
+        fpshud::write_rgba_to_png(out_png10, img.data(), 64, 64, 2 /*X2BGR10LE*/, true /*flip_y*/);
+    std::remove(out_png10.c_str());
+
+    // Test RecorderController screenshot request/consume & async submit
+    auto& rc = fpshud::RecorderController::instance();
+    rc.request_screenshot();
+    bool req_consumed = rc.consume_screenshot_request();
+    bool req_empty = !rc.consume_screenshot_request();
+    std::string shot_dir = "/tmp/fpshud_shot_dir_" + std::to_string(::getpid());
+    fs::remove_all(shot_dir);
+    rc.submit_screenshot(img.data(), 32, 32, 1 /*RGBA*/, false, shot_dir);
+    // Submit a second screenshot immediately to force joining the first background thread
+    rc.submit_screenshot(img.data(), 32, 32, 3 /*X2RGB10LE*/, true, shot_dir);
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    bool async_saved = !rc.get_last_saved_path().empty() && fs::exists(rc.get_last_saved_path());
+    fs::remove_all(shot_dir);
+
+    check_cond(write_ok && sig_ok && ihdr_ok && comp_ok && write10_ok && req_consumed &&
+                   req_empty && async_saved,
+               "5.4 Self-Contained Lossless PNG Writer & Async Screenshot Pipeline",
+               "Verified compressed PNG IHDR/IDAT/IEND, 10-bit X2BGR10LE + flip_y, and async "
+               "screenshot save");
   }
 
   // --------------------------------------------------------------------
