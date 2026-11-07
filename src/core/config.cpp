@@ -215,6 +215,10 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "record_cq_level=%d\n", cfg.record_cq_level);
   std::fprintf(fp, "record_directory=%s\n", cfg.record_directory.c_str());
 
+  std::fprintf(fp, "\n[Experimental]\n");
+  std::fprintf(fp, "record_adaptive_vfr=%d\n", cfg.record_adaptive_vfr ? 1 : 0);
+  std::fprintf(fp, "record_vfr_max_fps=%d\n", cfg.record_vfr_max_fps);
+
   std::fprintf(fp, "metrics=");
   for (size_t i = 0; i < cfg.metrics.size(); ++i) {
     if (i > 0) std::fputc(',', fp);
@@ -358,6 +362,12 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       parsed_any = true;
     } else if (key == "record_directory") {
       cfg.record_directory = val;
+      parsed_any = true;
+    } else if (key == "record_adaptive_vfr") {
+      cfg.record_adaptive_vfr = (safe_strtoi(val, 0) != 0);
+      parsed_any = true;
+    } else if (key == "record_vfr_max_fps") {
+      cfg.record_vfr_max_fps = std::clamp(safe_strtoi(val, 120), 30, 240);
       parsed_any = true;
     } else if (key == "metrics") {
       cfg.metrics.clear();

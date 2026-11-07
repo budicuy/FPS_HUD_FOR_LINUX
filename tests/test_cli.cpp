@@ -1876,6 +1876,25 @@ void run_all_devices_and_features_suite() {
               : "Failed: Missing bitrate slider in GUI menu or rate ceiling in recorder_main.cpp");
   }
 
+  {
+    HudConfig save_cfg{};
+    save_cfg.record_adaptive_vfr = true;
+    save_cfg.record_vfr_max_fps = 144;
+    std::string tmp_ini = "/tmp/test_fpshud_exp.ini";
+    bool exp_ini_ok = false;
+    if (save_ini_file(tmp_ini, save_cfg)) {
+      HudConfig load_cfg{};
+      if (load_ini_file(tmp_ini, load_cfg)) {
+        exp_ini_ok = (load_cfg.record_adaptive_vfr == true && load_cfg.record_vfr_max_fps == 144);
+      }
+      unlink(tmp_ini.c_str());
+    }
+    check_cond(exp_ini_ok, "0.4 Experimental Adaptive VFR Config Persistence",
+               exp_ini_ok
+                   ? "record_adaptive_vfr and record_vfr_max_fps persisted under [Experimental]"
+                   : "Failed: [Experimental] section persistence or parsing failure");
+  }
+
   const fs::path base = "/tmp/fpshud_mock_hw";
   std::error_code ec;
 
