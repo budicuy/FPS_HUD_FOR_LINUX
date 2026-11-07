@@ -19,13 +19,34 @@ namespace fpshud {
 
 namespace {
 
-constexpr MetricType kCanonicalMetricsOrder[] = {
-    MetricType::FPS,          MetricType::FpsAvg,    MetricType::Fps1Low,     MetricType::Fps01Low,
-    MetricType::FrameTimes,   MetricType::GpuLoad,   MetricType::GpuClock,    MetricType::GpuVram,
-    MetricType::GpuBandwidth, MetricType::GpuTemp,   MetricType::GpuFan,      MetricType::GpuWatt,
-    MetricType::CpuLoad,      MetricType::CpuClock,  MetricType::CpuWatt,     MetricType::CpuTemp,
-    MetricType::CpuHybrid,    MetricType::Ram,       MetricType::GameRam,     MetricType::SwapRam,
-    MetricType::MemPressure,  MetricType::EngineApi, MetricType::SystemClock, MetricType::Battery};
+constexpr MetricType kCanonicalMetricsOrder[] = {MetricType::FPS,
+                                                 MetricType::FpsAvg,
+                                                 MetricType::Fps1Low,
+                                                 MetricType::Fps01Low,
+                                                 MetricType::FrameTimes,
+                                                 MetricType::GpuLoad,
+                                                 MetricType::GpuClock,
+                                                 MetricType::GpuVramClock,
+                                                 MetricType::GpuVram,
+                                                 MetricType::GpuBandwidth,
+                                                 MetricType::GpuTemp,
+                                                 MetricType::GpuFan,
+                                                 MetricType::GpuWatt,
+                                                 MetricType::CpuLoad,
+                                                 MetricType::CpuAllCoreLoad,
+                                                 MetricType::CpuClock,
+                                                 MetricType::CpuAllCoreClock,
+                                                 MetricType::CpuWatt,
+                                                 MetricType::CpuTemp,
+                                                 MetricType::Ram,
+                                                 MetricType::GameRam,
+                                                 MetricType::SwapRam,
+                                                 MetricType::MemPressure,
+                                                 MetricType::EngineApi,
+                                                 MetricType::GpuModel,
+                                                 MetricType::CpuModel,
+                                                 MetricType::SystemClock,
+                                                 MetricType::Battery};
 static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0]) ==
                   kTotalMetricCount,
               "kTotalMetricCount must match the number of MetricType entries");
@@ -75,6 +96,8 @@ const char* metric_id_key(MetricType m) {
       return "gpuload";
     case MetricType::GpuClock:
       return "gpuclock";
+    case MetricType::GpuVramClock:
+      return "gpuvramclock";
     case MetricType::GpuVram:
       return "gpuvram";
     case MetricType::GpuBandwidth:
@@ -87,8 +110,12 @@ const char* metric_id_key(MetricType m) {
       return "gpuwatt";
     case MetricType::CpuLoad:
       return "cpuload";
+    case MetricType::CpuAllCoreLoad:
+      return "cpuallload";
     case MetricType::CpuClock:
       return "cpuclock";
+    case MetricType::CpuAllCoreClock:
+      return "cpuallclock";
     case MetricType::CpuWatt:
       return "cpuwatt";
     case MetricType::CpuTemp:
@@ -103,17 +130,23 @@ const char* metric_id_key(MetricType m) {
       return "mempsi";
     case MetricType::EngineApi:
       return "api";
+    case MetricType::GpuModel:
+      return "gpumodel";
+    case MetricType::CpuModel:
+      return "cpumodel";
     case MetricType::SystemClock:
       return "clock";
     case MetricType::Battery:
       return "battery";
-    case MetricType::CpuHybrid:
-      return "cpuhybrid";
   }
   return "fps";
 }
 
 bool parse_metric_id_key(const std::string& key, MetricType& out) {
+  if (key == "cpuhybrid") {
+    out = MetricType::CpuAllCoreLoad;
+    return true;
+  }
   for (MetricType m : kCanonicalMetricsOrder) {
     if (key == metric_id_key(m)) {
       out = m;
@@ -200,11 +233,19 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "shadow_opacity=%.2f\n", cfg.shadow_opacity);
   std::fprintf(fp, "category_colors_enabled=%d\n", cfg.category_colors_enabled ? 1 : 0);
   std::fprintf(fp, "thermal_warnings_enabled=%d\n", cfg.thermal_warnings_enabled ? 1 : 0);
+  std::fprintf(fp, "dim_labels_enabled=%d\n", cfg.dim_labels_enabled ? 1 : 0);
   std::fprintf(fp, "hud_graph_enabled=%d\n", cfg.hud_graph_enabled ? 1 : 0);
   std::fprintf(fp, "key_toggle_gui=%d\n", cfg.key_toggle_gui);
   std::fprintf(fp, "key_toggle_hud=%d\n", cfg.key_toggle_hud);
   std::fprintf(fp, "key_benchmark=%d\n", cfg.key_benchmark);
   std::fprintf(fp, "key_record=%d\n", cfg.key_record);
+  std::fprintf(fp, "bind_toggle_gui=%u,%u\n", cfg.bind_toggle_gui.mod_key,
+               cfg.bind_toggle_gui.main_key);
+  std::fprintf(fp, "bind_toggle_hud=%u,%u\n", cfg.bind_toggle_hud.mod_key,
+               cfg.bind_toggle_hud.main_key);
+  std::fprintf(fp, "bind_benchmark=%u,%u\n", cfg.bind_benchmark.mod_key,
+               cfg.bind_benchmark.main_key);
+  std::fprintf(fp, "bind_record=%u,%u\n", cfg.bind_record.mod_key, cfg.bind_record.main_key);
   std::fprintf(fp, "record_resolution=%d\n", cfg.record_resolution);
   std::fprintf(fp, "record_fps=%d\n", cfg.record_fps);
   std::fprintf(fp, "record_bitrate_kbps=%d\n", cfg.record_bitrate_kbps);
@@ -321,6 +362,9 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
     } else if (key == "thermal_warnings_enabled") {
       cfg.thermal_warnings_enabled = (safe_strtoi(val, 1) != 0);
       parsed_any = true;
+    } else if (key == "dim_labels_enabled") {
+      cfg.dim_labels_enabled = (safe_strtoi(val, 1) != 0);
+      parsed_any = true;
     } else if (key == "hud_graph_enabled") {
       cfg.hud_graph_enabled = (safe_strtoi(val, 0) != 0);
       parsed_any = true;
@@ -335,6 +379,22 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       parsed_any = true;
     } else if (key == "key_record") {
       cfg.key_record = std::clamp(safe_strtoi(val, 0), 0, 2);
+      parsed_any = true;
+    } else if (key == "bind_toggle_gui" || key == "bind_toggle_hud" || key == "bind_benchmark" ||
+               key == "bind_record") {
+      unsigned int mod_k = 0, main_k = 0;
+      if (std::sscanf(val.c_str(), "%u,%u", &mod_k, &main_k) == 2 && main_k > 0 && main_k < 512 &&
+          mod_k < 512) {
+        Keybind kb{mod_k, main_k};
+        if (key == "bind_toggle_gui")
+          cfg.bind_toggle_gui = kb;
+        else if (key == "bind_toggle_hud")
+          cfg.bind_toggle_hud = kb;
+        else if (key == "bind_benchmark")
+          cfg.bind_benchmark = kb;
+        else if (key == "bind_record")
+          cfg.bind_record = kb;
+      }
       parsed_any = true;
     } else if (key == "record_resolution") {
       cfg.record_resolution = std::clamp(safe_strtoi(val, 0), 0, 3);
@@ -530,6 +590,8 @@ const char* metric_name(MetricType m) {
       return "GPU";
     case MetricType::GpuClock:
       return "G.CLK";
+    case MetricType::GpuVramClock:
+      return "VRAM.CLK";
     case MetricType::GpuVram:
       return "VRAM";
     case MetricType::GpuBandwidth:
@@ -542,8 +604,12 @@ const char* metric_name(MetricType m) {
       return "G.PWR";
     case MetricType::CpuLoad:
       return "CPU";
+    case MetricType::CpuAllCoreLoad:
+      return "C.ALL";
     case MetricType::CpuClock:
       return "C.CLK";
+    case MetricType::CpuAllCoreClock:
+      return "C.ALL.CLK";
     case MetricType::CpuWatt:
       return "C.PWR";
     case MetricType::CpuTemp:
@@ -558,12 +624,14 @@ const char* metric_name(MetricType m) {
       return "MEM.PSI";
     case MetricType::EngineApi:
       return "API";
+    case MetricType::GpuModel:
+      return "GPU.MDL";
+    case MetricType::CpuModel:
+      return "CPU.MDL";
     case MetricType::SystemClock:
       return "CLOCK";
     case MetricType::Battery:
       return "BAT";
-    case MetricType::CpuHybrid:
-      return "P/E.LOAD";
   }
   return "UNK";
 }
@@ -571,19 +639,19 @@ const char* metric_name(MetricType m) {
 const char* layout_name(LayoutPosition p) {
   switch (p) {
     case LayoutPosition::TopLeft:
-      return "TopLeft";
+      return "Top-Left";
+    case LayoutPosition::TopCenter:
+      return "Top-Center";
     case LayoutPosition::TopRight:
-      return "TopRight";
-    case LayoutPosition::CenterTop:
-      return "CenterTop";
+      return "Top-Right";
     case LayoutPosition::BottomLeft:
-      return "BottomLeft";
+      return "Bottom-Left";
+    case LayoutPosition::BottomCenter:
+      return "Bottom-Center";
     case LayoutPosition::BottomRight:
-      return "BottomRight";
-    case LayoutPosition::CenterBottom:
-      return "CenterBottom";
+      return "Bottom-Right";
   }
-  return "TopLeft";
+  return "Top-Left";
 }
 
 const char* arrangement_name(ArrangementMode a) {
@@ -670,6 +738,202 @@ const char* record_keybind_name(int idx) {
       return "ScrollLock";
   }
   return "F7";
+}
+
+const char* linux_keycode_name(uint32_t code) noexcept {
+  switch (code) {
+    case 0:
+      return "None";
+    case 1:
+      return "ESC";
+    case 2:
+      return "1";
+    case 3:
+      return "2";
+    case 4:
+      return "3";
+    case 5:
+      return "4";
+    case 6:
+      return "5";
+    case 7:
+      return "6";
+    case 8:
+      return "7";
+    case 9:
+      return "8";
+    case 10:
+      return "9";
+    case 11:
+      return "0";
+    case 12:
+      return "-";
+    case 13:
+      return "=";
+    case 14:
+      return "Backspace";
+    case 15:
+      return "Tab";
+    case 16:
+      return "Q";
+    case 17:
+      return "W";
+    case 18:
+      return "E";
+    case 19:
+      return "R";
+    case 20:
+      return "T";
+    case 21:
+      return "Y";
+    case 22:
+      return "U";
+    case 23:
+      return "I";
+    case 24:
+      return "O";
+    case 25:
+      return "P";
+    case 26:
+      return "[";
+    case 27:
+      return "]";
+    case 28:
+      return "Enter";
+    case 29:
+    case 97:
+      return "Ctrl";
+    case 30:
+      return "A";
+    case 31:
+      return "S";
+    case 32:
+      return "D";
+    case 33:
+      return "F";
+    case 34:
+      return "G";
+    case 35:
+      return "H";
+    case 36:
+      return "J";
+    case 37:
+      return "K";
+    case 38:
+      return "L";
+    case 39:
+      return ";";
+    case 40:
+      return "'";
+    case 41:
+      return "`";
+    case 42:
+    case 54:
+      return "Shift";
+    case 43:
+      return "\\";
+    case 44:
+      return "Z";
+    case 45:
+      return "X";
+    case 46:
+      return "C";
+    case 47:
+      return "V";
+    case 48:
+      return "B";
+    case 49:
+      return "N";
+    case 50:
+      return "M";
+    case 51:
+      return ",";
+    case 52:
+      return ".";
+    case 53:
+      return "/";
+    case 55:
+      return "KP*";
+    case 56:
+    case 100:
+      return "Alt";
+    case 57:
+      return "Space";
+    case 58:
+      return "CapsLock";
+    case 59:
+      return "F1";
+    case 60:
+      return "F2";
+    case 61:
+      return "F3";
+    case 62:
+      return "F4";
+    case 63:
+      return "F5";
+    case 64:
+      return "F6";
+    case 65:
+      return "F7";
+    case 66:
+      return "F8";
+    case 67:
+      return "F9";
+    case 68:
+      return "F10";
+    case 69:
+      return "NumLock";
+    case 70:
+      return "ScrollLock";
+    case 87:
+      return "F11";
+    case 88:
+      return "F12";
+    case 99:
+      return "PrintScr";
+    case 102:
+      return "Home";
+    case 103:
+      return "Up";
+    case 104:
+      return "PageUp";
+    case 105:
+      return "Left";
+    case 106:
+      return "Right";
+    case 107:
+      return "End";
+    case 108:
+      return "Down";
+    case 109:
+      return "PageDown";
+    case 110:
+      return "Insert";
+    case 111:
+      return "Delete";
+    case 119:
+      return "Pause";
+    case 125:
+    case 126:
+      return "Super";
+    default:
+      return "Key";
+  }
+}
+
+std::string format_keybind(const Keybind& kb) {
+  auto fmt_single = [](uint32_t c) -> std::string {
+    const char* name = linux_keycode_name(c);
+    if (std::strcmp(name, "Key") == 0) {
+      return "Key#" + std::to_string(c);
+    }
+    return name;
+  };
+  if (kb.main_key == 0) return "None";
+  if (kb.mod_key != 0 && kb.mod_key != kb.main_key) {
+    return fmt_single(kb.mod_key) + " + " + fmt_single(kb.main_key);
+  }
+  return fmt_single(kb.main_key);
 }
 
 std::string get_default_record_dir() {

@@ -667,8 +667,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Separator();
       ImGui::TextColored(ImVec4(0.0f, 0.90f, 1.0f, 1.0f), "CPU (%s)", data.cpu_name);
       draw_metric_checkbox_row(cfg, MetricType::CpuLoad, "CPU Load", b_cload);
-      draw_metric_checkbox_row(cfg, MetricType::CpuHybrid, "P/E Core Load", b_chbr, data.hybrid_cpu,
-                               "(Disabled - Non-Hybrid / Unified CPU)");
+      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreLoad, "All Core Load", b_chbr);
       draw_metric_checkbox_row(cfg, MetricType::CpuClock, "CPU Clock", b_cclk);
       draw_metric_checkbox_row(cfg, MetricType::CpuTemp, "CPU Temp", b_ctmp);
       draw_metric_checkbox_row(cfg, MetricType::CpuWatt, "CPU Power", b_cpwr);

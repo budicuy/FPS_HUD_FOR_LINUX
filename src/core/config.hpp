@@ -16,13 +16,16 @@ enum class MetricType {
   FrameTimes,
   GpuLoad,
   GpuClock,
+  GpuVramClock,
   GpuVram,
   GpuBandwidth,
   GpuTemp,
   GpuFan,
   GpuWatt,
   CpuLoad,
+  CpuAllCoreLoad,
   CpuClock,
+  CpuAllCoreClock,
   CpuWatt,
   CpuTemp,
   Ram,
@@ -30,18 +33,32 @@ enum class MetricType {
   SwapRam,      // Swap / ZRAM usage
   MemPressure,  // Linux PSI memory pressure (stutter indicator)
   EngineApi,
+  GpuModel,
+  CpuModel,
   SystemClock,
-  Battery,   // Laptop / Handheld battery % & discharge power (W)
-  CpuHybrid  // Intel Hybrid P-Core vs E-Core load breakdown
+  Battery  // Laptop / Handheld battery % & discharge power (W)
 };
 
 enum class LayoutPosition {
   TopLeft = 0,
-  TopRight,
-  CenterTop,
-  BottomLeft,
-  BottomRight,
-  CenterBottom
+  TopCenter = 1,
+  TopRight = 2,
+  BottomLeft = 3,
+  BottomCenter = 4,
+  BottomRight = 5,
+  // Backward-compatible aliases
+  CenterTop = TopCenter,
+  CenterBottom = BottomCenter
+};
+
+struct Keybind {
+  uint32_t mod_key = 0;   // 0 if single key, or Linux KEY_* modifier/first key
+  uint32_t main_key = 0;  // Linux KEY_* primary key (e.g. KEY_F7=65, KEY_F12=88)
+
+  constexpr bool operator==(const Keybind& o) const noexcept {
+    return mod_key == o.mod_key && main_key == o.main_key;
+  }
+  constexpr bool operator!=(const Keybind& o) const noexcept { return !(*this == o); }
 };
 
 enum class ArrangementMode {
@@ -66,7 +83,7 @@ enum class FontFamily {
 constexpr float kAtlasBaseFontSizePx = 20.0f;
 
 // Total number of selectable HUD sensors (MetricType entries)
-constexpr std::size_t kTotalMetricCount = 24;
+constexpr std::size_t kTotalMetricCount = 28;
 constexpr std::size_t kMaxMetricsCapacity = 32;
 static_assert(kTotalMetricCount <= kMaxMetricsCapacity,
               "kMaxMetricsCapacity must accommodate all MetricType sensors");
@@ -94,17 +111,20 @@ struct HudConfig {
   // Dynamic Color Coding & HUD Graph
   bool category_colors_enabled = true;
   bool thermal_warnings_enabled = true;
+  bool dim_labels_enabled = true;
   bool hud_graph_enabled = false;
 
-  // Customizable Keybindings
-  // key_toggle_gui: 0=Insert/F12, 1=Insert, 2=F10, 3=Home, 4=F12
-  // key_toggle_hud: 0=F11, 1=End
-  // key_benchmark : 0=F9, 1=PageUp
-  // key_record    : 0=F7, 1=Alt+F9, 2=ScrollLock
+  // Customizable Keybindings (Legacy index + interactive 1-or-2-key bindings)
   int key_toggle_gui = 0;
   int key_toggle_hud = 0;
   int key_benchmark = 0;
   int key_record = 0;
+
+  // Linux evdev keycodes: KEY_F12=88, KEY_F11=87, KEY_F9=67, KEY_F7=65
+  Keybind bind_toggle_gui{0, 88};
+  Keybind bind_toggle_hud{0, 87};
+  Keybind bind_benchmark{0, 67};
+  Keybind bind_record{0, 65};
 
   // Screen Recorder Settings
   // record_resolution: 0=Native (100%), 1=1440p, 2=1080p, 3=720p
@@ -195,6 +215,8 @@ const char* gui_keybind_name(int idx);
 const char* hud_keybind_name(int idx);
 const char* bench_keybind_name(int idx);
 const char* record_keybind_name(int idx);
+const char* linux_keycode_name(uint32_t code) noexcept;
+std::string format_keybind(const Keybind& kb);
 std::string get_default_record_dir();
 std::string get_effective_record_dir(const HudConfig& cfg);
 

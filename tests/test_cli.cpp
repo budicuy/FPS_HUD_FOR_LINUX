@@ -1787,14 +1787,24 @@ void run_all_devices_and_features_suite() {
     apply_preset_standard(test_cfg);
     bool std_ok = (test_cfg.metrics.size() == 9 && test_cfg.active_preset == "standard");
     apply_preset_advance(test_cfg);
-    bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 24 &&
+    bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 28 &&
                    test_cfg.active_preset == "advance");
 
-    // Verify MetricType::Battery and MetricType::CpuHybrid
+    // Verify new MetricType entries (Battery, GpuVramClock, CpuAllCoreLoad, CpuAllCoreClock,
+    // GpuModel, CpuModel) and layout_name(TopCenter)
     test_cfg.set_metric(MetricType::Battery, true);
-    test_cfg.set_metric(MetricType::CpuHybrid, true);
+    test_cfg.set_metric(MetricType::GpuVramClock, true);
+    test_cfg.set_metric(MetricType::CpuAllCoreLoad, true);
+    test_cfg.set_metric(MetricType::CpuAllCoreClock, true);
+    test_cfg.set_metric(MetricType::GpuModel, true);
+    test_cfg.set_metric(MetricType::CpuModel, true);
     bool new_metrics_ok =
-        test_cfg.has_metric(MetricType::Battery) && test_cfg.has_metric(MetricType::CpuHybrid);
+        test_cfg.has_metric(MetricType::Battery) && test_cfg.has_metric(MetricType::GpuVramClock) &&
+        test_cfg.has_metric(MetricType::CpuAllCoreLoad) &&
+        test_cfg.has_metric(MetricType::CpuAllCoreClock) &&
+        test_cfg.has_metric(MetricType::GpuModel) && test_cfg.has_metric(MetricType::CpuModel) &&
+        std::strcmp(layout_name(LayoutPosition::TopCenter), "Top-Center") == 0 &&
+        std::strcmp(layout_name(LayoutPosition::BottomCenter), "Bottom-Center") == 0;
 
     TelemetryData td_check;
     td_check.battery_available = true;
@@ -1811,14 +1821,19 @@ void run_all_devices_and_features_suite() {
                   td_check.hybrid_cpu && td_check.cpu_p_core_count == 8);
 
     test_cfg.gui_scale = 1.35f;
+    test_cfg.dim_labels_enabled = false;
+    test_cfg.bind_record = Keybind{56, 33};  // LeftAlt + F
     save_ini_file("/tmp/test_gui_scale.ini", test_cfg, "Test Scale");
     HudConfig loaded_cfg;
     load_ini_file("/tmp/test_gui_scale.ini", loaded_cfg);
-    bool scale_ok = std::fabs(loaded_cfg.gui_scale - 1.35f) < 0.01f;
+    bool scale_ok = std::fabs(loaded_cfg.gui_scale - 1.35f) < 0.01f &&
+                    loaded_cfg.dim_labels_enabled == false &&
+                    loaded_cfg.bind_record.mod_key == 56 && loaded_cfg.bind_record.main_key == 33 &&
+                    format_keybind(loaded_cfg.bind_record) == "Alt + F";
 
     check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok,
-               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=24, Scale=1.35x)",
-               "All 3 built-in presets, 24 metrics & GUI scale INI persistence verified");
+               "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=28, Scale=1.35x)",
+               "All 3 built-in presets, 28 metrics, dim_labels & Keybind INI persistence verified");
   }
 
   {

@@ -60,6 +60,7 @@ GroupCategory get_metric_category(MetricType m) noexcept {
       return GroupCategory::FPS;
     case MetricType::GpuLoad:
     case MetricType::GpuClock:
+    case MetricType::GpuVramClock:
     case MetricType::GpuVram:
     case MetricType::GpuBandwidth:
     case MetricType::GpuTemp:
@@ -67,10 +68,11 @@ GroupCategory get_metric_category(MetricType m) noexcept {
     case MetricType::GpuWatt:
       return GroupCategory::GPU;
     case MetricType::CpuLoad:
+    case MetricType::CpuAllCoreLoad:
     case MetricType::CpuClock:
+    case MetricType::CpuAllCoreClock:
     case MetricType::CpuWatt:
     case MetricType::CpuTemp:
-    case MetricType::CpuHybrid:
       return GroupCategory::CPU;
     case MetricType::Ram:
     case MetricType::GameRam:
@@ -78,6 +80,8 @@ GroupCategory get_metric_category(MetricType m) noexcept {
     case MetricType::MemPressure:
       return GroupCategory::RAM;
     case MetricType::EngineApi:
+    case MetricType::GpuModel:
+    case MetricType::CpuModel:
     case MetricType::SystemClock:
     case MetricType::Battery:
       return GroupCategory::SYS;
@@ -232,12 +236,19 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
                     "\xC2\xB0"
                     "C");  // UTF-8 °C
       return;
-    case MetricType::CpuHybrid:
-      if (!d.hybrid_cpu) return;
-      std::snprintf(sv.prefix, sizeof(sv.prefix), "P/E:");
-      std::snprintf(sv.number, sizeof(sv.number), "%.0f/%.0f", d.cpu_p_core_load_pct,
-                    d.cpu_e_core_load_pct);
-      std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+    case MetricType::GpuVramClock:
+      std::snprintf(sv.prefix, sizeof(sv.prefix), "VCLK:");
+      std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_clock_mhz);
+      std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
+      return;
+    case MetricType::CpuAllCoreLoad:
+    case MetricType::CpuAllCoreClock:
+      return;
+    case MetricType::GpuModel:
+      std::snprintf(sv.number, sizeof(sv.number), "%s", d.gpu_name);
+      return;
+    case MetricType::CpuModel:
+      std::snprintf(sv.number, sizeof(sv.number), "%s", d.cpu_name);
       return;
     case MetricType::Ram:
       std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.ram_used_gb);
@@ -291,7 +302,6 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
   MetricGroupList list{};
   for (MetricType m : cfg.metrics) {
     if (m == MetricType::Battery && !data.battery_available) continue;
-    if (m == MetricType::CpuHybrid && !data.hybrid_cpu) continue;
     GroupCategory cat = get_metric_category(m);
     MetricGroup* target = nullptr;
     for (auto& item : list.items) {
