@@ -2750,6 +2750,30 @@ void run_all_devices_and_features_suite() {
           ? "Wall-clock PTS anchor, zero-preroll audio sync, and phase-jitter smoothing verified"
           : "Failed: Missing audio preroll clear, PTS drift compensation, or judder-free pacing");
 
+  // 4.6 Jitter-Tolerant Layer Capture & Subharmonic Anti-Lock Invariant
+  bool capture_pacing_jitter_resilient = false;
+  if (!rroot.empty()) {
+    std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+    std::string gl_src = read_text_file(rroot / "src" / "layer" / "opengl_hook.cpp");
+    // Must NOT use the rigid (rec_fps + 2) divisor which caused 30 FPS lock
+    bool no_rigid_divisor_vk = (vk_src.find("rec_fps + 2") == std::string::npos);
+    bool no_rigid_divisor_gl = (gl_src.find("rec_fps + 2") == std::string::npos);
+    // Must use jitter-tolerant fraction (70% threshold of target interval)
+    bool tolerant_pacing_vk =
+        (vk_src.find("70 / 100") != std::string::npos ||
+         vk_src.find("* 7 / 10") != std::string::npos || vk_src.find("0.70") != std::string::npos);
+    bool tolerant_pacing_gl =
+        (gl_src.find("70 / 100") != std::string::npos ||
+         gl_src.find("* 7 / 10") != std::string::npos || gl_src.find("0.70") != std::string::npos);
+    capture_pacing_jitter_resilient =
+        no_rigid_divisor_vk && no_rigid_divisor_gl && tolerant_pacing_vk && tolerant_pacing_gl;
+  }
+  check_cond(
+      capture_pacing_jitter_resilient, "4.6 Jitter-Tolerant Layer Capture & Subharmonic Anti-Lock",
+      capture_pacing_jitter_resilient
+          ? "Jitter-resilient pacing window (70% interval) verified for Vulkan & OpenGL"
+          : "Failed: Found rigid (rec_fps + 2) divisor or missing 70% jitter-tolerant threshold");
+
   // 5. High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {

@@ -583,17 +583,20 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   }
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+  static auto s_last_gl_capture = std::chrono::steady_clock::time_point{};
   if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
-    static auto s_last_gl_capture = std::chrono::steady_clock::time_point{};
     auto now = std::chrono::steady_clock::now();
     int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
-    auto min_interval = std::chrono::microseconds(1000000 / (rec_fps + 2));
-    if (now - s_last_gl_capture >= min_interval) {
+    auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
+    auto min_interval = target_interval * 70 / 100;
+    if (s_last_gl_capture == std::chrono::steady_clock::time_point{} ||
+        now - s_last_gl_capture >= min_interval) {
       s_last_gl_capture = now;
       g_gl_pbo_ring.capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
                                   static_cast<uint32_t>(height));
     }
   } else {
+    s_last_gl_capture = std::chrono::steady_clock::time_point{};
     g_gl_pbo_ring.reset_pending();
   }
 }
