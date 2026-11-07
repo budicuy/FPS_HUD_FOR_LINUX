@@ -82,12 +82,11 @@ void draw_metric_checkbox_row(HudConfig& cfg, MetricType type, const char* label
     }
   }
   if (live_val && *live_val) {
+    ImGui::SameLine();
     float avail = ImGui::GetContentRegionAvail().x;
     float txt_w = ImGui::CalcTextSize(live_val).x;
-    if (avail > txt_w + 6.0f) {
-      ImGui::SameLine(ImGui::GetCursorPosX() + avail - txt_w - 4.0f);
-    } else {
-      ImGui::SameLine();
+    if (avail > txt_w + 4.0f) {
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - txt_w - 4.0f);
     }
     ImGui::TextColored(
         active ? ImVec4(0.50f, 0.95f, 0.62f, 1.0f) : ImVec4(0.50f, 0.55f, 0.62f, 1.0f), "%s",
@@ -100,6 +99,48 @@ void draw_metric_checkbox_row(HudConfig& cfg, MetricType type, const char* label
       ImGui::SetTooltip("%s", unavailable_hint);
     }
   }
+}
+
+void draw_keybind_row(const char* label, KeybindTarget target, const Keybind& kb,
+                      const char* default_hint, float scale) {
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  ImGui::AlignTextToFramePadding();
+  ImGui::Text("%s", label);
+  ImGui::TableSetColumnIndex(1);
+
+  auto& im = get_input_manager();
+  bool is_cap = im.is_capturing_keybind() && (im.capturing_target() == target);
+  ImGui::PushID(static_cast<int>(target));
+
+  float btn_w = 58.0f * scale;
+  float avail_w = ImGui::GetContentRegionAvail().x;
+  float box_w = std::max(40.0f, avail_w - btn_w - (6.0f * scale));
+
+  if (is_cap) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.42f, 0.08f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.50f, 0.12f, 1.0f));
+    ImGui::Button("Tekan 1/2 Tombol...", ImVec2(box_w, 0.0f));
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine(0.0f, 6.0f * scale);
+    if (ImGui::Button("Batal", ImVec2(btn_w, 0.0f))) {
+      im.cancel_keybind_capture();
+    }
+  } else {
+    std::string kb_str =
+        (default_hint && *default_hint) ? std::string(default_hint) : format_keybind(kb);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.15f, 0.20f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.16f, 0.20f, 0.28f, 1.0f));
+    if (ImGui::Button(kb_str.c_str(), ImVec2(box_w, 0.0f))) {
+      im.start_keybind_capture(target);
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine(0.0f, 6.0f * scale);
+    if (ImGui::Button("Ubah", ImVec2(btn_w, 0.0f))) {
+      im.start_keybind_capture(target);
+    }
+  }
+  ImGui::PopID();
 }
 
 }  // namespace
@@ -132,11 +173,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     if (ImGui::Begin("##FPSHUD_ToastHint", nullptr, toast_flags)) {
       ImGui::SetWindowFontScale(16.0f / base_gui_font_px);
       if (get_input_manager().has_evdev_access()) {
+        std::string g_kb = format_keybind(cfg.bind_toggle_gui);
+        std::string h_kb = format_keybind(cfg.bind_toggle_hud);
+        std::string b_kb = format_keybind(cfg.bind_benchmark);
         ImGui::TextColored(ImVec4(0.4f, 0.92f, 1.0f, 1.0f),
                            "FPSHUD Active  |  GUI: %s  |  Hide HUD: %s  |  Benchmark: %s",
-                           gui_keybind_name(cfg.key_toggle_gui),
-                           hud_keybind_name(cfg.key_toggle_hud),
-                           bench_keybind_name(cfg.key_benchmark));
+                           g_kb.c_str(), h_kb.c_str(), b_kb.c_str());
       } else {
         ImGui::TextColored(
             ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
@@ -227,6 +269,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
           cfg.shadow_offset = 2.0f;
           cfg.category_colors_enabled = true;
           cfg.thermal_warnings_enabled = true;
+          cfg.dim_labels_enabled = true;
           set_status_message("Direset ke Preset Standard.");
         }
         if (ImGui::MenuItem("Close GUI (ESC)")) {
@@ -239,6 +282,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImGui::MenuItem("Show Mini Frametime Graph on HUD", nullptr, &cfg.hud_graph_enabled);
         ImGui::MenuItem("Category Color Coding", nullptr, &cfg.category_colors_enabled);
         ImGui::MenuItem("Thermal & Load Warnings", nullptr, &cfg.thermal_warnings_enabled);
+        ImGui::MenuItem("Dim Unit & Prefix Labels", nullptr, &cfg.dim_labels_enabled);
         ImGui::EndMenu();
       }
 #if FPSHUD_ENABLE_EXPERIMENTAL
@@ -345,8 +389,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Screen Position");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* layout_items[] = {"Top-Left",    "Top-Right",    "Center-Top",
-                                    "Bottom-Left", "Bottom-Right", "Center-Bottom"};
+      const char* layout_items[] = {"Top-Left",    "Top-Center",    "Top-Right",
+                                    "Bottom-Left", "Bottom-Center", "Bottom-Right"};
       int current_layout = static_cast<int>(cfg.layout);
       if (ImGui::Combo("##Position", &current_layout, layout_items, IM_ARRAYSIZE(layout_items))) {
         cfg.layout = static_cast<LayoutPosition>(current_layout);
@@ -501,15 +545,24 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Base Text Color");
       ImGui::TableSetColumnIndex(1);
-      float col4[4] = {cfg.text_color.r / 255.0f, cfg.text_color.g / 255.0f,
-                       cfg.text_color.b / 255.0f, cfg.text_opacity};
+      float col3[3] = {cfg.text_color.r / 255.0f, cfg.text_color.g / 255.0f,
+                       cfg.text_color.b / 255.0f};
       ImGui::SetNextItemWidth(-1.0f);
-      if (ImGui::ColorEdit4("##BaseTextColor", col4,
-                            ImGuiColorEditFlags_Uint8 | ImGuiColorEditFlags_AlphaBar)) {
-        cfg.text_color.r = static_cast<uint8_t>(std::clamp(col4[0] * 255.0f, 0.0f, 255.0f));
-        cfg.text_color.g = static_cast<uint8_t>(std::clamp(col4[1] * 255.0f, 0.0f, 255.0f));
-        cfg.text_color.b = static_cast<uint8_t>(std::clamp(col4[2] * 255.0f, 0.0f, 255.0f));
-        cfg.text_opacity = std::clamp(col4[3], 0.05f, 1.0f);
+      if (ImGui::ColorEdit3("##BaseTextColor", col3, ImGuiColorEditFlags_Uint8)) {
+        cfg.text_color.r = static_cast<uint8_t>(std::clamp(col3[0] * 255.0f, 0.0f, 255.0f));
+        cfg.text_color.g = static_cast<uint8_t>(std::clamp(col3[1] * 255.0f, 0.0f, 255.0f));
+        cfg.text_color.b = static_cast<uint8_t>(std::clamp(col3[2] * 255.0f, 0.0f, 255.0f));
+      }
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Text Opacity");
+      ImGui::TableSetColumnIndex(1);
+      float txt_pct = cfg.text_opacity * 100.0f;
+      ImGui::SetNextItemWidth(-1.0f);
+      if (ImGui::SliderFloat("##TextOpacity", &txt_pct, 5.0f, 100.0f, "%.0f%%")) {
+        cfg.text_opacity = std::clamp(txt_pct / 100.0f, 0.05f, 1.0f);
       }
 
       ImGui::TableNextRow();
@@ -534,6 +587,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::SameLine(0.0f, 12.0f * scale);
       ImGui::Checkbox("Thermal Alerts", &cfg.thermal_warnings_enabled);
 
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Label Brightness");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::Checkbox("Dim Indikator Teks (Unit & Sub-Label Redup)", &cfg.dim_labels_enabled);
+
       // Section 4: Hotkeys
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
@@ -541,25 +601,14 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TableSetColumnIndex(1);
       draw_section_header("");
 
-      const char* gui_keys[] = {"Insert / F12 / F10", "Insert Only", "F10 Only", "Home Only",
-                                "F12 Only"};
-      const char* hud_keys[] = {"F11", "End"};
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("GUI Menu Key");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      ImGui::Combo("##GUIKey", &cfg.key_toggle_gui, gui_keys, IM_ARRAYSIZE(gui_keys));
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("HUD Toggle Key");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      ImGui::Combo("##HUDKey", &cfg.key_toggle_hud, hud_keys, IM_ARRAYSIZE(hud_keys));
+      const char* gui_default_hint = (cfg.key_toggle_gui == 0 && cfg.bind_toggle_gui.mod_key == 0 &&
+                                      cfg.bind_toggle_gui.main_key == 88)
+                                         ? "Insert / F12 / F10"
+                                         : nullptr;
+      draw_keybind_row("GUI Menu Key", KeybindTarget::ToggleGui, cfg.bind_toggle_gui,
+                       gui_default_hint, scale);
+      draw_keybind_row("HUD Toggle Key", KeybindTarget::ToggleHud, cfg.bind_toggle_hud, nullptr,
+                       scale);
 
       ImGui::EndTable();
     }
@@ -595,9 +644,11 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::Separator();
 
     char b_fps[24], b_avg[24], b_1l[24], b_01l[24], b_ft[24];
-    char b_gload[24], b_gclk[24], b_gvram[24], b_gbw[24], b_gtmp[24], b_gfan[24], b_gpwr[24];
+    char b_gload[24], b_gclk[24], b_gvclk[24], b_gvram[24], b_gbw[24], b_gtmp[24], b_gfan[24],
+        b_gpwr[24];
     char b_cload[24], b_cclk[24], b_cpwr[24], b_ctmp[24], b_ram[32], b_api[32];
     char b_gram[24], b_swap[32], b_psi[24];
+    char b_all_cload[32], b_all_cclk[32];
 
     std::snprintf(b_fps, sizeof(b_fps), "%.0f", data.fps);
     std::snprintf(b_avg, sizeof(b_avg), "%.0f", data.fps_avg);
@@ -606,6 +657,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     std::snprintf(b_ft, sizeof(b_ft), "%.1f ms", data.frametime_ms);
     std::snprintf(b_gload, sizeof(b_gload), "%.0f%%", data.gpu_load_pct);
     std::snprintf(b_gclk, sizeof(b_gclk), "%d MHz", data.gpu_clock_mhz);
+    std::snprintf(b_gvclk, sizeof(b_gvclk), "%d MHz", data.gpu_vram_clock_mhz);
     std::snprintf(b_gvram, sizeof(b_gvram), "%.2f GB", data.gpu_vram_used_gb);
     std::snprintf(b_gbw, sizeof(b_gbw), "%.1f GB/s", data.gpu_bandwidth_gbs);
     std::snprintf(b_gtmp, sizeof(b_gtmp), "%d °C", data.gpu_temp_c);
@@ -618,6 +670,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     std::snprintf(b_ram, sizeof(b_ram), "%.2f GB (%.0f%%)", data.ram_used_gb, data.ram_used_pct);
     std::snprintf(b_api, sizeof(b_api), "%s", data.render_api);
     std::snprintf(b_gram, sizeof(b_gram), "%.2f GB", data.game_ram_gb);
+    std::snprintf(b_all_cload, sizeof(b_all_cload), "%d Cores (%.0f%%)",
+                  std::max(1, data.cpu_core_count), data.cpu_load_pct);
+    std::snprintf(b_all_cclk, sizeof(b_all_cclk), "%d Cores (%d MHz)",
+                  std::max(1, data.cpu_core_count), data.cpu_clock_mhz);
     if (data.swap_total_gb > 0.0f) {
       std::snprintf(b_swap, sizeof(b_swap), "%.2f/%.1f GB", data.swap_used_gb, data.swap_total_gb);
     } else {
@@ -642,19 +698,11 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_bat, sizeof(b_bat), "N/A (Desktop)");
     }
 
-    char b_chbr[32] = {0};
-    if (data.hybrid_cpu) {
-      std::snprintf(b_chbr, sizeof(b_chbr), "P:%.0f%% E:%.0f%%", data.cpu_p_core_load_pct,
-                    data.cpu_e_core_load_pct);
-    } else {
-      std::snprintf(b_chbr, sizeof(b_chbr), "N/A");
-    }
-
     if (ImGui::BeginTable("##SensorsSplitGrid", 2,
                           ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
       ImGui::TableNextRow();
 
-      // Column 1: FPS + CPU
+      // Column 1: FPS + CPU + System
       ImGui::TableSetColumnIndex(0);
       ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.0f, 1.0f), "FPS & Frame Timing");
       draw_metric_checkbox_row(cfg, MetricType::FPS, "FPS Counter", b_fps);
@@ -667,8 +715,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Separator();
       ImGui::TextColored(ImVec4(0.0f, 0.90f, 1.0f, 1.0f), "CPU (%s)", data.cpu_name);
       draw_metric_checkbox_row(cfg, MetricType::CpuLoad, "CPU Load", b_cload);
-      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreLoad, "All Core Load", b_chbr);
+      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreLoad, "All Core Load", b_all_cload);
       draw_metric_checkbox_row(cfg, MetricType::CpuClock, "CPU Clock", b_cclk);
+      draw_metric_checkbox_row(cfg, MetricType::CpuAllCoreClock, "All Core Clock", b_all_cclk);
       draw_metric_checkbox_row(cfg, MetricType::CpuTemp, "CPU Temp", b_ctmp);
       draw_metric_checkbox_row(cfg, MetricType::CpuWatt, "CPU Power", b_cpwr);
 
@@ -676,6 +725,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Separator();
       ImGui::TextColored(ImVec4(0.75f, 0.82f, 0.90f, 1.0f), "System");
       draw_metric_checkbox_row(cfg, MetricType::EngineApi, "Render API", b_api);
+      draw_metric_checkbox_row(cfg, MetricType::GpuModel, "GPU Model", data.gpu_name);
+      draw_metric_checkbox_row(cfg, MetricType::CpuModel, "CPU Model", data.cpu_name);
       draw_metric_checkbox_row(cfg, MetricType::SystemClock, "Local Clock", data.local_time_str);
       draw_metric_checkbox_row(cfg, MetricType::Battery, "Battery & Power", b_bat,
                                data.battery_available,
@@ -686,6 +737,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::TextColored(ImVec4(0.46f, 0.88f, 0.0f, 1.0f), "GPU (%s)", data.gpu_name);
       draw_metric_checkbox_row(cfg, MetricType::GpuLoad, "GPU Load", b_gload);
       draw_metric_checkbox_row(cfg, MetricType::GpuClock, "GPU Clock", b_gclk);
+      draw_metric_checkbox_row(cfg, MetricType::GpuVramClock, "GPU VRAM Clock", b_gvclk);
       draw_metric_checkbox_row(cfg, MetricType::GpuVram, "GPU VRAM", b_gvram);
       draw_metric_checkbox_row(cfg, MetricType::GpuBandwidth, "GPU Bandwidth", b_gbw);
       draw_metric_checkbox_row(cfg, MetricType::GpuTemp, "GPU Temp", b_gtmp);
@@ -719,12 +771,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     float btn_half_w = (btn_row_w - (6.0f * scale)) * 0.50f;
 
     bool is_rec = RecorderController::instance().is_recording();
+    std::string rec_kb_str = format_keybind(cfg.bind_record);
+    std::string bench_kb_str = format_keybind(cfg.bind_benchmark);
     if (!is_rec) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.58f, 0.32f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.70f, 0.38f, 1.0f));
       char btn_lbl[64];
-      std::snprintf(btn_lbl, sizeof(btn_lbl), "[REC] Start Record (%s)",
-                    record_keybind_name(cfg.key_record));
+      std::snprintf(btn_lbl, sizeof(btn_lbl), "[REC] Start Record (%s)", rec_kb_str.c_str());
       if (ImGui::Button(btn_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
         RecorderController::instance().start_recording(cfg, display_width, display_height);
         set_status_message("Perekaman gameplay dimulai!");
@@ -735,7 +788,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       int m = static_cast<int>(dur) / 60;
       int s = static_cast<int>(dur) % 60;
       char stop_lbl[64];
-      std::snprintf(stop_lbl, sizeof(stop_lbl), "[STOP] REC %02d:%02d", m, s);
+      std::snprintf(stop_lbl, sizeof(stop_lbl), "[STOP] REC %02d:%02d (%s)", m, s,
+                    rec_kb_str.c_str());
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.18f, 0.18f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
       if (ImGui::Button(stop_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
@@ -750,8 +804,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.45f, 0.12f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.68f, 0.55f, 0.16f, 1.0f));
       char b_lbl[64];
-      std::snprintf(b_lbl, sizeof(b_lbl), "[CSV] Start Bench (%s)",
-                    bench_keybind_name(cfg.key_benchmark));
+      std::snprintf(b_lbl, sizeof(b_lbl), "[CSV] Start Bench (%s)", bench_kb_str.c_str());
       if (ImGui::Button(b_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
         get_telemetry().start_benchmark();
         set_status_message("Benchmark dimulai...");
@@ -779,7 +832,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::Spacing();
     ImGui::Separator();
 
-    // Settings Table inside Column 3
+    if (is_rec) {
+      ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.30f, 1.0f),
+                         "[Pengaturan dikunci saat perekaman berjalan]");
+    }
+
+    // Settings Table inside Column 3 (disabled while recording is active)
+    ImGui::BeginDisabled(is_rec);
     if (ImGui::BeginTable("##Col3RecorderTable", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f * scale);
       ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
@@ -893,25 +952,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items,
                    IM_ARRAYSIZE(audio_items));
 
-      // Keybindings Section
-      const char* bench_keys[] = {"F9", "PageUp"};
-      const char* record_keys[] = {"F7", "Alt+F9", "ScrollLock"};
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Record Key");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      ImGui::Combo("##RecKey", &cfg.key_record, record_keys, IM_ARRAYSIZE(record_keys));
-
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Bench Key");
-      ImGui::TableSetColumnIndex(1);
-      ImGui::SetNextItemWidth(-1.0f);
-      ImGui::Combo("##BenchKey", &cfg.key_benchmark, bench_keys, IM_ARRAYSIZE(bench_keys));
+      // Interactive Keybindings Section
+      draw_keybind_row("Record Key", KeybindTarget::ToggleRecord, cfg.bind_record, nullptr, scale);
+      draw_keybind_row("Bench Key", KeybindTarget::ToggleBenchmark, cfg.bind_benchmark, nullptr,
+                       scale);
 
       // Save Folder Path Display
       ImGui::TableNextRow();
@@ -924,6 +968,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
       ImGui::EndTable();
     }
+    ImGui::EndDisabled();
 
     if (data.last_benchmark.has_result) {
       ImGui::Spacing();

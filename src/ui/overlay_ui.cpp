@@ -34,7 +34,7 @@ struct StyledValue {
 };
 
 constexpr size_t kMaxMetricsPerGroup = 16;
-constexpr size_t kMaxMetricGroups = 8;
+constexpr size_t kMaxMetricGroups = 32;
 
 struct MetricGroup {
   GroupCategory category = GroupCategory::FPS;
@@ -47,8 +47,8 @@ struct MetricGroupList {
   std::inplace_vector<MetricGroup, kMaxMetricGroups> items;
 };
 
-static_assert(sizeof(MetricGroupList) <= 16384,
-              "MetricGroupList must fit within 16 KB stack safety budget");
+static_assert(sizeof(MetricGroupList) <= 65536,
+              "MetricGroupList must fit within 64 KB stack safety budget");
 
 GroupCategory get_metric_category(MetricType m) noexcept {
   switch (m) {
@@ -238,17 +238,17 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       return;
     case MetricType::GpuVramClock:
       std::snprintf(sv.prefix, sizeof(sv.prefix), "VCLK:");
-      std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_clock_mhz);
+      std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_vram_clock_mhz);
       std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
       return;
     case MetricType::CpuAllCoreLoad:
     case MetricType::CpuAllCoreClock:
       return;
     case MetricType::GpuModel:
-      std::snprintf(sv.number, sizeof(sv.number), "%s", d.gpu_name);
+      std::snprintf(sv.number, sizeof(sv.number), "%s", d.gpu_name[0] ? d.gpu_name : "GPU");
       return;
     case MetricType::CpuModel:
-      std::snprintf(sv.number, sizeof(sv.number), "%s", d.cpu_name);
+      std::snprintf(sv.number, sizeof(sv.number), "%s", d.cpu_name[0] ? d.cpu_name : "CPU");
       return;
     case MetricType::Ram:
       std::snprintf(sv.number, sizeof(sv.number), "%.1f", d.ram_used_gb);
@@ -302,10 +302,46 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
   MetricGroupList list{};
   for (MetricType m : cfg.metrics) {
     if (m == MetricType::Battery && !data.battery_available) continue;
+
+    if (m == MetricType::CpuAllCoreLoad || m == MetricType::CpuAllCoreClock) {
+      const bool is_load = (m == MetricType::CpuAllCoreLoad);
+      const char* row_label = is_load ? "C.LOAD" : "C.CLK";
+      ImU32 row_col = get_category_color(GroupCategory::CPU, cfg, alpha);
+      int n_cores =
+          std::clamp(data.cpu_core_count, 1, static_cast<int>(TelemetryData::kMaxCpuCores));
+
+      for (int c = 0; c < n_cores; c += 4) {
+        if (auto added = list.items.try_emplace_back(
+                MetricGroup{GroupCategory::CPU, row_label, row_col, {}})) {
+          for (int k = c; k < std::min(c + 4, n_cores); ++k) {
+            StyledValue sv{};
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "C%d:", k);
+            if (is_load) {
+              int pct = static_cast<int>(data.cpu_core_loads_pct[static_cast<size_t>(k)]);
+              std::snprintf(sv.number, sizeof(sv.number), "%d", pct);
+              std::snprintf(sv.unit, sizeof(sv.unit), "%%");
+              sv.color =
+                  (cfg.thermal_warnings_enabled && pct >= 97)
+                      ? IM_COL32(255, 185, 0, alpha)
+                      : IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+            } else {
+              int mhz = static_cast<int>(data.cpu_core_clocks_mhz[static_cast<size_t>(k)]);
+              if (mhz <= 0) mhz = data.cpu_clock_mhz;
+              std::snprintf(sv.number, sizeof(sv.number), "%d", mhz);
+              std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
+              sv.color = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+            }
+            added->values.try_push_back(sv);
+          }
+        }
+      }
+      continue;
+    }
+
     GroupCategory cat = get_metric_category(m);
     MetricGroup* target = nullptr;
     for (auto& item : list.items) {
-      if (item.category == cat) {
+      if (item.category == cat && std::strcmp(item.label, get_category_label(cat)) == 0) {
         target = &item;
         break;
       }
@@ -375,14 +411,14 @@ void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
   ImGui::Dummy(sz);
 }
 
-// Draws a single metric item with dimmed prefix/unit and bright number so values never blend
-// together
+// Draws a single metric item with dimmed (or full-brightness) prefix/unit and bright number
 void draw_styled_metric_item(const StyledValue& sv, const HudConfig& cfg, ImU32 muted_col) {
   float tight_gap = 2.0f * (cfg.font_size_px / 20.0f);
   bool has_prev = false;
+  ImU32 label_col = cfg.dim_labels_enabled ? muted_col : sv.color;
 
   if (sv.prefix[0] != '\0') {
-    draw_crisp_text(sv.prefix, muted_col, cfg);
+    draw_crisp_text(sv.prefix, label_col, cfg);
     has_prev = true;
   }
   if (sv.number[0] != '\0') {
@@ -392,7 +428,7 @@ void draw_styled_metric_item(const StyledValue& sv, const HudConfig& cfg, ImU32 
   }
   if (sv.unit[0] != '\0') {
     if (has_prev) ImGui::SameLine(0.0f, 1.5f);
-    draw_crisp_text(sv.unit, muted_col, cfg);
+    draw_crisp_text(sv.unit, label_col, cfg);
   }
 }
 
@@ -593,25 +629,25 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
       pos = ImVec2(cfg.margin_x, cfg.margin_y);
       pivot = ImVec2(0.0f, 0.0f);
       break;
+    case LayoutPosition::TopCenter:
+      pos = ImVec2(display_width * 0.5f, cfg.margin_y);
+      pivot = ImVec2(0.5f, 0.0f);
+      break;
     case LayoutPosition::TopRight:
       pos = ImVec2(display_width - cfg.margin_x, cfg.margin_y);
       pivot = ImVec2(1.0f, 0.0f);
-      break;
-    case LayoutPosition::CenterTop:
-      pos = ImVec2(display_width * 0.5f, cfg.margin_y);
-      pivot = ImVec2(0.5f, 0.0f);
       break;
     case LayoutPosition::BottomLeft:
       pos = ImVec2(cfg.margin_x, display_height - cfg.margin_y);
       pivot = ImVec2(0.0f, 1.0f);
       break;
+    case LayoutPosition::BottomCenter:
+      pos = ImVec2(display_width * 0.5f, display_height - cfg.margin_y);
+      pivot = ImVec2(0.5f, 1.0f);
+      break;
     case LayoutPosition::BottomRight:
       pos = ImVec2(display_width - cfg.margin_x, display_height - cfg.margin_y);
       pivot = ImVec2(1.0f, 1.0f);
-      break;
-    case LayoutPosition::CenterBottom:
-      pos = ImVec2(display_width * 0.5f, display_height - cfg.margin_y);
-      pivot = ImVec2(0.5f, 1.0f);
       break;
   }
 

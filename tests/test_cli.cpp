@@ -3051,6 +3051,52 @@ void run_all_devices_and_features_suite() {
                                  : "Failed: Missing dedicated Experimental menu item or #if "
                                    "FPSHUD_ENABLE_EXPERIMENTAL guard");
 
+  // 5.0.5 GUI Live Previews, New Sensors, Dim Toggle, Recorder Lock, and Keybind UI Invariant
+  bool gui_overlay_enhancements_ok = false;
+  if (!rroot.empty()) {
+    std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+    std::string ovl_src = read_text_file(rroot / "src" / "ui" / "overlay_ui.cpp");
+
+    // 1. draw_metric_checkbox_row uses SetCursorPosX after SameLine() so Col 2 (GPU/RAM) previews
+    // are not clipped
+    bool col2_preview_fixed =
+        (gui_src.find("ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - txt_w") !=
+         std::string::npos);
+    // 2. Layout order Top-Left, Top-Center, Top-Right
+    bool layout_order_ok = (gui_src.find("\"Top-Left\"") != std::string::npos &&
+                            gui_src.find("\"Top-Center\"") != std::string::npos &&
+                            gui_src.find("\"Top-Right\"") != std::string::npos);
+    // 3. Dedicated Text Opacity slider + Dim Labels toggle + Recorder Lock (BeginDisabled(is_rec))
+    bool text_controls_ok = (gui_src.find("Text Opacity") != std::string::npos &&
+                             gui_src.find("dim_labels_enabled") != std::string::npos &&
+                             gui_src.find("BeginDisabled(is_rec)") != std::string::npos);
+    // 4. Interactive Keybind Capture UI & new sensor checkboxes
+    bool keybind_and_sensors_ok =
+        (gui_src.find("start_keybind_capture") != std::string::npos &&
+         gui_src.find("MetricType::GpuVramClock") != std::string::npos &&
+         gui_src.find("MetricType::CpuAllCoreLoad") != std::string::npos &&
+         gui_src.find("MetricType::CpuAllCoreClock") != std::string::npos &&
+         gui_src.find("MetricType::GpuModel") != std::string::npos &&
+         gui_src.find("MetricType::CpuModel") != std::string::npos);
+    // 5. Overlay UI handles dim_labels_enabled, GpuVramClock (gpu_vram_clock_mhz), CpuAllCoreLoad,
+    // CpuAllCoreClock, GpuModel, CpuModel
+    bool ovl_ok = (ovl_src.find("cfg.dim_labels_enabled") != std::string::npos &&
+                   ovl_src.find("gpu_vram_clock_mhz") != std::string::npos &&
+                   ovl_src.find("C.LOAD") != std::string::npos &&
+                   ovl_src.find("C.CLK") != std::string::npos &&
+                   ovl_src.find("LayoutPosition::TopCenter") != std::string::npos);
+
+    gui_overlay_enhancements_ok = col2_preview_fixed && layout_order_ok && text_controls_ok &&
+                                  keybind_and_sensors_ok && ovl_ok;
+  }
+  check_cond(
+      gui_overlay_enhancements_ok,
+      "5.0.5 GUI Live Previews, New Sensors, Dim Toggle, Recorder Lock & Keybind UI",
+      gui_overlay_enhancements_ok
+          ? "Verified GPU/RAM preview alignment, VRAM Clock, All-Core CPU, SYS models, Dim Toggle, "
+            "Recorder Lock & Keybind UI"
+          : "Failed: Missing GUI/Overlay UI enhancements in gui_menu.cpp or overlay_ui.cpp");
+
   // 5.1 High-Frequency Memory Allocation & Stress (Leak Check)
   bool stress_ok = true;
   {
