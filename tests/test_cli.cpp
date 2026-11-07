@@ -1561,6 +1561,24 @@ void run_elf_and_layer_abi_suite() {
           fpshud_in_content.find("Platypus") != std::string::npos && sec6_has_cve) {
         setup_security_notice_ok = true;
       }
+
+      std::string readme_en = read_text_file(repo_root / "README.md");
+      std::string readme_id = read_text_file(repo_root / "README.id.md");
+      bool readme_parity_ok = (readme_en.find("24 sensors") == std::string::npos &&
+                               readme_en.find("24 Live") == std::string::npos &&
+                               readme_en.find("24 Sensors") == std::string::npos &&
+                               readme_en.find("25 metrics") == std::string::npos &&
+                               readme_en.find("src/main.cpp") == std::string::npos &&
+                               readme_en.find("Instant Replay") != std::string::npos &&
+                               readme_en.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
+                               readme_en.find(".webm") != std::string::npos &&
+                               readme_id.find("24 sensor") == std::string::npos &&
+                               readme_id.find("24 Sensor") == std::string::npos &&
+                               readme_id.find("src/main.cpp") == std::string::npos &&
+                               readme_id.find("Instant Replay") != std::string::npos &&
+                               readme_id.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
+                               readme_id.find(".webm") != std::string::npos);
+      setup_security_notice_ok = setup_security_notice_ok && readme_parity_ok;
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;
@@ -1796,15 +1814,14 @@ void run_all_devices_and_features_suite() {
     if (!rroot.empty()) {
       std::string cfg_hpp = read_text_file(rroot / "src" / "core" / "config.hpp");
       std::string cfg_cpp = read_text_file(rroot / "src" / "core" / "config.cpp");
-      dead_cfg_fns_removed =
-          (cfg_hpp.find("gui_keybind_name") == std::string::npos &&
-           cfg_hpp.find("hud_keybind_name") == std::string::npos &&
-           cfg_hpp.find("bench_keybind_name") == std::string::npos &&
-           cfg_hpp.find("record_keybind_name") == std::string::npos &&
-           cfg_hpp.find("metric_name(") == std::string::npos &&
-           cfg_hpp.find("background_name(") == std::string::npos &&
-           cfg_hpp.find("font_family_name(") == std::string::npos &&
-           cfg_cpp.find("LayoutPosition::CenterTop") == std::string::npos);
+      dead_cfg_fns_removed = (cfg_hpp.find("gui_keybind_name") == std::string::npos &&
+                              cfg_hpp.find("hud_keybind_name") == std::string::npos &&
+                              cfg_hpp.find("bench_keybind_name") == std::string::npos &&
+                              cfg_hpp.find("record_keybind_name") == std::string::npos &&
+                              cfg_hpp.find("metric_name(") == std::string::npos &&
+                              cfg_hpp.find("background_name(") == std::string::npos &&
+                              cfg_hpp.find("font_family_name(") == std::string::npos &&
+                              cfg_cpp.find("LayoutPosition::CenterTop") == std::string::npos);
     }
     bool adv_ok = (test_cfg.metrics.size() == kTotalMetricCount && kTotalMetricCount == 31 &&
                    test_cfg.active_preset == "advance" &&
@@ -1939,8 +1956,8 @@ void run_all_devices_and_features_suite() {
     off_cfg.record_adaptive_vfr = false;
     auto t0 = std::chrono::steady_clock::time_point{};
     auto t1 = t0 + std::chrono::milliseconds(100);
-    auto t2 = t1 + std::chrono::milliseconds(2);   // 2ms elapsed (< 90% of 8.33ms @ 120 FPS)
-    auto t3 = t1 + std::chrono::milliseconds(9);   // 9ms elapsed (>= 90% of 8.33ms @ 120 FPS)
+    auto t2 = t1 + std::chrono::milliseconds(2);  // 2ms elapsed (< 90% of 8.33ms @ 120 FPS)
+    auto t3 = t1 + std::chrono::milliseconds(9);  // 9ms elapsed (>= 90% of 8.33ms @ 120 FPS)
     bool vfr_logic_ok =
         !fpshud::experimental::AdaptiveVfrController::is_vfr_active(off_cfg) &&
         fpshud::experimental::AdaptiveVfrController::is_vfr_active(save_cfg) &&
@@ -1949,8 +1966,9 @@ void run_all_devices_and_features_suite() {
         fpshud::experimental::AdaptiveVfrController::should_capture_frame(t3, t1, 120);
 
     [&]<typename T = BenchmarkSummary>() {
-      static_assert(!requires(T bs) { bs.saved_csv_path; },
-                    "saved_csv_path must be removed from BenchmarkSummary");
+      static_assert(
+          !requires(T bs) { bs.saved_csv_path; },
+          "saved_csv_path must be removed from BenchmarkSummary");
     }();
 
     fs::path rroot = find_repo_root();
@@ -2023,11 +2041,11 @@ void run_all_devices_and_features_suite() {
     bool f10_screenshot_ok =
         (!f10_cfg.gui_open && RecorderController::instance().consume_screenshot_request());
 
-    check_cond(single_cap_ok && combo_cap_ok && combo_trigger_ok && esc_cancel_ok &&
-                   f10_screenshot_ok,
-               "0.5 Interactive 1-or-2-Key Shortcut Capture & Combo Matching",
-               "Verified 1-key capture (F8), 2-key capture (Alt + F), combo trigger, ESC "
-               "cancellation, and F10 screenshot dispatch");
+    check_cond(
+        single_cap_ok && combo_cap_ok && combo_trigger_ok && esc_cancel_ok && f10_screenshot_ok,
+        "0.5 Interactive 1-or-2-Key Shortcut Capture & Combo Matching",
+        "Verified 1-key capture (F8), 2-key capture (Alt + F), combo trigger, ESC "
+        "cancellation, and F10 screenshot dispatch");
   }
 
   const fs::path base = "/tmp/fpshud_mock_hw";

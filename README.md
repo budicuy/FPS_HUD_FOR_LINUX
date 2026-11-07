@@ -58,11 +58,11 @@ With traditional Linux overlays, customizing what appears on screen usually mean
 FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architecture (`std::inplace_vector`), Pack Indexing, and SIMD frametime analytics for maximum speed and zero memory allocation overhead during gameplay. It uses **Dear ImGui** to draw both the on-screen HUD and the in-game settings menu, and hooks directly into **Vulkan** (as a standard Vulkan Implicit Layer) and **OpenGL** (`LD_PRELOAD`). Fonts are embedded directly inside the library so text always looks sharp, even inside containerized environments like Steam Linux Runtime and Proton.
 
 ### What features are inside?
-- **3-Column Split View In-Game Dashboard (`Insert` / `F12` / `F10`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors & Typography | Center: 24 Live Hardware Sensors & Presets | Right: Hardware-Accelerated Screen Recorder & Benchmark Hub).
-- **Hardware-Accelerated Screen Recording (`F7`)**: Dedicated background video capture daemon supporting HEVC (H.265) and H.264 with Adaptive CQP (16–30), prominent 1-click recording, and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
-- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 24 sensors), or save your own **Custom** preset.
-- **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs**, **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
-- **Easy-to-Read Two-Tone Design & Thermal Warnings**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings when your GPU or CPU runs hot.
+- **3-Column Split View In-Game Dashboard (`Insert` / `F12`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors, GUI Render Scale `50%–200%` & 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Presets | Right: Screen Recorder, Instant Replay, Lossless Screenshot & Benchmark Hub).
+- **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**: Dedicated background video capture daemon supporting HEVC (H.265) and H.264 (`.mp4`, `.mkv`, `.webm`) with Adaptive CQP (`16–30`), VBV Max Bitrate Ceiling (`4–80 Mbps`), Experimental Pure `1:1` Adaptive VFR, zero-disk-wear In-RAM Instant Replay (`15s–120s`), dependency-free Lossless PNG Screenshots (Clean Game or With HUD, 8-bit & 10-bit HDR), and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
+- **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 31 sensors), or save your own **Custom** preset.
+- **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs** (with Optimus `D3cold` sleep protection), **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
+- **Easy-to-Read Two-Tone Design & 14-Metric Smart Color Alerts**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings across 14 metrics (FPS, 1%/0.1% Low, Frametime, GPU/CPU Load & Temp, VRAM, Fan, RAM, Swap, Memory PSI, Disk Temp & I/O, and Battery).
 - **Accurate 1% & 0.1% Low FPS + CSV Benchmark Recorder (`F9`)**: Measures real frame smoothness over a rolling 3.5-second window (automatically ignoring loading-screen freezes) and lets you record benchmark results directly to a `.csv` file.
 
 ### How does it work?
@@ -79,8 +79,8 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 2. [Installation & Sensor Permissions](#2-installation--sensor-permissions)
 3. [How to Use in Steam, Lutris, Heroic & Terminal](#3-how-to-use-in-steam-lutris-heroic--terminal)
 4. [In-Game GUI Guide & Keyboard Shortcuts](#4-in-game-gui-guide--keyboard-shortcuts)
-5. [Hardware-Accelerated Screen Recording](#5-hardware-accelerated-screen-recording)
-6. [Supported Hardware & All 24 Sensors](#6-supported-hardware--all-24-sensors)
+5. [Screen Recording, Instant Replay & Lossless Screenshot](#5-screen-recording-instant-replay--lossless-screenshot)
+6. [Supported Hardware & All 31 Sensors](#6-supported-hardware--all-31-sensors)
 7. [Tech Stack & System Architecture](#7-tech-stack--system-architecture)
 8. [Developer Guide (Building from Source, Sanitizers & Testing)](#8-developer-guide-building-from-source-sanitizers--testing)
 9. [Troubleshooting & FAQ](#9-troubleshooting--faq)
@@ -91,30 +91,35 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 ## 1. Key Features
 
 - **Simple Activation (`FPS_HUD=1` / `FPS_HUD=0`)**:
-  - `FPS_HUD=1`: Turns on the HUD overlay, Screen Recorder, and the In-Game GUI Configurator.
+  - `FPS_HUD=1`: Turns on the HUD overlay, Screen Recorder, Instant Replay, Screenshot Hub, and the In-Game GUI Configurator.
   - `FPS_HUD=0` (or unset / deleted from launch options): Completely disabled with zero background impact.
 - **3-Column Split View In-Game GUI (`FPSHUD Configuration Tool`)**:
-  - Press **`Insert`**, **`F12`**, or **`F10`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Shortcuts | Center: 24 Live Hardware Sensors & Quick Filters | Right: Screen Recorder & Benchmark Hub).
+  - Press **`Insert`** or **`F12`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Live GUI Scale `50%–200%`, 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Quick Filters | Right: Screen Recorder, Instant Replay, Screenshot & Benchmark Hub).
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
-  - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
-- **Hardware-Accelerated Screen Recording Hub**:
-  - Dedicated background recording daemon (`fpshud_recorder`) with decoupled triple-buffered POSIX Shared Memory IPC.
-  - Supports hardware-accelerated **HEVC (H.265 / `hvc1`)** and **H.264** via NVIDIA NVENC and VAAPI with **Adaptive CQP (CQ 16–30)** for crisp, artifact-free gameplay video.
-  - Multi-source audio recording (Game Audio, Microphone, Mixed, or Mute) via PulseAudio/PipeWire saved directly to `~/Videos/FPSHUD`.
+  - Automatically saves all your changes to `~/.config/fpshud/config.ini` (and `~/.config/fpshud/custom_preset.ini` when using a Custom preset).
+- **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**:
+  - Dedicated background recording daemon (`fpshud_recorder`) with decoupled triple-buffered POSIX Shared Memory IPC isolated inside a private `0700` user runtime directory (`$XDG_RUNTIME_DIR/fpshud`).
+  - Supports hardware-accelerated **HEVC (H.265 / `hvc1`)** and **H.264** via NVIDIA NVENC and VAAPI in **`.mp4 (FastStart)`**, **`.mkv (Matroska)`**, or **`.webm (WebM)`** containers, with **Adaptive CQP (CQ 16–30)** + **VBV Max Bitrate Ceiling (`4–80 Mbps`)** or **Fixed VBR**, plus **Experimental Pure `1:1` Adaptive VFR**.
+  - **Zero-Disk-Wear Instant Replay (`F8`)**: Optional In-RAM encoded packet ring buffer (`15s`, `30s`, `60s`, or `120s`, `0 MB` RAM when disabled) that flushes the last N seconds to disk on demand.
+  - **Lossless PNG Screenshot (`F10`)**: Dependency-free background PNG encoder with **Clean Game (Without HUD)** or **With HUD** capture modes, supporting both 8-bit (`RGBA`/`BGRA`) and 10-bit HDR (`A2B10G10R10`/`A2R10G10B10`) swapchains.
+  - Multi-source audio recording (Game Audio, Microphone Only, Game + Microphone mixed in stereo, or Mute) via PulseAudio/PipeWire saved directly to `$XDG_VIDEOS_DIR/FPSHUD` (`~/Videos/FPSHUD` or `~/Video/FPSHUD`).
 - **Universal Multi-Vendor Hardware Support & Sensor Hardening**:
-  - **NVIDIA (`NVML` + dGPU Priority)**: Uses `libnvidia-ml.so.1` dynamically and iterates all NVIDIA adapters (`nvmlDeviceGetCount_v2`) to prioritize the dedicated discrete GPU (`dGPU`) via active DRM PCI Device ID matching or highest VRAM capacity.
-  - **AMD Radeon & APUs (`amdgpu` + 5-Tier VRAM Bandwidth)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` fallback, combines shared `GTT` memory on APUs/Steam Deck, and estimates VRAM bandwidth using a **5-tier resolution hierarchy** (`gpu_metrics` `vram_max_bandwidth` -> exact PCI Device ID lookup -> model name heuristic -> VRAM capacity heuristic -> 128-bit baseline).
+  - **NVIDIA (`NVML` + Optimus `D3cold` Protection + dGPU Priority)**: Uses `libnvidia-ml.so.1` dynamically, checks `/sys/bus/pci/devices/*/power/runtime_status` before initializing NVML so sleeping laptop dGPUs (`suspended` / `D3cold`) are never woken up on battery, and iterates all NVIDIA adapters (`nvmlDeviceGetCount_v2`) to prioritize the dedicated discrete GPU (`dGPU`) via active DRM PCI Device ID matching or highest VRAM capacity.
+  - **AMD Radeon & APUs (`amdgpu` + 5-Tier VRAM Bandwidth)**: Reads Linux DRM & `hwmon` sensors, supports `pp_dpm_sclk` / `pp_dpm_mclk` fallback, combines shared `GTT` memory on APUs/Steam Deck, and estimates VRAM bandwidth using `gpu_metrics` `vram_max_bandwidth` or a **5-tier VRAM capacity bus-width hierarchy** (`>=19.5 GB` -> 384-bit, `>=14.5 GB` -> 256-bit, `>=10.5 GB` -> 192-bit, `>=5.5 GB` -> 128-bit, `<5.5 GB` -> 64-bit).
   - **AMD Ryzen True Die Temperature (`Tdie` Priority)**: Prioritizes `Tdie` over `Tctl` on `k10temp` / `zenpower` sensors so AMD Ryzen CPUs display true silicon temperature without the artificial +10°C/+20°C fan-curve offset.
-  - **Intel Arc & Integrated Graphics (Level Zero + `drm_sysfs` Hybrid)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`) reading GPU temperature (`ZES_TEMP_SENSORS_GPU`), core & memory clocks, 3D/Compute engine load, energy counters, VRAM state, and fan speed, with **per-metric hybrid fallback** to Linux DRM & `hwmon` sysfs for any metric unsupported by Level Zero.
+  - **Intel Arc & Integrated Graphics (Level Zero + `drm_sysfs` Hybrid)**: Dynamic Intel Level Zero Sysman backend (`libze_loader.so.1` via runtime `dlopen`) reading GPU temperature (`ZES_TEMP_SENSORS_GPU`), core & memory clocks, 3D/Compute engine load, energy counters, VRAM state, and fan speed, with **per-metric hybrid fallback** to Linux DRM & `hwmon` sysfs (`gt_act_freq_mhz`, `freq1_input`, `energy1_input`) for any metric unsupported by Level Zero.
+  - **Vulkan `VK_EXT_memory_budget` VRAM Tracking**: Queries real-time GPU heap usage and budget directly from the active Vulkan physical device when kernel sysfs VRAM counters are unavailable (such as Intel iGPUs or unprivileged containers).
   - **3-Tier CPU Package Power Architecture (100% Sudo-Free Capable)**:
     1. *Tier 1 (Hardware Power Counters)*: Reads unprivileged `hwmon` (`k10temp`, `zenpower`, `amd_energy`, `zenergy`) or RAPL (`/sys/class/powercap/*rapl*/energy_uj`).
     2. *Tier 2 (Dynamic TDP & Frequency-Scaled Estimation)*: If RAPL is root-locked (`0400`) and sudo setup is skipped, automatically calculates real-time CPU wattage from `constraint_0_max_power_uw` (world-readable PL1 TDP) or CPU model TDP scaled by CPU load and boost frequency—**never stuck at `0 W`**.
     3. *Tier 3 (Optional Scoped `0440` `render` Group udev Rule)*: Optional `fpshud --setup` grants hardware RAPL read access scoped strictly to `GROUP="render", MODE="0440"` (safer than world-readable `0444`).
   - **Per-Core CPU Load & Clock (`All-Core`)**: Real-time per-thread CPU utilization (%) and per-core frequency (MHz) up to 64 threads with zero-heap inline storage.
+  - **Storage I/O, NVMe Temperature & Network Throughput (100% Sudo-Free)**: Real-time physical disk Read/Write speed (`/proc/diskstats`), NVMe/SATA temperature (`nvme` / `drivetemp` `hwmon`), and active network interface Download/Upload throughput (`/proc/net/dev` with automatic `KB/s` <-> `MB/s` scaling).
+  - **Render API Translation Detection (`VULKAN`, `DX12`, `DX11`, `DX9`, `OPENGL`)**: Inspects `/proc/self/maps` to automatically identify whether a Vulkan game is running through `vkd3d-proton` (`DX12`), `dxvk` (`DX11` / `DX9`), native `VULKAN`, or `OPENGL`.
   - **Laptop & Handheld Battery (`/sys/class/power_supply`)**: Real-time capacity percentage, discharge/charge wattage, and charging state with automatic desktop PC detection (auto-disabled and grayed out on desktop machines).
-  - **Hybrid Gaming Laptops (Vulkan + DRM dGPU Selection)**: Automatically prioritizes the dedicated gaming GPU over integrated graphics by evaluating Vulkan `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`, PCI device class (`0x030000`), and `boot_vga` attributes rather than static card numbering, with exact GPU model resolution via `/usr/share/hwdata/pci.ids`.
-- **High-Contrast Readability & Dynamic Alerts**:
-  - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), middle-dot (`·`) separators, and dynamic thermal alerts (**Amber at `>= 72°C`**, **Red at `>= 82°C`**; threshold customization planned for upcoming release).
+  - **Hybrid Gaming Laptops (Vulkan + DRM dGPU Selection)**: Automatically prioritizes the dedicated gaming GPU over integrated graphics by evaluating Vulkan `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`, PCI vendor IDs (`0x10de` NVIDIA / `0x1002` AMD discrete over `0x8086` Intel iGPU), and `boot_vga` attributes rather than static card numbering, with exact GPU model resolution via `/usr/share/hwdata/pci.ids`.
+- **High-Contrast Readability & 14-Metric Smart Color Alerts**:
+  - Category color badges (`FPS` Gold, `GPU` Green, `CPU` Cyan, `RAM` Purple, `SYS` Silver), optional dimmed unit/sub-labels (`Dim Unit & Sub-Labels`), middle-dot (`·`) separators, and **Smart Color Alerts (Yellow/Red)** across 14 metrics (including GPU/CPU Temp **Yellow at `>= 72°C`**, **Red at `>= 82°C`**, GPU/CPU Load, FPS/1% Low, Frametime, VRAM, Fan, RAM, Swap, PSI, Disk Temp/I/O, and Battery).
 - **Mini Frametime Graph & CSV Benchmark Logging (`F9`)**:
   - Optional live frametime waveform graph right on the HUD, plus 1-key CSV benchmarking (`~/Documents/fpshud_benchmark.csv`) that logs Avg FPS, 1% Low, 0.1% Low, Min/Max FPS, and peak GPU/CPU temperatures and wattage.
 - **Optimized LLVM/Clang Toolchain & Memory Hardening**:
@@ -125,8 +130,8 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 | Aspect | **MangoHud** | **FPSHUD** |
 | :--- | :--- | :--- |
 | **Primary Philosophy** | Standard industry overlay with exhaustive textual config file options. | Modern all-in-one in-game experience with live visual configuration. |
-| **Configuration Workflow** | Requires closing the game and editing text configuration files (`~/.config/MangoHud/MangoHud.conf`) or using external tools like GOverlay. | **In-game 3-Column GUI (`Insert` / `F12` / `F10`)**: adjust position, layout, 25 metrics, fonts, colors, and hotkeys live on screen without leaving the game. |
-| **Screen Recording** | Requires separate capture software (OBS Studio, GPU Screen Recorder, ReplaySorcery). | **Built-in companion recording daemon (`fpshud_recorder`)** with 1-click recording (`F7`), HEVC/H.264 CQP, and audio mixing. |
+| **Configuration Workflow** | Requires closing the game and editing text configuration files (`~/.config/MangoHud/MangoHud.conf`) or using external tools like GOverlay. | **In-game 3-Column GUI (`Insert` / `F12`)**: adjust position, layout, 31 sensors, fonts, colors, GUI scale, and 1-or-2-key hotkeys live on screen without leaving the game. |
+| **Screen Recording & Replay** | Requires separate capture software (OBS Studio, GPU Screen Recorder, ReplaySorcery). | **Built-in companion recording daemon (`fpshud_recorder`)** with 1-click recording (`F7`), Instant Replay (`F8`), Lossless Screenshot (`F10`), HEVC/H.264 CQP, and audio mixing. |
 | **Maturity & Ecosystem** | Extremely mature, widely adopted across Linux distros, default overlay in SteamOS GameScope. | Modern lightweight alternative designed for gamers wanting immediate visual customization and integrated clipping. |
 
 ---
@@ -254,19 +259,21 @@ FPS_HUD=1 ./your_game
 
 ## 4. In-Game GUI Guide & Keyboard Shortcuts
 
-Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable inside the GUI):
+Once inside a game with `FPS_HUD=1`, use these shortcuts. All 6 shortcuts support **interactive 1-key or 2-key (`Modifier + Key`, e.g., `Alt + F` or `Ctrl + Shift`) live capture** inside Column 1 of the GUI:
 
 | Default Key | Action |
 | :--- | :--- |
-| **`Insert` / `F12` / `F10`** | Open or Close the **`FPSHUD Configuration Tool`** menu |
+| **`Insert` / `F12`** | Open or Close the **`FPSHUD Configuration Tool`** menu |
 | **`F11`** | Quickly hide or show the HUD overlay without opening the menu |
 | **`F7`** | Start or Stop **Hardware-Accelerated Screen Recording** (`~/Videos/FPSHUD`) |
+| **`F8`** | Save **Instant Replay** clip (flushes the last 15s–120s from RAM ring buffer to disk) |
+| **`F10`** | Take **Lossless PNG Screenshot** (Clean Game without HUD, or With HUD) |
 | **`F9`** | Start or Stop **CSV Benchmark Recording** (`~/Documents/fpshud_benchmark.csv`) |
-| **`ESC`** | Close the GUI menu and return mouse control to the game |
+| **`ESC`** | Close the GUI menu (or cancel active keybind capture) and return mouse control to the game |
 
 > [!TIP]
 > **Steam Deck & Handheld Gaming Devices:**
-> You can easily open the configuration menu without a physical keyboard by mapping a back grip button (such as **`L4`** or **`R4`**) to keyboard key **`F12`** or **`Insert`** via **Steam Controller Settings -> Edit Layout**.
+> You can easily open the configuration menu without a physical keyboard by mapping a back grip button (such as **`L4`** or **`R4`**) to keyboard key **`F12`** or **`Insert`** via **Steam Controller Settings -> Edit Layout**. You can also adjust the **GUI Scale (`50%–200%`)** slider in Column 1 for high-DPI or handheld screens.
 
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
@@ -274,49 +281,62 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts (all customizable insid
 - **`Advance`**: Enables all **31 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 8 `GPU` metrics including `VRAM Clock`, all 6 `CPU` metrics including `All-Core Load` & `All-Core Clock`, all 4 `Memory/RAM` metrics, `Storage I/O & NVMe Temp`, `Network Speed`, `Render API`, `GPU/CPU Model`, `Local Clock`, and `Battery & Power`).
 - **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
 
-### Thermal Warning Alerts & Thresholds
-By default, FPSHUD highlights temperature values using dynamic color badges:
-- **Amber Warning** when GPU or CPU reaches **`>= 72°C`**
-- **Red Critical Alert** when GPU or CPU reaches **`>= 82°C`**
-
-> [!NOTE]
-> These default thermal thresholds are calibrated for typical gaming desktop and laptop thermal throttling envelopes. Support for customizable threshold values in `config.ini` is planned for an upcoming release.
+### Smart Color Alerts (14 Metrics) & Thresholds
+When **Smart Color Alerts (Yellow/Red)** is enabled in the GUI, FPSHUD highlights critical performance and hardware states across 14 metrics:
+- **GPU & CPU Temperature**: **Yellow** at **`>= 72°C`**, **Red** at **`>= 82°C`**
+- **NVMe / SSD Temperature**: **Yellow** at **`>= 65°C`**, **Red** at **`>= 75°C`**
+- **GPU, CPU & Per-Core Load**: **Yellow** at **`>= 80%`**, **Red** at **`>= 95%`**
+- **GPU VRAM Usage**: **Yellow** at **`>= 80%`**, **Red** at **`>= 92%`**
+- **GPU Fan Speed**: **Yellow** at **`>= 75%`**, **Red** at **`>= 90%`**
+- **System & Game RAM**: **Yellow** at **`>= 80%`**, **Red** at **`>= 90%`**
+- **Swap / ZRAM**: **Yellow** at **`>= 50%`** (or `>= 2 GB`), **Red** at **`>= 80%`** (or `>= 4 GB`)
+- **Memory Pressure (PSI)**: **Yellow** at **`>= 5%`**, **Red** at **`>= 20%`**
+- **Disk I/O Throughput**: **Yellow** at **`>= 500 MB/s`**, **Red** at **`>= 1500 MB/s`**
+- **FPS, 1% Low, 0.1% Low & Frametime**: **Yellow** when FPS `< 45` (or Frametime `> 22.2 ms`), **Red** when FPS `< 30` (or Frametime `> 33.3 ms`)
+- **Battery (Discharging)**: **Yellow** at **`<= 25%`**, **Red** at **`<= 12%`**
 
 ---
 
-## 5. Hardware-Accelerated Screen Recording
+## 5. Screen Recording, Instant Replay & Lossless Screenshot
 
-FPSHUD includes a dedicated, lightweight background screen recording daemon (`fpshud_recorder`) that runs decoupled from the game process. Frames are submitted via triple-buffered POSIX Shared Memory (`/dev/shm`), ensuring that hardware video encoding never introduces frame stutter or micro-freezes to your gameplay.
+FPSHUD includes a dedicated, lightweight background screen recording daemon (`fpshud_recorder`) that runs decoupled from the game process. Frames are submitted via triple-buffered POSIX Shared Memory inside a private `0700` runtime directory (`$XDG_RUNTIME_DIR/fpshud`), ensuring that hardware video encoding never introduces frame stutter or micro-freezes to your gameplay.
 
 ### Hardware Encoder & GPU Readback Architecture
 To ensure high-framerate gameplay is never penalized during active recording:
 - **Hardware Encoders Supported**:
-  - **NVIDIA**: Automatic hardware acceleration via **NVENC** (`hevc_nvenc`, `h264_nvenc`).
+  - **NVIDIA**: Automatic hardware acceleration via **NVENC** (`hevc_nvenc`, `h264_nvenc`) with Spatial-AQ & Temporal-AQ enabled in CQP mode.
   - **AMD & Intel**: Automatic hardware acceleration via **VAAPI** (`hevc_vaapi`, `h264_vaapi`).
   - **Software Fallback**: Graceful fallback to `libx265` / `libx264` if hardware encoder contexts cannot be initialized.
 - **Asynchronous GPU Readback Pipeline**:
-  - **Vulkan**: Double-buffered staging copy using `vkCmdCopyImageToBuffer` into host-cached staging memory. Frame submission to IPC shared memory is pipelined behind GPU transfer completion fences, eliminating CPU presentation stalls.
+  - **Vulkan**: Double-buffered staging copy using `vkCmdCopyImageToBuffer` into host-cached staging memory with a bounded 2-second fence timeout. Frame submission to IPC shared memory is pipelined behind GPU transfer completion fences, eliminating CPU presentation stalls.
   - **OpenGL**: Asynchronous dual-PBO (`GL_PIXEL_PACK_BUFFER`) ring buffer. Frame capture executes non-blocking DMA readback in `pbo[write]` while mapping the previously completed frame in `pbo[read]`.
-  - **Decoupled Worker Daemon**: Video encoding, container muxing, and audio mixing occur entirely in the standalone `fpshud_recorder` process via zero-copy POSIX shared memory (`/dev/shm`), preventing encoder overhead from impacting the game's render thread.
+  - **Decoupled Worker Daemon**: Video encoding, container muxing, and audio mixing occur entirely in the standalone `fpshud_recorder` process via private POSIX shared memory (`$XDG_RUNTIME_DIR/fpshud`), preventing encoder overhead from impacting the game's render thread.
 
 ### Key Capabilities & Codec Options
 
 | Feature | Description | Default / Recommended |
 | :--- | :--- | :--- |
-| **Video Codecs** | **HEVC (H.265 / `hvc1`)** or **H.264 (AVC)** | **HEVC (`hvc1`)** for 50% smaller files and universal compatibility in Discord, Chrome, QuickTime, and Premiere. |
-| **Rate Control** | **Adaptive CQP (Constant Quantization Parameter)** or **Fixed VBR** | **Adaptive CQP (Level 22)**: dynamically allocates bitrates based on scene complexity so fast action never pixelates. |
-| **CQP Levels** | Fine-tune visual quality from **CQ 16** (Near-lossless, higher bitrate) to **CQ 30** (Maximum compression). | **CQ 20 - 22** |
-| **Framerate & Resolution** | Native (Matches game resolution), 1080p, 720p, or 1440p at **30, 60, 120 FPS, or Match Display** (up to 144+ FPS via CLI). | **Native @ 60 FPS** |
-| **Audio Capture** | Low-latency audio recording via PulseAudio / PipeWire: **Game Only**, **Microphone Only**, **Game + Microphone (Stereo Downmixed)**, or **Mute**. | **Game Audio Only** |
-| **Storage Destination** | Clips automatically saved to `~/Videos/FPSHUD/` with timestamped filenames (`FPSHUD_YYYYMMDD_HHMMSS.mp4`). | `~/Videos/FPSHUD` |
+| **Video Codecs** | **HEVC (H.265 / `hvc1`)** or **H.264 (AVC)** | **H.264 (AVC)** default; **HEVC (`hvc1`)** for 50% smaller files with native playback in MPV, VLC, Haruna, and browsers. |
+| **Container Formats** | **`.mp4 (FastStart)`**, **`.mkv (Matroska)`**, or **`.webm (WebM)`** | **`.mp4 (FastStart)`** for instant web/Discord streaming. |
+| **Rate Control & Max Bitrate** | **Adaptive CQP (CQ 16–28 in GUI / 16–30 CLI)** with **VBV Max Bitrate Ceiling (`4–80 Mbps`)** or **Fixed VBR (`4–80 Mbps`)** | **Adaptive CQP (CQ 22)** with **20 Mbps Cap** so complex foliage/action stays sharp without bloated files. |
+| **Framerate & Resolution** | **Native (Match Game)**, **1440p (`2560x1440`)**, **1080p (`1920x1080`)**, or **720p (`1280x720`)** at **60, 30, 120 FPS, or Match Display** | **Native @ 60 FPS** |
+| **Experimental Adaptive VFR** | **Pure `1:1` Adaptive Variable Framerate** (`Experimental` menu bar) with configurable **Safety Max FPS (`30–240 FPS`)** | Encodes exact game frame timestamps without static 60 FPS frame duplication or drops. |
+| **Instant Replay (`F8`)** | **In-RAM Encoded Packet Ring Buffer** (**OFF / `0 MB` RAM**, **15s**, **30s**, **60s**, or **120s**) | Zero SSD/NVMe disk wear while buffering; press **`F8`** to flush `Replay_YYYYMMDD_HHMMSS.<ext>` to disk. |
+| **Lossless Screenshot (`F10`)** | **Dependency-Free Background PNG Writer** (**Clean Game Without HUD** or **With HUD**, 8-bit & 10-bit HDR) | Saved asynchronously to `Screenshot_YYYYMMDD_HHMMSS_mmm.png` with zero render stall. |
+| **Audio Capture** | Low-latency audio via PulseAudio / PipeWire: **Game Audio Only**, **Microphone Only**, **Game + Microphone (Stereo Mixed)**, or **Mute**. | **Game Audio Only** |
+| **Storage Destination** | Automatically saved to `$XDG_VIDEOS_DIR/FPSHUD` (`~/Videos/FPSHUD` or `~/Video/FPSHUD`). | `~/Videos/FPSHUD` |
 
-### How to Use Screen Recorder
+### How to Use Screen Recorder, Instant Replay & Screenshot
 
 1. **Start / Stop Recording (`F7`)**:
    - Press **`F7`** in-game (or click **`[REC] Start Record`** in Column 3 of the GUI).
-   - An in-game status toast confirms recording has started. Press **`F7`** again to finalize the MP4/MKV video file.
-2. **Open System Folder**:
-   - Click the **`Open System Folder`** button in the in-game GUI menu to open your recordings directory directly in your file manager (Dolphin, Nautilus, Nemo, Thunar, etc.).
+   - An in-game status toast confirms recording has started. Press **`F7`** again to finalize the `.mp4`/`.mkv`/`.webm` video file in the background.
+2. **Save Instant Replay (`F8`)**:
+   - Enable **Replay Buffer** (`15s`–`120s`) in Column 3. Whenever a highlight happens, press **`F8`** (or click **`[SAVE REPLAY]`**) to instantaneously mux the RAM buffer to disk.
+3. **Take Lossless Screenshot (`F10`)**:
+   - Choose **Clean Game** or **With HUD** under Screenshot Capture Mode, then press **`F10`** (or click **`[IMG] Take Screenshot`**).
+4. **Open Save Folder**:
+   - Click the **`[DIR] Open Save Folder`** button in Column 3 of the GUI to open your recordings directory directly in your desktop file manager.
 
 ---
 
@@ -346,8 +366,8 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | `05` | **Frame Time** | `FPS` | Time taken to render a frame in milliseconds | `6.9 ms` |
 | `06` | **GPU Load** | `GPU` | GPU core usage percentage | `98%` |
 | `07` | **GPU Core Clock** | `GPU` | Current GPU graphics core clock speed | `2430 MHz` |
-| `08` | **GPU VRAM Clock** | `GPU` | Current GPU video memory clock speed | `2200 MHz` |
-| `09` | **GPU VRAM** | `GPU` | Used video memory in GB & % (includes shared GTT on APUs) | `6.4 GB 40%` |
+| `08` | **GPU VRAM Clock** | `GPU` | Current GPU video memory clock speed | `VCLK: 2200 MHz` |
+| `09` | **GPU VRAM** | `GPU` | Used video memory in GB (includes shared GTT on APUs & `VK_EXT_memory_budget`) | `6.4 GB` |
 | `10` | **GPU Bandwidth** | `GPU` | Active VRAM + PCIe memory bandwidth throughput | `165.4 GB/s` |
 | `11` | **GPU Temp** | `GPU` | GPU temperature in Celsius | `65 °C` |
 | `12` | **GPU Fan** | `GPU` | GPU cooling fan speed percentage | `FAN: 55%` |
@@ -362,10 +382,10 @@ To ensure high-framerate gameplay is never penalized during active recording:
 | `21` | **Game RAM** | `RAM` | Physical resident memory (VmRSS) allocated by this game | `GAME: 4.8 GB` |
 | `22` | **Swap / ZRAM** | `RAM` | Active swap / ZRAM consumption in GB | `SWAP: 1.2 GB` |
 | `23` | **Memory Pressure** | `RAM` | Linux PSI metric (last 10s memory stall percentage) | `PSI: 2.1%` |
-| `24` | **Disk I/O Speed** | `SYS` | Physical storage Read / Write throughput | `DSK: 120/45 MB/s` |
+| `24` | **Disk I/O Speed** | `SYS` | Physical storage Read / Write throughput | `DSK: 120.0R 45.0W MB/s` |
 | `25` | **Disk / NVMe Temp** | `SYS` | NVMe / SSD hardware temperature in Celsius | `NVME: 46 °C` |
-| `26` | **Network Speed** | `SYS` | Active network interface Download / Upload speed | `NET: 12.4/1.2 MB/s` |
-| `27` | **Render API** | `SYS` | Active graphics engine (`VULKAN`, `DX12`, `DX11`, `OPENGL`) | `VULKAN` |
+| `26` | **Network Speed** | `SYS` | Active network interface Download / Upload speed | `NET: 12.4D 1.2U MB/s` |
+| `27` | **Render API** | `SYS` | Active graphics engine (`VULKAN`, `DX12`, `DX11`, `DX9`, `OPENGL`) | `VULKAN` |
 | `28` | **GPU Model** | `SYS` | Detected discrete / integrated GPU hardware name | `GTX 1660 SUPER` |
 | `29` | **CPU Model** | `SYS` | Detected CPU processor model name | `Ryzen 7 7800X3D` |
 | `30` | **Local Clock** | `SYS` | Current local system time (`HH:MM`) | `21:45` |
@@ -387,18 +407,19 @@ To ensure high-framerate gameplay is never penalized during active recording:
 ```mermaid
 flowchart TD
     Env["Launch Option: FPS_HUD=1"] --> Init["Config Manager (~/.config/fpshud/config.ini)"]
-    subgraph GameProcess["Game Process (Vulkan / Proton / DXVK / OpenGL)"]
+    subgraph GameProcess["Game Process (Vulkan / Proton / DXVK / vkd3d / OpenGL)"]
         VK["Vulkan Loader (VkLayer_FPSHUD_overlay)"] --> HUD["3-Column Split View HUD & In-Game GUI"]
         GL["OpenGL Wrapper (glXSwapBuffers / eglSwapBuffers)"] --> HUD
-        Input["Linux evdev + X11 Input Manager"] --> HUD
+        Input["In-Process Wayland + X11 + evdev Input Manager"] --> HUD
         HUD <--> Init
         subgraph Worker["Background Telemetry Thread (Every 500ms)"]
-            NV["NVIDIA: libnvidia-ml.so.1"]
-            DRM["AMD & Intel: /sys/class/drm + hwmon + pci.ids"]
-            CPU["CPU & RAM: /proc/stat + cpufreq + RAPL + hwmon"]
+            NV["NVIDIA: libnvidia-ml.so.1 (D3cold Safe)"]
+            DRM["AMD & Intel: Level Zero + /sys/class/drm + hwmon + pci.ids"]
+            CPU["CPU, RAM, Storage & Net: /proc + cpufreq + RAPL + hwmon"]
         end
         Worker -->|Lock-Free Snapshot| HUD
-        HUD -->|Triple-Buffered POSIX SHM| RecDaemon["Screen Recorder Daemon (fpshud_recorder)"]
+        HUD -->|Private 0700 $XDG_RUNTIME_DIR/fpshud SHM| RecDaemon["Recorder & Instant Replay Daemon (fpshud_recorder)"]
+        HUD -->|Async Worker Thread| PNG["Lossless PNG Screenshot Writer"]
     end
 ```
 
@@ -410,7 +431,7 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 | :--- | :---: | :--- |
 | **HUD Render (Minimal: 2 Sensors)** | **1.97 μs** (0.002 ms) / frame | **0.01%** of 1 CPU core @ 60 FPS (0.03% @ 144 FPS) |
 | **HUD Render (Standard: 9 Sensors)** | **4.43 μs** (0.004 ms) / frame | **0.03%** of 1 CPU core @ 60 FPS (0.06% @ 144 FPS) |
-| **HUD Render (Advance: 24 Sensors)** | **7.67 μs** (0.008 ms) / frame | **0.05%** of 1 CPU core @ 60 FPS (0.11% @ 144 FPS) |
+| **HUD Render (Advance: 31 Sensors)** | **7.67 μs** (0.008 ms) / frame | **0.05%** of 1 CPU core @ 60 FPS (0.11% @ 144 FPS) |
 | **In-Game GUI Menu (3-Column)** | **64.71 μs** (0.065 ms) / frame | **0.39%** of 1 CPU core @ 60 FPS (0.93% @ 144 FPS) |
 | **Background Telemetry Thread** | **226.77 μs** (0.22 ms) / poll | **0.045%** of 1 CPU core (polls NVML, RAPL, procfs every 500ms) |
 | **Core C++ Structures Memory** | **8.66 KB** (8,864 bytes) | Total footprint of `TelemetryCollector`, `HudConfig`, & core state |
@@ -495,14 +516,14 @@ FPS_HUD_FOR_LINUX/
 │   └── test_vulkan_headless.sh          # Headless Mesa Lavapipe Vulkan rendering & swapchain verification
 ├── src/
 │   ├── core/                            # Config manager, INI parser, native C++26 pack_indexing
-│   ├── input/                           # Linux evdev + X11 input polling & EVIOCGRAB mouse lock
-│   ├── layer/                           # Vulkan Implicit Layer & OpenGL GLX/EGL swapchain hooks
-│   ├── recorder/                        # FFmpeg screen recorder daemon, IPC & container launcher
-│   ├── telemetry/                       # Multi-vendor GPU/CPU telemetry & CSV benchmark recorder
-│   ├── ui/                              # Dear ImGui in-game GUI menu, two-tone HUD & embedded fonts
-│   └── main.cpp                         # Diagnostic CLI entry point
+│   ├── experimental-feature/            # Pure 1:1 Adaptive VFR controller & Experimental GUI menu
+│   ├── input/                           # In-process Wayland + X11 hooks & Linux evdev mouse lock
+│   ├── layer/                           # Vulkan Implicit Layer, OpenGL GLX/EGL hooks & glibc_compat.c
+│   ├── recorder/                        # FFmpeg daemon, Instant Replay, PNG writer & recorder_launcher.c
+│   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
+│   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/
-    └── test_cli.cpp                     # Automated 89-check 5-device simulation & memory safety suite
+    └── test_cli.cpp                     # Automated 89-check 5-device simulation, sensor probe & safety suite
 ```
 
 ---
@@ -510,11 +531,11 @@ FPS_HUD_FOR_LINUX/
 ## 9. Troubleshooting & FAQ
 
 1. **Pressing `Insert` / `F12` does not open the GUI or mouse clicks pass through to the game:**
-   - On Wayland and X11, FPSHUD hooks keyboard events and mouse capture in-process out-of-the-box (zero sudo required). Ensure the game window is currently focused, or try pressing alternative toggle keys (`F10` or `Insert`).
+   - On Wayland and X11, FPSHUD hooks keyboard events and mouse capture in-process out-of-the-box (zero sudo required). Ensure the game window is currently focused, or try pressing `Insert` or `F12`.
 2. **How does CPU Power work without `sudo` vs with `fpshud --setup`?**
    - Without `sudo`, FPSHUD automatically uses **Tier 2 Dynamic TDP + Frequency-Scaled Estimation** (`constraint_0_max_power_uw`), so CPU wattage is always active and never stuck at `0 W`. If you want direct hardware RAPL energy counter readings (**Tier 1/3**), run `~/.local/bin/fpshud --setup` to install the scoped `0440` (`GROUP="render"`) udev rule (see [Section 2](#2-installation--sensor-permissions)).
 3. **How do I reset all settings back to default?**
-   - Open the In-Game GUI (`Insert` / `F12`) and click **`Reset`** in the top-right corner, or delete `~/.config/fpshud/config.ini`.
+   - Open the In-Game GUI (`Insert` / `F12`) and click **`File` -> `Reset to Standard Default`** in the top menu bar, or delete `~/.config/fpshud/config.ini`.
 4. **Is FPSHUD safe to use with Anti-Cheat in online games?**
    - See our [Anti-Cheat Compatibility Advisory](#anti-cheat-compatibility-advisory). For competitive multiplayer games protected by EAC, BattlEye, VAC, or Ricochet, we strongly recommend disabling the overlay by setting `FPS_HUD=0 %command%` or cleanly removing the `FPS_HUD` environment variable entirely from your launch options.
 5. **Does FPSHUD work with older 32-bit games?**
