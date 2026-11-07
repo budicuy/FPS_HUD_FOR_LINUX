@@ -373,6 +373,15 @@ public:
     m_pending_frames = 0;
     m_write_idx = 0;
     m_read_idx = 0;
+    m_last_capture_time = {};
+  }
+
+  std::chrono::steady_clock::time_point last_capture_time() const noexcept {
+    return m_last_capture_time;
+  }
+
+  void set_last_capture_time(std::chrono::steady_clock::time_point t) noexcept {
+    m_last_capture_time = t;
   }
 
   bool ensure_allocated(const GlDispatchTable& gl, void* ctx, uint32_t width, uint32_t height) {
@@ -506,6 +515,7 @@ private:
   int m_pending_frames = 0;
   bool m_initialized = false;
   void* m_owner_ctx = nullptr;
+  std::chrono::steady_clock::time_point m_last_capture_time{};
 };
 
 GlAsyncPboRing g_gl_pbo_ring;
@@ -583,20 +593,18 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   }
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-  static auto s_last_gl_capture = std::chrono::steady_clock::time_point{};
   if (fpshud::RecorderController::instance().is_recording() && width > 0.0f && height > 0.0f) {
     auto now = std::chrono::steady_clock::now();
     int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
     auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
     auto min_interval = target_interval * 70 / 100;
-    if (s_last_gl_capture == std::chrono::steady_clock::time_point{} ||
-        now - s_last_gl_capture >= min_interval) {
-      s_last_gl_capture = now;
+    if (g_gl_pbo_ring.last_capture_time() == std::chrono::steady_clock::time_point{} ||
+        now - g_gl_pbo_ring.last_capture_time() >= min_interval) {
+      g_gl_pbo_ring.set_last_capture_time(now);
       g_gl_pbo_ring.capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
                                   static_cast<uint32_t>(height));
     }
   } else {
-    s_last_gl_capture = std::chrono::steady_clock::time_point{};
     g_gl_pbo_ring.reset_pending();
   }
 }

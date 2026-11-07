@@ -133,6 +133,7 @@ struct SwapchainData {
   ImGuiContext* imgui_context = nullptr;
   bool imgui_initialized = false;
   bool supports_transfer_src = false;
+  std::chrono::steady_clock::time_point last_capture_time{};
 };
 
 std::mutex g_map_mutex;
@@ -1364,19 +1365,18 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     // Record GPU copy of swapchain image to staging buffer if recording is active (with
     // jitter-resilient pacing)
     bool should_capture_frame = false;
-    static auto s_last_vk_capture = std::chrono::steady_clock::time_point{};
     if (fpshud::RecorderController::instance().is_recording() && sd->supports_transfer_src) {
       auto now = std::chrono::steady_clock::now();
       int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
       auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
       auto min_interval = target_interval * 70 / 100;
-      if (s_last_vk_capture == std::chrono::steady_clock::time_point{} ||
-          now - s_last_vk_capture >= min_interval) {
-        s_last_vk_capture = now;
+      if (sd->last_capture_time == std::chrono::steady_clock::time_point{} ||
+          now - sd->last_capture_time >= min_interval) {
+        sd->last_capture_time = now;
         should_capture_frame = true;
       }
     } else {
-      s_last_vk_capture = std::chrono::steady_clock::time_point{};
+      sd->last_capture_time = std::chrono::steady_clock::time_point{};
     }
 
     if (should_capture_frame && ensure_frame_capture_buffer(dd, sd.get(), frame)) {

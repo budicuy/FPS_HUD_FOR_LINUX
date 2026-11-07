@@ -354,7 +354,7 @@ int main(int argc, char* argv[]) {
     recv(client_fd, &start_cfg, sizeof(start_cfg), 0);
     if (start_cfg.width > 0) target_width = std::max(64, static_cast<int>(start_cfg.width));
     if (start_cfg.height > 0) target_height = std::max(64, static_cast<int>(start_cfg.height));
-    if (start_cfg.fps > 0) target_fps = start_cfg.fps;
+    if (start_cfg.fps > 0) target_fps = std::clamp(static_cast<int>(start_cfg.fps), 15, 240);
     if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = start_cfg.bitrate_kbps;
     if (start_cfg.save_dir[0] != '\0') save_dir = start_cfg.save_dir;
     codec_choice = (start_cfg.codec == 1) ? "hevc" : "h264";
@@ -970,14 +970,18 @@ int main(int argc, char* argv[]) {
                   int64_t missed_frames = target_pts - next_pts;
                   next_pts += missed_frames;
                   next_frame_time = session_start + next_pts * frame_interval;
+                  encode_frame_to_stream(next_pts++);
+                  next_frame_time = session_start + next_pts * frame_interval;
                 } else {
                   while (next_pts < target_pts && g_running.load(std::memory_order_relaxed)) {
                     encode_frame_to_stream(next_pts++);
                     next_frame_time = session_start + next_pts * frame_interval;
                   }
+                  if (next_pts <= target_pts) {
+                    encode_frame_to_stream(next_pts++);
+                    next_frame_time = session_start + next_pts * frame_interval;
+                  }
                 }
-                encode_frame_to_stream(next_pts++);
-                next_frame_time = session_start + next_pts * frame_interval;
               }
             }
           }
@@ -1007,11 +1011,11 @@ int main(int argc, char* argv[]) {
                 .count() /
             frame_interval.count();
         next_pts += missed_frames;
-        next_frame_time += missed_frames * frame_interval;
+        next_frame_time = session_start + next_pts * frame_interval;
       }
       while (cur_time >= next_frame_time && g_running.load(std::memory_order_relaxed)) {
         encode_frame_to_stream(next_pts++);
-        next_frame_time += frame_interval;
+        next_frame_time = session_start + next_pts * frame_interval;
       }
     }
   }
