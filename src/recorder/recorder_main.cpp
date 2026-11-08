@@ -392,10 +392,13 @@ int main(int argc, char* argv[]) {
 
   std::string ext =
       (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
-  std::string rec_prefix =
-      (start_cfg.filename_prefix[0] != '\0') ? start_cfg.filename_prefix : "FPSHUD";
-  std::string out_filename =
-      (fs::path(save_dir) / generate_timestamp_filename(rec_prefix, ext)).string();
+  std::string rec_prefix = fpshud::sanitize_filename_prefix(start_cfg.filename_prefix, "FPSHUD");
+  std::string safe_file = generate_timestamp_filename(rec_prefix, ext);
+  fs::path out_p = fs::path(save_dir) / safe_file;
+  if (out_p.filename() != safe_file) {
+    out_p = fs::path(save_dir) / generate_timestamp_filename("FPSHUD", ext);
+  }
+  std::string out_filename = out_p.string();
 
   std::fprintf(stderr, "[FPSHUD Recorder] Starting session: %dx%d @ %d FPS [%s, %s] -> %s\n",
                target_width, target_height, target_fps, codec_choice.c_str(),

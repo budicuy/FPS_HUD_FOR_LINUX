@@ -1795,6 +1795,27 @@ void run_systematic_debugging_hardening_suite() {
   }
 }
 
+void run_security_hardening_suite() {
+  std::printf("\n--------------------------------------------------------------------\n");
+  std::printf(" SUITE 9 [SECURITY HARDENING]: Defensive Bounds & IPC Security Suite\n");
+  std::printf("--------------------------------------------------------------------\n");
+
+  // 1. Path traversal sanitization
+  std::string s1 = fpshud::sanitize_filename_prefix("../../../../tmp/malicious");
+  std::string s2 = fpshud::sanitize_filename_prefix("/root/exploit_capture");
+  std::string s3 = fpshud::sanitize_filename_prefix("../../../..");
+  std::string s4 = fpshud::sanitize_filename_prefix("Valid-Prefix_123");
+
+  bool s1_ok = (s1 == "malicious");
+  bool s2_ok = (s2 == "exploit_capture");
+  bool s3_ok = (s3 == "FPSHUD");
+  bool s4_ok = (s4 == "Valid-Prefix_123");
+
+  check_cond(s1_ok && s2_ok && s3_ok && s4_ok,
+             "1. IPC Filename Prefix Path Traversal Neutralization",
+             "Verified sanitize_filename_prefix strips relative and absolute path traversal components");
+}
+
 void run_all_devices_and_features_suite() {
   using namespace fpshud;
   std::printf("\n====================================================================\n");
@@ -3920,6 +3941,11 @@ void run_all_devices_and_features_suite() {
   // SUITE 8 [SYSTEMATIC DEBUGGING]: Root-Cause Hardening & Regression Suite
   // --------------------------------------------------------------------
   run_systematic_debugging_hardening_suite();
+
+  // --------------------------------------------------------------------
+  // SUITE 9 [SECURITY HARDENING]: Defensive Bounds & IPC Security Suite
+  // --------------------------------------------------------------------
+  run_security_hardening_suite();
 
   std::printf("\n====================================================================\n");
   std::printf("  VERIFICATION RESULT: %d / %d CHECKS PASSED (ALL PLATFORMS + MEMORY SAFETY)!\n",

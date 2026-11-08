@@ -116,6 +116,10 @@ bool build_container_host_env_paths(const std::string& root_prefix, std::string&
 // Secure private runtime directory (0700) for Unix domain sockets and shared memory buffers
 std::string get_secure_runtime_dir();
 
+// Sanitizes IPC filename prefixes to prevent path traversal and arbitrary file placement
+std::string sanitize_filename_prefix(const std::string& input,
+                                     const std::string& fallback = "FPSHUD");
+
 // Singleton controller in libfpshud.so to manage on-demand helper process & IPC
 class RecorderController {
 public:
