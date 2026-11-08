@@ -1591,7 +1591,8 @@ void run_elf_and_layer_abi_suite() {
       bool multi_variant_recorder_ok =
           (install_sh_content.find("fpshud_recorder_bin-arch") != std::string::npos &&
            pkg_script_content.find("fpshud_recorder_bin-*") != std::string::npos);
-      setup_security_notice_ok = setup_security_notice_ok && readme_parity_ok && multi_variant_recorder_ok;
+      setup_security_notice_ok =
+          setup_security_notice_ok && readme_parity_ok && multi_variant_recorder_ok;
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;
