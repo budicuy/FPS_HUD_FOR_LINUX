@@ -243,7 +243,8 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     tmp_path.clear();
   }
 
-  std::fprintf(fp, "# %s\n", sanitize_ini_value(header_comment ? header_comment : "FPSHUD Config").c_str());
+  std::fprintf(fp, "# %s\n",
+               sanitize_ini_value(header_comment ? header_comment : "FPSHUD Config").c_str());
   std::fprintf(fp, "preset=%s\n", sanitize_ini_value(cfg.active_preset).c_str());
   std::fprintf(fp, "gui_scale=%.2f\n", cfg.gui_scale);
   std::fprintf(fp, "hud_visible=%d\n", cfg.hud_visible ? 1 : 0);

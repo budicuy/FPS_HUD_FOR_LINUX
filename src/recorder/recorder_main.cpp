@@ -362,9 +362,10 @@ int main(int argc, char* argv[]) {
   struct ucred cr{};
   socklen_t cr_len = sizeof(cr);
   if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cr, &cr_len) < 0 || cr.uid != ::getuid()) {
-    std::fprintf(stderr,
-                 "[FPSHUD Recorder] Rejected unauthorized connection from UID %d (expected UID %d)\n",
-                 cr.uid, ::getuid());
+    std::fprintf(
+        stderr,
+        "[FPSHUD Recorder] Rejected unauthorized connection from UID %d (expected UID %d)\n",
+        cr.uid, ::getuid());
     close(client_fd);
     close(server_fd);
     unlink(socket_path.c_str());

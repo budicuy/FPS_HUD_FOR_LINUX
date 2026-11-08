@@ -1812,16 +1812,17 @@ void run_security_hardening_suite() {
   bool s3_ok = (s3 == "FPSHUD");
   bool s4_ok = (s4 == "Valid-Prefix_123");
 
-  check_cond(s1_ok && s2_ok && s3_ok && s4_ok,
-             "1. IPC Filename Prefix Path Traversal Neutralization",
-             "Verified sanitize_filename_prefix strips relative and absolute path traversal components");
+  check_cond(
+      s1_ok && s2_ok && s3_ok && s4_ok, "1. IPC Filename Prefix Path Traversal Neutralization",
+      "Verified sanitize_filename_prefix strips relative and absolute path traversal components");
 
   // 2. Untrusted CWD binary search elimination
   std::string helper_path = fpshud::get_helper_binary_path();
-  bool helper_not_relative = (helper_path.rfind("./", 0) != 0) && (helper_path.rfind("../", 0) != 0);
-  check_cond(helper_not_relative,
-             "2. Untrusted CWD Binary Search Elimination",
-             "Verified get_helper_binary_path never returns relative paths from current working directory");
+  bool helper_not_relative =
+      (helper_path.rfind("./", 0) != 0) && (helper_path.rfind("../", 0) != 0);
+  check_cond(helper_not_relative, "2. Untrusted CWD Binary Search Elimination",
+             "Verified get_helper_binary_path never returns relative paths from current working "
+             "directory");
 
   // 3. Socket permissions & SO_PEERCRED UID enforcement
   bool peercred_verified = false;
@@ -1872,20 +1873,22 @@ void run_security_hardening_suite() {
   int tfd = ::open(target_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
   if (tfd >= 0) ::close(tfd);
   int sym_res = ::symlink(target_file.c_str(), symlink_file.c_str());
-  int nofollow_fd = ::open(symlink_file.c_str(), O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+  int nofollow_fd =
+      ::open(symlink_file.c_str(), O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
   bool symlink_rejected = (sym_res == 0 && nofollow_fd < 0 && errno == ELOOP);
   if (nofollow_fd >= 0) ::close(nofollow_fd);
   ::unlink(symlink_file.c_str());
   ::unlink(target_file.c_str());
 
-  check_cond(symlink_rejected,
-             "4. Benchmark CSV Symlink Following Neutralization (O_NOFOLLOW)",
-             "Verified CSV open operation with O_NOFOLLOW strictly rejects symlink targets with ELOOP");
+  check_cond(
+      symlink_rejected, "4. Benchmark CSV Symlink Following Neutralization (O_NOFOLLOW)",
+      "Verified CSV open operation with O_NOFOLLOW strictly rejects symlink targets with ELOOP");
 
   // 5. INI newline injection sanitization
   std::string tainted_val = "custom\ninjected_key=1\r\n[InjectedSection]\nmalicious=true";
   std::string sanitized_val = fpshud::sanitize_ini_value(tainted_val);
-  bool no_crlf = (sanitized_val.find('\r') == std::string::npos && sanitized_val.find('\n') == std::string::npos);
+  bool no_crlf = (sanitized_val.find('\r') == std::string::npos &&
+                  sanitized_val.find('\n') == std::string::npos);
 
   fpshud::HudConfig test_inj_cfg;
   test_inj_cfg.active_preset = "custom\ninjected_key=1";
@@ -1899,8 +1902,7 @@ void run_security_hardening_suite() {
                                (ini_content.find("\ninjected_key=1\n") == std::string::npos) &&
                                (ini_content.find("\nrogue_key=pwned\n") == std::string::npos);
 
-  check_cond(injection_neutralized,
-             "5. INI Newline Injection Sanitization",
+  check_cond(injection_neutralized, "5. INI Newline Injection Sanitization",
              "Verified sanitize_ini_value and save_ini_file strip \\r and \\n from string fields");
 }
 

@@ -1528,9 +1528,9 @@ void TelemetryCollector::stop_benchmark() {
       std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_buf);
 
       std::fprintf(csv, "%s,%.1f,%zu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%.1f,%d,%.1f\n", ts,
-                   sum.duration_sec, n, sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low, sum.min_fps,
-                   sum.max_fps, sum.max_gpu_temp_c, sum.max_gpu_power_w, sum.max_cpu_temp_c,
-                   sum.max_cpu_power_w);
+                   sum.duration_sec, n, sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low,
+                   sum.min_fps, sum.max_fps, sum.max_gpu_temp_c, sum.max_gpu_power_w,
+                   sum.max_cpu_temp_c, sum.max_cpu_power_w);
       std::fflush(csv);
       std::fclose(csv);
     } else {

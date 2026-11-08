@@ -444,7 +444,7 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 > **Resource Consumption Summary**
 > - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
 > - **Memory (RAM) Footprint Range:** **~4.5 MB** internal data & font atlas footprint (**~17 MB** total isolated process VmRSS), with **0 bytes/frame** heap allocation during active gameplay.
-> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 94-check automated simulation test suite (`./build/fpshud_test 1`). Benchmark contributions across AMD and Intel Arc hardware are welcome via issues or pull requests.
+> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 99-check automated simulation test suite (`./build/fpshud_test 1`). Benchmark contributions across AMD and Intel Arc hardware are welcome via issues or pull requests.
 
 ---
 
@@ -481,7 +481,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 94-check verification suite across 5 simulated device profiles + memory safety:
+# 2. Run the automated 99-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
 
 # 3. (Optional) Install local build directly to ~/.local (offline / no download):
@@ -523,7 +523,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
 │   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/
-    └── test_cli.cpp                     # Automated 94-check 5-device simulation, sensor probe & safety suite
+    └── test_cli.cpp                     # Automated 99-check 5-device simulation, sensor probe & safety suite
 ```
 
 ---
@@ -546,7 +546,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 94 multi-vendor checks and memory safety tests pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 99 multi-vendor checks and memory safety tests pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.

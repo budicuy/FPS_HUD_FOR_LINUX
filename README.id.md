@@ -444,7 +444,7 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 > **Ringkasan Konsumsi Sumber Daya**
 > - **Rentang Penggunaan CPU:** **0,01% – 0,05% dari 1 core CPU** saat bermain game pada 60 FPS (**0,03% – 0,11% @ 144 FPS**); thread telemetri hardware menambah **~0,045% dari 1 core**. Beban terhadap total prosesor multi-core adalah **< 0,01% dari total kapasitas CPU**.
 > - **Rentang Pemakaian Memori (RAM):** **~4,5 MB** memori internal & font atlas (**~17 MB** total VmRSS proses terisolasi), dengan **0 byte/frame** alokasi heap saat gameplay berjalan.
-> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 94-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian pada perangkat keras AMD dan Intel Arc dapat dikirimkan melalui issues atau pull requests.
+> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 99-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian pada perangkat keras AMD dan Intel Arc dapat dikirimkan melalui issues atau pull requests.
 
 ---
 
@@ -481,7 +481,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 94 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
+# 2. Jalankan 99 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
 ./build/fpshud_test 1
 
 # 3. (Opsional) Instal build lokal langsung ke ~/.local (offline / tanpa download):
@@ -523,7 +523,7 @@ FPS_HUD_FOR_LINUX/
 │   ├── telemetry/                       # Telemetri GPU/CPU/Storage/Net multi-vendor & benchmark CSV
 │   └── ui/                              # Menu GUI 3-kolom Dear ImGui, HUD two-tone & font embedded
 └── tests/
-    └── test_cli.cpp                     # Suite pengujian 94-check simulasi 5-perangkat, sensor probe & memori
+    └── test_cli.cpp                     # Suite pengujian 99-check simulasi 5-perangkat, sensor probe & memori
 ```
 
 ---
@@ -546,7 +546,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 94 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 99 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.

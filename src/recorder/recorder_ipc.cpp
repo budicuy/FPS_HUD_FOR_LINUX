@@ -42,12 +42,11 @@ std::string get_helper_binary_path() {
     fs::path p = base.parent_path() / "fpshud_recorder";
     if (fs::exists(p, ec)) return fs::canonical(p, ec).string();
 
-    fs::path p_bin =
-        base.parent_path().parent_path() / "bin" / "fpshud_recorder";
+    fs::path p_bin = base.parent_path().parent_path() / "bin" / "fpshud_recorder";
     if (fs::exists(p_bin, ec)) return fs::canonical(p_bin, ec).string();
 
-    fs::path p_prefix_bin = base.parent_path().parent_path().parent_path() /
-                            "bin" / "fpshud_recorder";
+    fs::path p_prefix_bin =
+        base.parent_path().parent_path().parent_path() / "bin" / "fpshud_recorder";
     if (fs::exists(p_prefix_bin, ec)) return fs::canonical(p_prefix_bin, ec).string();
   }
 
@@ -66,8 +65,7 @@ std::string get_helper_binary_path() {
   return "fpshud_recorder";
 }
 
-namespace {
-}  // namespace
+namespace {}  // namespace
 
 std::string get_secure_runtime_dir() {
   const char* xdg = std::getenv("XDG_RUNTIME_DIR");
