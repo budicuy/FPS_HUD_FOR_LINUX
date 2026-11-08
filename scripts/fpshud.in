@@ -3,9 +3,14 @@
 # FPSHUD — Linux Gaming Performance Overlay & Management CLI
 # ====================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_SO="@FPSHUD_LIB_PATH@"
 if [ ! -f "$LIB_SO" ]; then
-    if [ -f "$HOME/.local/lib/fpshud/libfpshud.so" ]; then
+    if [ -f "$SCRIPT_DIR/libfpshud.so" ]; then
+        LIB_SO="$SCRIPT_DIR/libfpshud.so"
+    elif [ -f "$SCRIPT_DIR/build/libfpshud.so" ]; then
+        LIB_SO="$SCRIPT_DIR/build/libfpshud.so"
+    elif [ -f "$HOME/.local/lib/fpshud/libfpshud.so" ]; then
         LIB_SO="$HOME/.local/lib/fpshud/libfpshud.so"
     elif [ -f "/usr/local/lib/fpshud/libfpshud.so" ]; then
         LIB_SO="/usr/local/lib/fpshud/libfpshud.so"

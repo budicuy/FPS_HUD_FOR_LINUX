@@ -139,19 +139,19 @@ jobs:
         distro:
           - name: "Arch Linux (Rolling)"
             image: "archlinux:latest"
-            cmd: "pacman -Syu --noconfirm --needed tar gzip procps-ng vulkan-icd-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "pacman -Sy --noconfirm tar gzip procps-ng vulkan-icd-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Fedora Latest (RPM)"
             image: "fedora:latest"
             cmd: "dnf install -y tar gzip procps-ng vulkan-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Debian 12 (Bookworm)"
             image: "debian:bookworm-slim"
-            cmd: "apt-get update && apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Ubuntu 22.04 LTS (Jammy - GLIBC 2.35 Baseline)"
             image: "ubuntu:22.04"
-            cmd: "apt-get update && apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Ubuntu 24.04 LTS (Noble)"
             image: "ubuntu:24.04"
-            cmd: "apt-get update && apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "openSUSE Tumbleweed"
             image: "opensuse/tumbleweed:latest"
             cmd: "zypper --non-interactive install tar gzip procps libvulkan1 && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
@@ -161,6 +161,11 @@ jobs:
         with:
           name: fpshud-linux-x86_64
           path: dist_test
+
+      - name: Flatten Artifact Directory
+        run: |
+          find dist_test -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} dist_test/ \;
+          ls -la dist_test
 
       - name: Verify Portable Binary Execution on ${{ matrix.distro.name }}
         run: |
@@ -239,6 +244,11 @@ jobs:
         with:
           name: fpshud-linux-x86_64
           path: release_pkg
+
+      - name: Ensure Release Files Flat in release_pkg
+        run: |
+          find release_pkg -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} release_pkg/ \;
+          ls -la release_pkg
 
       - name: Publish Portable Binary to GitHub Releases
         uses: softprops/action-gh-release@v2
