@@ -49,6 +49,7 @@ enum class LayoutPosition {
   BottomLeft = 3,
   BottomCenter = 4,
   BottomRight = 5,
+  Custom = 6,
   // Backward-compatible aliases
   CenterTop = TopCenter,
   CenterBottom = BottomCenter
@@ -180,19 +181,22 @@ struct HudConfig {
   float shadow_offset = 2.0f;
   float shadow_opacity = 0.85f;
 
-  // Screen edge margins
+  // Screen edge margins & custom normalized HUD position (0.0f .. 1.0f)
   float margin_x = 16.0f;
   float margin_y = 14.0f;
+  float custom_pos_x = 0.01f;
+  float custom_pos_y = 0.02f;
 
   bool has_metric(MetricType m) const noexcept;
   void set_metric(MetricType m, bool active) noexcept;
 };
 
-// Preset applicators (Minimal, Standard, Advance, Custom)
+// Preset applicators (Minimal, Standard, Advance, Custom) & Layout Reset
 void apply_preset_minimal(HudConfig& cfg);
 void apply_preset_standard(HudConfig& cfg);
 void apply_preset_advance(HudConfig& cfg);
 void apply_preset_custom(HudConfig& cfg);
+void reset_layout_to_default(HudConfig& cfg) noexcept;
 
 // Initialize config purely from FPS_HUD=1 (enabled) or FPS_HUD=0 (disabled)
 HudConfig init_config_from_env(const char* env_value);

@@ -1876,6 +1876,8 @@ void run_all_devices_and_features_suite() {
                     format_keybind(loaded_cfg.bind_record) == "Alt + F";
 
     // Verify apply_preset_custom loads from single config.ini (and falls back cleanly when missing)
+    const char* prev_xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string saved_xdg_env = prev_xdg ? prev_xdg : "";
     std::string tmp_xdg = "/tmp/fpshud_test_xdg_" + std::to_string(::getpid());
     fs::remove_all(tmp_xdg);
     ::setenv("XDG_CONFIG_HOME", tmp_xdg.c_str(), 1);
@@ -1897,12 +1899,46 @@ void run_all_devices_and_features_suite() {
                                   custom_loaded.metrics.size() == 2 &&
                                   std::fabs(custom_loaded.font_size_px - 26.0f) < 0.01f);
     fs::remove_all(tmp_xdg);
-    ::unsetenv("XDG_CONFIG_HOME");
+    if (prev_xdg) {
+      ::setenv("XDG_CONFIG_HOME", saved_xdg_env.c_str(), 1);
+    } else {
+      ::unsetenv("XDG_CONFIG_HOME");
+    }
+
+    HudConfig custom_pos_cfg;
+    custom_pos_cfg.layout = LayoutPosition::Custom;
+    custom_pos_cfg.custom_pos_x = 0.75f;
+    custom_pos_cfg.custom_pos_y = 0.40f;
+    save_ini_file("/tmp/test_custom_pos.ini", custom_pos_cfg, "Test Custom Pos");
+    HudConfig loaded_pos_cfg;
+    load_ini_file("/tmp/test_custom_pos.ini", loaded_pos_cfg);
+    bool custom_pos_ini_ok = (loaded_pos_cfg.layout == LayoutPosition::Custom &&
+                              std::fabs(loaded_pos_cfg.custom_pos_x - 0.75f) < 0.005f &&
+                              std::fabs(loaded_pos_cfg.custom_pos_y - 0.40f) < 0.005f &&
+                              std::strcmp(layout_name(LayoutPosition::Custom), "Custom") == 0);
+
+    float clamp_x1 = 0.0f, clamp_y1 = 0.0f;
+    loaded_pos_cfg.custom_pos_x = 1.50f;
+    loaded_pos_cfg.custom_pos_y = 1.50f;
+    compute_clamped_hud_pos(loaded_pos_cfg, 1920.0f, 1080.0f, 300.0f, 200.0f, clamp_x1, clamp_y1);
+    float clamp_x2 = 0.0f, clamp_y2 = 0.0f;
+    loaded_pos_cfg.custom_pos_x = -0.50f;
+    loaded_pos_cfg.custom_pos_y = -0.50f;
+    compute_clamped_hud_pos(loaded_pos_cfg, 1920.0f, 1080.0f, 300.0f, 200.0f, clamp_x2, clamp_y2);
+    reset_layout_to_default(loaded_pos_cfg);
+    bool clamp_and_reset_ok =
+        (std::fabs(clamp_x1 - 1620.0f) < 0.01f && std::fabs(clamp_y1 - 880.0f) < 0.01f &&
+         std::fabs(clamp_x2 - 0.0f) < 0.01f && std::fabs(clamp_y2 - 0.0f) < 0.01f &&
+         loaded_pos_cfg.layout == LayoutPosition::TopLeft &&
+         loaded_pos_cfg.arrangement == ArrangementMode::Stack &&
+         std::fabs(loaded_pos_cfg.custom_pos_x - 0.01f) < 0.005f &&
+         std::fabs(loaded_pos_cfg.custom_pos_y - 0.02f) < 0.005f);
 
     check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok &&
-                   custom_fallback_ok && custom_single_file_ok,
+                   custom_fallback_ok && custom_single_file_ok && custom_pos_ini_ok &&
+                   clamp_and_reset_ok,
                "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=31, Scale=1.35x)",
-               "All 4 presets (single config.ini), 31 metrics, dim_labels & Keybind INI "
+               "All 4 presets (single config.ini), Custom X/Y clamping & Keybind INI "
                "persistence verified");
   }
 

@@ -620,6 +620,20 @@ ImFont* get_hud_font(FontFamily family, float font_size_px, float& out_base_size
   return g_hud_fonts_normal[idx] ? g_hud_fonts_normal[idx] : ImGui::GetFont();
 }
 
+void compute_clamped_hud_pos(const HudConfig& cfg, float display_w, float display_h, float hud_w,
+                             float hud_h, float& out_x, float& out_y) noexcept {
+  float safe_disp_w = std::max(1.0f, display_w);
+  float safe_disp_h = std::max(1.0f, display_h);
+  float safe_hud_w = std::clamp(hud_w, 0.0f, safe_disp_w);
+  float safe_hud_h = std::clamp(hud_h, 0.0f, safe_disp_h);
+  float max_x = std::max(0.0f, safe_disp_w - safe_hud_w);
+  float max_y = std::max(0.0f, safe_disp_h - safe_hud_h);
+  float nx = std::clamp(cfg.custom_pos_x, 0.0f, 1.0f);
+  float ny = std::clamp(cfg.custom_pos_y, 0.0f, 1.0f);
+  out_x = std::clamp(nx * max_x, 0.0f, max_x);
+  out_y = std::clamp(ny * max_y, 0.0f, max_y);
+}
+
 void setup_overlay_font(ImGuiIO& io) {
   std::string home_fonts;
   if (const char* home = std::getenv("HOME"); home && *home) {
@@ -714,6 +728,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
     ImGui::SetNextWindowBgAlpha(cfg.bg_alpha);
   }
 
+  static ImVec2 s_last_hud_size(160.0f, 48.0f);
   ImVec2 pos(cfg.margin_x, cfg.margin_y);
   ImVec2 pivot(0.0f, 0.0f);
 
@@ -742,6 +757,14 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
       pos = ImVec2(display_width - cfg.margin_x, display_height - cfg.margin_y);
       pivot = ImVec2(1.0f, 1.0f);
       break;
+    case LayoutPosition::Custom: {
+      float cx = 0.0f, cy = 0.0f;
+      compute_clamped_hud_pos(cfg, display_width, display_height, s_last_hud_size.x,
+                              s_last_hud_size.y, cx, cy);
+      pos = ImVec2(cx, cy);
+      pivot = ImVec2(0.0f, 0.0f);
+      break;
+    }
   }
 
   ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
@@ -754,6 +777,19 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
   ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.06f, cfg.bg_alpha));
 
   if (ImGui::Begin("##FPSHUD_Overlay", nullptr, flags)) {
+    ImVec2 cur_win_size = ImGui::GetWindowSize();
+    if (cur_win_size.x > 4.0f && cur_win_size.y > 4.0f) {
+      s_last_hud_size = cur_win_size;
+      if (cfg.layout == LayoutPosition::Custom) {
+        float cx = 0.0f, cy = 0.0f;
+        compute_clamped_hud_pos(cfg, display_width, display_height, cur_win_size.x, cur_win_size.y,
+                                cx, cy);
+        ImVec2 cur_pos = ImGui::GetWindowPos();
+        if (std::fabs(cur_pos.x - cx) > 0.5f || std::fabs(cur_pos.y - cy) > 0.5f) {
+          ImGui::SetWindowPos(ImVec2(cx, cy), ImGuiCond_Always);
+        }
+      }
+    }
     cfg.font_scale = std::clamp(cfg.font_size_px / base_hud_font_px, 0.40f, 2.50f);
     ImGui::SetWindowFontScale(cfg.font_scale);
 

@@ -225,6 +225,8 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "gui_scale=%.2f\n", cfg.gui_scale);
   std::fprintf(fp, "hud_visible=%d\n", cfg.hud_visible ? 1 : 0);
   std::fprintf(fp, "layout=%d\n", static_cast<int>(cfg.layout));
+  std::fprintf(fp, "custom_pos_x=%.4f\n", std::clamp(cfg.custom_pos_x, 0.0f, 1.0f));
+  std::fprintf(fp, "custom_pos_y=%.4f\n", std::clamp(cfg.custom_pos_y, 0.0f, 1.0f));
   std::fprintf(fp, "arrangement=%d\n", static_cast<int>(cfg.arrangement));
   std::fprintf(fp, "background=%d\n", static_cast<int>(cfg.background));
   std::fprintf(fp, "font_family=%d\n", static_cast<int>(cfg.font_family));
@@ -321,8 +323,14 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.hud_visible = (safe_strtoi(val, 1) != 0);
       parsed_any = true;
     } else if (key == "layout") {
-      int v = std::clamp(safe_strtoi(val, 0), 0, 5);
+      int v = std::clamp(safe_strtoi(val, 0), 0, 6);
       cfg.layout = static_cast<LayoutPosition>(v);
+      parsed_any = true;
+    } else if (key == "custom_pos_x") {
+      cfg.custom_pos_x = std::clamp(safe_strtof(val, 0.01f), 0.0f, 1.0f);
+      parsed_any = true;
+    } else if (key == "custom_pos_y") {
+      cfg.custom_pos_y = std::clamp(safe_strtof(val, 0.02f), 0.0f, 1.0f);
       parsed_any = true;
     } else if (key == "arrangement") {
       int v = std::clamp(safe_strtoi(val, 0), 0, 2);
@@ -543,6 +551,13 @@ void apply_preset_custom(HudConfig& cfg) {
   cfg.active_preset = "custom";
 }
 
+void reset_layout_to_default(HudConfig& cfg) noexcept {
+  cfg.layout = LayoutPosition::TopLeft;
+  cfg.arrangement = ArrangementMode::Stack;
+  cfg.custom_pos_x = 0.01f;
+  cfg.custom_pos_y = 0.02f;
+}
+
 HudConfig init_config_from_env(const char* env_value) {
   HudConfig cfg;
   if (!env_value) {
@@ -601,6 +616,8 @@ const char* layout_name(LayoutPosition p) {
       return "Bottom-Center";
     case LayoutPosition::BottomRight:
       return "Bottom-Right";
+    case LayoutPosition::Custom:
+      return "Custom";
   }
   return "Top-Left";
 }
