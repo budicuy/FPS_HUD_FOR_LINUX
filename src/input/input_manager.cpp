@@ -629,52 +629,6 @@ void InputManager::handle_pointer_wheel(float x, float y, const HudConfig& cfg,
   }
 }
 
-void InputManager::enqueue_intercepted_motion(float x, float y, const HudConfig& cfg) noexcept {
-  cursor_x_ = x;
-  cursor_y_ = y;
-  if (!cfg.gui_open) return;
-  std::lock_guard<std::mutex> lock(intercepted_mutex_);
-  pending_intercepted_inputs_.push_back(
-      InterceptedInputEvent{.type = InterceptedInputEvent::Type::Motion, .x = x, .y = y});
-}
-
-void InputManager::enqueue_intercepted_button(uint32_t button, bool down,
-                                              const HudConfig& cfg) noexcept {
-  int btn_idx = -1;
-  if (button == BTN_LEFT)
-    btn_idx = 0;
-  else if (button == BTN_RIGHT)
-    btn_idx = 1;
-  else if (button == BTN_MIDDLE)
-    btn_idx = 2;
-
-  if (btn_idx >= 0) {
-    mouse_buttons_[btn_idx] = down;
-  }
-
-  if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
-    set_mouse_grab(false);
-    fpshud::on_gui_state_changed(false);
-    set_x11_grab(false);
-    pending_ungrab_ = false;
-  }
-
-  if (btn_idx >= 0 && (cfg.gui_open || !down)) {
-    std::lock_guard<std::mutex> lock(intercepted_mutex_);
-    pending_intercepted_inputs_.push_back(
-        InterceptedInputEvent{.type = InterceptedInputEvent::Type::Button,
-                              .button = static_cast<uint32_t>(btn_idx),
-                              .down = down});
-  }
-}
-
-void InputManager::enqueue_intercepted_wheel(float x, float y, const HudConfig& cfg) noexcept {
-  if (!cfg.gui_open) return;
-  std::lock_guard<std::mutex> lock(intercepted_mutex_);
-  pending_intercepted_inputs_.push_back(
-      InterceptedInputEvent{.type = InterceptedInputEvent::Type::Wheel, .x = x, .y = y});
-}
-
 void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
   (void)id;
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
@@ -726,23 +680,15 @@ void InputManager::register_wayland_pointer(void* seat) noexcept {
   wayland_pointer_ = ptr;
 }
 
-void InputManager::poll_wayland(ImGuiIO& io, HudConfig& cfg, float display_width,
-                                float display_height) noexcept {
+void InputManager::poll_wayland(ImGuiIO& /*io*/, HudConfig& /*cfg*/, float /*display_width*/,
+                                float /*display_height*/) noexcept {
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (!wayland_display_ || !wayland_queue_ || !g_wl.fn_display_dispatch_queue_pending) {
     return;
   }
 
-  current_io_ = &io;
-  current_cfg_ = &cfg;
-  current_w_ = display_width;
-  current_h_ = display_height;
-
   g_wl.fn_display_dispatch_queue_pending(static_cast<struct wl_display*>(wayland_display_),
                                          static_cast<struct wl_event_queue*>(wayland_queue_));
-
-  current_io_ = nullptr;
-  current_cfg_ = nullptr;
 }
 
 namespace {
@@ -801,8 +747,7 @@ void wl_kbd_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*
   if (!self) return;
   // Route key event through handle_key_event
   HudConfig& cfg = get_mutable_config();
-  self->handle_key_event(key, state == 1, self->current_cfg() ? *self->current_cfg() : cfg,
-                         self->current_width(), self->current_height(), self->current_io());
+  self->handle_key_event(key, state == 1, cfg, 0.0f, 0.0f, nullptr);
 }
 
 void wl_kbd_modifiers(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
@@ -824,17 +769,14 @@ void wl_ptr_motion(void* data, struct wl_pointer* /*pointer*/, uint32_t /*time*/
   if (!self) return;
   float x = static_cast<float>(sx) / 256.0f;
   float y = static_cast<float>(sy) / 256.0f;
-  self->handle_pointer_motion(
-      x, y, self->current_cfg() ? *self->current_cfg() : get_global_config(), self->current_io());
+  self->handle_pointer_motion(x, y, get_global_config(), nullptr);
 }
 
 void wl_ptr_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
                    uint32_t /*time*/, uint32_t button, uint32_t state) {
   auto* self = static_cast<InputManager*>(data);
   if (!self) return;
-  self->handle_pointer_button(button, state == 1,
-                              self->current_cfg() ? *self->current_cfg() : get_global_config(),
-                              self->current_io());
+  self->handle_pointer_button(button, state == 1, get_global_config(), nullptr);
 }
 
 void wl_ptr_axis(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,
@@ -1091,11 +1033,6 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
 
 void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_width,
                                     float display_height) {
-  current_io_ = &io;
-  current_cfg_ = &cfg;
-  current_w_ = display_width;
-  current_h_ = display_height;
-
   if (!cfg.enabled) {
     if (prev_gui_open_) {
       release_imgui_inputs(io);
@@ -1105,8 +1042,6 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
       prev_gui_open_ = false;
       pending_ungrab_ = false;
     }
-    current_io_ = nullptr;
-    current_cfg_ = nullptr;
     return;
   }
 
@@ -1133,27 +1068,7 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
     poll_x11_fallback(io, cfg, display_width, display_height);
   }
 
-  // 4. Drain intercepted mouse motion, buttons, and wheel from dynamic hooks into ImGuiIO
-  // (intercepted in-game events take precedence over raw desktop fallback)
-  {
-    std::lock_guard<std::mutex> lock(intercepted_mutex_);
-    for (const auto& ev : pending_intercepted_inputs_) {
-      if (ev.type == InterceptedInputEvent::Type::Motion) {
-        cursor_x_ = ev.x;
-        cursor_y_ = ev.y;
-        io.AddMousePosEvent(ev.x, ev.y);
-      } else if (ev.type == InterceptedInputEvent::Type::Button) {
-        io.AddMouseButtonEvent(static_cast<int>(ev.button), ev.down);
-      } else if (ev.type == InterceptedInputEvent::Type::Wheel) {
-        io.AddMouseWheelEvent(ev.x, ev.y);
-      }
-    }
-    pending_intercepted_inputs_.clear();
-  }
-
   sync_grab_state(io, cfg);
-  current_io_ = nullptr;
-  current_cfg_ = nullptr;
 }
 
 InputManager& get_input_manager() {

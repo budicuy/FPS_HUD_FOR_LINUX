@@ -18,8 +18,8 @@ constexpr uint32_t kSdlMouseButtonUp = 0x402;
 constexpr uint32_t kSdlMouseWheel = 0x403;
 constexpr uint32_t kSdlKeyDown = 0x300;
 
-constexpr uint8_t kSdlButtonMiddle = 2;
-constexpr uint8_t kSdlButtonRight = 3;
+[[maybe_unused]] constexpr uint8_t kSdlButtonMiddle = 2;
+[[maybe_unused]] constexpr uint8_t kSdlButtonRight = 3;
 
 #pragma pack(push, 1)
 struct SdlCommonEvent {
@@ -195,39 +195,10 @@ __attribute__((visibility("default"))) int SDL_PollEvent(void* event) {
     auto& cfg = fpshud::get_mutable_config();
     auto* raw = static_cast<SdlRawEvent*>(event);
     auto& im = fpshud::get_input_manager();
-    ImGuiIO* io = im.current_io();
 
-    if (raw->type == kSdlMouseMotion) {
-      // Absorb mouse motion: enqueue for thread-safe render-thread dispatch and drop from game
-      im.enqueue_intercepted_motion(static_cast<float>(raw->motion.x),
-                                    static_cast<float>(raw->motion.y), cfg);
-      if (io) {
-        im.handle_pointer_motion(static_cast<float>(raw->motion.x),
-                                 static_cast<float>(raw->motion.y), cfg, io);
-      }
-      continue;
-    } else if (raw->type == kSdlMouseButtonDown || raw->type == kSdlMouseButtonUp) {
-      // Absorb mouse buttons: route to ImGui and drop event from game
-      bool down = (raw->type == kSdlMouseButtonDown);
-      uint32_t btn = BTN_LEFT;
-      if (raw->button.button == kSdlButtonRight)
-        btn = BTN_RIGHT;
-      else if (raw->button.button == kSdlButtonMiddle)
-        btn = BTN_MIDDLE;
-
-      im.enqueue_intercepted_button(btn, down, cfg);
-      if (io) {
-        im.handle_pointer_button(btn, down, cfg, io);
-      }
-      continue;
-    } else if (raw->type == kSdlMouseWheel) {
-      // Absorb mouse wheel
-      im.enqueue_intercepted_wheel(static_cast<float>(raw->wheel.x),
-                                   static_cast<float>(raw->wheel.y), cfg);
-      if (io) {
-        im.handle_pointer_wheel(static_cast<float>(raw->wheel.x), static_cast<float>(raw->wheel.y),
-                                cfg, io);
-      }
+    if (raw->type == kSdlMouseMotion || raw->type == kSdlMouseButtonDown ||
+        raw->type == kSdlMouseButtonUp || raw->type == kSdlMouseWheel) {
+      // Absorb mouse motion, buttons, and wheel: drop event from game delivery
       continue;
     } else if (raw->type == kSdlKeyDown && raw->key.keysym.sym == 1073741893 /* SDLK_F12 */) {
       // F12 pressed while GUI open -> toggle GUI closed cleanly
@@ -276,34 +247,10 @@ __attribute__((visibility("default"))) int SDL_WaitEventTimeout(void* event, int
     auto* raw = static_cast<SdlRawEvent*>(event);
     auto& cfg = fpshud::get_mutable_config();
     auto& im = fpshud::get_input_manager();
-    ImGuiIO* io = im.current_io();
 
-    if (raw->type == kSdlMouseMotion) {
-      im.enqueue_intercepted_motion(static_cast<float>(raw->motion.x),
-                                    static_cast<float>(raw->motion.y), cfg);
-      if (io) {
-        im.handle_pointer_motion(static_cast<float>(raw->motion.x),
-                                 static_cast<float>(raw->motion.y), cfg, io);
-      }
-    } else if (raw->type == kSdlMouseButtonDown || raw->type == kSdlMouseButtonUp) {
-      bool down = (raw->type == kSdlMouseButtonDown);
-      uint32_t btn = BTN_LEFT;
-      if (raw->button.button == kSdlButtonRight)
-        btn = BTN_RIGHT;
-      else if (raw->button.button == kSdlButtonMiddle)
-        btn = BTN_MIDDLE;
-
-      im.enqueue_intercepted_button(btn, down, cfg);
-      if (io) {
-        im.handle_pointer_button(btn, down, cfg, io);
-      }
-    } else if (raw->type == kSdlMouseWheel) {
-      im.enqueue_intercepted_wheel(static_cast<float>(raw->wheel.x),
-                                   static_cast<float>(raw->wheel.y), cfg);
-      if (io) {
-        im.handle_pointer_wheel(static_cast<float>(raw->wheel.x), static_cast<float>(raw->wheel.y),
-                                cfg, io);
-      }
+    if (raw->type == kSdlMouseMotion || raw->type == kSdlMouseButtonDown ||
+        raw->type == kSdlMouseButtonUp || raw->type == kSdlMouseWheel) {
+      // Absorb and drop from game
     } else if (raw->type == kSdlKeyDown &&
                (raw->key.keysym.sym == 1073741893 || raw->key.keysym.sym == 27)) {
       cfg.gui_open = false;
@@ -344,41 +291,17 @@ __attribute__((visibility("default"))) int SDL_PeepEvents(void* events, int nume
 
   t_in_hook = true;
   int count = g_real_sdl_peep_events(events, numevents, action, minType, maxType);
-  auto& cfg = fpshud::get_mutable_config();
 
   // If GUI is active and action retrieves events (SDL_GETEVENT = 2), filter mouse events
   if (count > 0 && fpshud::is_mouse_isolation_active() && action == 2 && events != nullptr) {
     auto* raw_events = static_cast<SdlRawEvent*>(events);
-    auto& im = fpshud::get_input_manager();
-    ImGuiIO* io = im.current_io();
     int write_idx = 0;
 
     for (int i = 0; i < count; ++i) {
       uint32_t t = raw_events[i].type;
-      if (t == kSdlMouseMotion) {
-        im.enqueue_intercepted_motion(static_cast<float>(raw_events[i].motion.x),
-                                      static_cast<float>(raw_events[i].motion.y), cfg);
-        if (io) {
-          im.handle_pointer_motion(static_cast<float>(raw_events[i].motion.x),
-                                   static_cast<float>(raw_events[i].motion.y), cfg, io);
-        }
-      } else if (t == kSdlMouseButtonDown || t == kSdlMouseButtonUp) {
-        bool down = (t == kSdlMouseButtonDown);
-        uint32_t btn =
-            (raw_events[i].button.button == kSdlButtonRight)
-                ? BTN_RIGHT
-                : ((raw_events[i].button.button == kSdlButtonMiddle) ? BTN_MIDDLE : BTN_LEFT);
-        im.enqueue_intercepted_button(btn, down, cfg);
-        if (io) {
-          im.handle_pointer_button(btn, down, cfg, io);
-        }
-      } else if (t == kSdlMouseWheel) {
-        im.enqueue_intercepted_wheel(static_cast<float>(raw_events[i].wheel.x),
-                                     static_cast<float>(raw_events[i].wheel.y), cfg);
-        if (io) {
-          im.handle_pointer_wheel(static_cast<float>(raw_events[i].wheel.x),
-                                  static_cast<float>(raw_events[i].wheel.y), cfg, io);
-        }
+      if (t == kSdlMouseMotion || t == kSdlMouseButtonDown || t == kSdlMouseButtonUp ||
+          t == kSdlMouseWheel) {
+        // Discard mouse events from game delivery when overlay menu is active
       } else {
         if (write_idx != i) {
           raw_events[write_idx] = raw_events[i];

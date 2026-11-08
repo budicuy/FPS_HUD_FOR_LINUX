@@ -1817,16 +1817,14 @@ void run_elf_and_layer_abi_suite() {
 
     test_cfg.gui_open = true;
     im.sync_grab_state(io, test_cfg);
-    im.enqueue_intercepted_motion(720.0f, 480.0f, test_cfg);
-    im.enqueue_intercepted_button(BTN_LEFT, true, test_cfg);
-    im.enqueue_intercepted_wheel(0.0f, 4.0f, test_cfg);
+    im.handle_pointer_motion(720.0f, 480.0f, test_cfg, &io);
+    im.handle_pointer_button(BTN_LEFT, true, test_cfg, &io);
+    im.handle_pointer_wheel(0.0f, 4.0f, test_cfg, &io);
 
-    // Draining through update_for_frame on render thread
-    im.update_for_frame(io, test_cfg, 1920.0f, 1080.0f);
     ImGui::NewFrame();
-    bool queued_motion_ok = (io.MousePos.x == 720.0f && io.MousePos.y == 480.0f);
-    bool queued_wheel_ok = (io.MouseWheel == 4.0f);
-    bool queued_click_ok = io.MouseDown[0];
+    bool direct_motion_ok = (io.MousePos.x == 720.0f && io.MousePos.y == 480.0f);
+    bool direct_wheel_ok = (io.MouseWheel == 4.0f);
+    bool direct_click_ok = io.MouseDown[0];
     ImGui::EndFrame();
 
     // Clean up test context and state
@@ -1847,8 +1845,8 @@ void run_elf_and_layer_abi_suite() {
     check_passed = hooks_exported && !init_isolated && opened_isolated && !closed_isolated &&
                    gui_open_iso && cursor_drawn && motion_im_ok && motion_imgui_ok &&
                    wheel_imgui_ok && btn_down_im_ok && btn_imgui_ok && pending_ungrab_active &&
-                   fully_ungrabbed && null_poll_safe && queued_motion_ok && queued_wheel_ok &&
-                   queued_click_ok;
+                   fully_ungrabbed && null_poll_safe && direct_motion_ok && direct_wheel_ok &&
+                   direct_click_ok;
 
     std::string detail =
         "hooks_exported=" + std::to_string(hooks_exported) +
@@ -1856,9 +1854,9 @@ void run_elf_and_layer_abi_suite() {
         ", wait=" + std::to_string(sym_wait_ok) + ", x11=" + std::to_string(sym_x11_ok) +
         "), isolation_lifecycle=" +
         std::to_string(!init_isolated && opened_isolated && !closed_isolated) +
-        ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok && queued_motion_ok) +
-        ", wheel=" + std::to_string(wheel_imgui_ok && queued_wheel_ok) +
-        ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok && queued_click_ok) +
+        ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok && direct_motion_ok) +
+        ", wheel=" + std::to_string(wheel_imgui_ok && direct_wheel_ok) +
+        ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok && direct_click_ok) +
         ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed) +
         ", null_poll_safe=" + std::to_string(null_poll_safe);
 
@@ -4357,6 +4355,17 @@ void run_all_devices_and_features_suite() {
     check_cond(
         delete_confirmation_present,
         "10.22 Recorded clip deletion requires two-step confirmation to prevent accidental loss");
+
+    // --- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---
+    std::printf("\n--- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---\n");
+    bool im_queue_cleaned = false;
+    {
+      std::string im_hpp = read_text_file("src/input/input_manager.hpp");
+      im_queue_cleaned = (im_hpp.find("enqueue_intercepted_motion") == std::string::npos &&
+                          im_hpp.find("pending_intercepted_inputs_") == std::string::npos);
+    }
+    check_cond(im_queue_cleaned,
+               "11.1 InputManager removes redundant intercepted queue and dead mutexes");
   }
 
   std::printf("\n====================================================================\n");
