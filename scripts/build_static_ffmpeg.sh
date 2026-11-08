@@ -7,7 +7,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUT_ARG="${1:-$PROJECT_DIR/build/ffmpeg_minimal}"
 mkdir -p "$OUT_ARG"
 OUT_DIR="$(cd "$OUT_ARG" && pwd)"
-BUILD_CACHE="${FFMPEG_BUILD_CACHE:-/tmp/fpshud_ffmpeg_src}"
+BUILD_CACHE="${FFMPEG_BUILD_CACHE:-/tmp/fpshud_ffmpeg_src_$(id -u)}"
 
 if [ -f "$OUT_DIR/lib/libavformat.a" ] && [ -f "$OUT_DIR/lib/libavcodec.a" ] && \
    [ -f "$OUT_DIR/lib/libswscale.a" ] && [ -f "$OUT_DIR/lib/libswresample.a" ] && \
@@ -21,7 +21,9 @@ echo "  Building Minimal Hardware-Only Static FFmpeg (< 4 MB)"
 echo "  Target Output: $OUT_DIR"
 echo "=================================================================="
 
-mkdir -p "$BUILD_CACHE" "$OUT_DIR"
+mkdir -p "$BUILD_CACHE"
+chmod 700 "$BUILD_CACHE"
+mkdir -p "$OUT_DIR"
 export PKG_CONFIG_PATH="$OUT_DIR/lib/pkgconfig:$OUT_DIR/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # 1. Install ffnvcodec headers if not present in system
@@ -38,6 +40,7 @@ cd "$BUILD_CACHE"
 FFMPEG_VERSION="7.1"
 FFMPEG_TAR="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_TAR}"
+FFMPEG_SHA256="40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6"
 
 if [ ! -d "ffmpeg-${FFMPEG_VERSION}" ]; then
     if [ ! -f "$FFMPEG_TAR" ]; then
@@ -48,6 +51,12 @@ if [ ! -d "ffmpeg-${FFMPEG_VERSION}" ]; then
         }
     fi
     if [ -f "$FFMPEG_TAR" ] && [ ! -d "ffmpeg-${FFMPEG_VERSION}" ]; then
+        echo "[*] Verifying SHA256 checksum for ${FFMPEG_TAR}..."
+        echo "${FFMPEG_SHA256}  ${FFMPEG_TAR}" | sha256sum -c - || {
+            echo "[!] ERROR: SHA256 verification failed for ${FFMPEG_TAR}!" >&2
+            rm -f "$FFMPEG_TAR"
+            exit 1
+        }
         echo "[*] Extracting ${FFMPEG_TAR}..."
         tar -xf "$FFMPEG_TAR"
     fi
