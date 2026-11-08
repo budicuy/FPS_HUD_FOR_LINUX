@@ -108,8 +108,8 @@ int run_player_worker(int argc, char** argv) {
   if (fmt_ctx->duration > 0) {
     duration_sec = static_cast<float>(fmt_ctx->duration) / static_cast<float>(AV_TIME_BASE);
   } else if (vid_stream->duration > 0) {
-    duration_sec =
-        static_cast<float>(vid_stream->duration) * static_cast<float>(av_q2d(vid_stream->time_base));
+    duration_sec = static_cast<float>(vid_stream->duration) *
+                   static_cast<float>(av_q2d(vid_stream->time_base));
   }
 
   // 2. Setup POSIX Shared Memory
@@ -186,9 +186,9 @@ int run_player_worker(int argc, char** argv) {
   listen(server_sock, 1);
 
   // 4. Initialize SwsContext for RGBA conversion
-  SwsContext* sws = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt, width,
-                                   height, AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr,
-                                   nullptr);
+  SwsContext* sws =
+      sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt, width, height,
+                     AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!sws) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: sws_getContext failed.\n");
     close(server_sock);
@@ -209,15 +209,13 @@ int run_player_worker(int argc, char** argv) {
   int rgba_linesizes[4] = {static_cast<int>(width * 4), 0, 0, 0};
 
   AVRational avg_fps = av_guess_frame_rate(fmt_ctx, vid_stream, nullptr);
-  double frame_interval = (avg_fps.num > 0 && avg_fps.den > 0)
-                              ? (1.0 / av_q2d(avg_fps))
-                              : (1.0 / 60.0);
+  double frame_interval =
+      (avg_fps.num > 0 && avg_fps.den > 0) ? (1.0 / av_q2d(avg_fps)) : (1.0 / 60.0);
   float playback_speed = 1.0f;
 
-  std::fprintf(stdout,
-               "[FPSHUD Player] Ready: %ux%u @ %.2f fps (duration: %.1f s). Listening on %s\n",
-               width, height, (avg_fps.num > 0 ? av_q2d(avg_fps) : 60.0), duration_sec,
-               socket_path.c_str());
+  std::fprintf(
+      stdout, "[FPSHUD Player] Ready: %ux%u @ %.2f fps (duration: %.1f s). Listening on %s\n",
+      width, height, (avg_fps.num > 0 ? av_q2d(avg_fps) : 60.0), duration_sec, socket_path.c_str());
 
   int client_sock = -1;
   bool running = true;
@@ -253,8 +251,7 @@ int run_player_worker(int argc, char** argv) {
             header->is_playing.store(false, std::memory_order_relaxed);
           } else if (req.action == IpcPlaybackAction::Seek) {
             float target_sec = std::max(0.0f, std::min(req.value, header->duration_sec));
-            int64_t target_ts =
-                static_cast<int64_t>(target_sec / av_q2d(vid_stream->time_base));
+            int64_t target_ts = static_cast<int64_t>(target_sec / av_q2d(vid_stream->time_base));
             av_seek_frame(fmt_ctx, video_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD);
             avcodec_flush_buffers(codec_ctx);
             header->current_time_sec.store(target_sec, std::memory_order_relaxed);
@@ -293,10 +290,11 @@ int run_player_worker(int argc, char** argv) {
                 sws_scale(sws, raw_frame->data, raw_frame->linesize, 0, codec_ctx->height,
                           rgba_buffers, rgba_linesizes);
 
-                float cur_sec = (raw_frame->pts != AV_NOPTS_VALUE)
-                                    ? static_cast<float>(raw_frame->pts * av_q2d(vid_stream->time_base))
-                                    : header->current_time_sec.load(std::memory_order_relaxed) +
-                                          static_cast<float>(frame_interval);
+                float cur_sec =
+                    (raw_frame->pts != AV_NOPTS_VALUE)
+                        ? static_cast<float>(raw_frame->pts * av_q2d(vid_stream->time_base))
+                        : header->current_time_sec.load(std::memory_order_relaxed) +
+                              static_cast<float>(frame_interval);
 
                 header->current_time_sec.store(cur_sec, std::memory_order_relaxed);
                 header->frame_seq.fetch_add(1, std::memory_order_release);

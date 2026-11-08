@@ -990,9 +990,7 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
 
 VideoPlayerController::VideoPlayerController() = default;
 
-VideoPlayerController::~VideoPlayerController() {
-  close();
-}
+VideoPlayerController::~VideoPlayerController() { close(); }
 
 bool VideoPlayerController::open(const std::string& filepath, const std::string& helper_bin_path) {
   close();
@@ -1012,8 +1010,8 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
   socket_path_ = runtime_dir + "/" + kPlaybackSocketPrefix + std::to_string(my_pid) + "_" +
                  std::to_string(now_us) + ".sock";
 
-  const char* argv[] = {helper_bin_path.c_str(), "--player", shm_name_.c_str(),
-                        socket_path_.c_str(), filepath.c_str(), nullptr};
+  const char* argv[] = {helper_bin_path.c_str(), "--player",       shm_name_.c_str(),
+                        socket_path_.c_str(),    filepath.c_str(), nullptr};
 
   int res = ::posix_spawnp(&worker_pid_, helper_bin_path.c_str(), nullptr, nullptr,
                            const_cast<char* const*>(argv), environ);
@@ -1036,7 +1034,7 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
       shm_fd_ = ::shm_open(shm_name_.c_str(), O_RDWR, 0600);
     }
     if (shm_fd_ >= 0) {
-      struct stat st {};
+      struct stat st{};
       if (::fstat(shm_fd_, &st) == 0 &&
           static_cast<size_t>(st.st_size) >= sizeof(PlaybackShmHeader)) {
         shm_size_ = static_cast<size_t>(st.st_size);
@@ -1138,17 +1136,11 @@ void VideoPlayerController::close() {
   last_consumed_seq_ = 0;
 }
 
-void VideoPlayerController::play() {
-  send_action(IpcPlaybackAction::Play, 0.0f);
-}
+void VideoPlayerController::play() { send_action(IpcPlaybackAction::Play, 0.0f); }
 
-void VideoPlayerController::pause() {
-  send_action(IpcPlaybackAction::Pause, 0.0f);
-}
+void VideoPlayerController::pause() { send_action(IpcPlaybackAction::Pause, 0.0f); }
 
-void VideoPlayerController::seek(float sec) {
-  send_action(IpcPlaybackAction::Seek, sec);
-}
+void VideoPlayerController::seek(float sec) { send_action(IpcPlaybackAction::Seek, sec); }
 
 void VideoPlayerController::set_speed(float speed) {
   send_action(IpcPlaybackAction::SetSpeed, speed);
@@ -1170,13 +1162,9 @@ const uint8_t* VideoPlayerController::frame_pixels() const noexcept {
   return is_active() ? shm_pixels_ : nullptr;
 }
 
-uint64_t VideoPlayerController::last_consumed_seq() const noexcept {
-  return last_consumed_seq_;
-}
+uint64_t VideoPlayerController::last_consumed_seq() const noexcept { return last_consumed_seq_; }
 
-void VideoPlayerController::mark_seq_consumed(uint64_t seq) noexcept {
-  last_consumed_seq_ = seq;
-}
+void VideoPlayerController::mark_seq_consumed(uint64_t seq) noexcept { last_consumed_seq_ = seq; }
 
 void VideoPlayerController::send_action(IpcPlaybackAction action, float value) {
   if (sock_fd_ >= 0) {

@@ -141,8 +141,9 @@ static void render_video_player_modal(float scale, float display_width, float di
   ImGui::SetNextWindowSize(ImVec2(max_w, max_h), ImGuiCond_Appearing);
 
   bool modal_open = true;
-  if (ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open,
-                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+  if (ImGui::BeginPopupModal(
+          "In-Game Video Player##Modal", &modal_open,
+          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
     const auto* hdr = g_player_controller.header();
     if (!hdr || !g_player_controller.is_active()) {
       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
@@ -189,8 +190,7 @@ static void render_video_player_modal(float scale, float display_width, float di
     int cur_s = static_cast<int>(cur_time) % 60;
     int tot_m = static_cast<int>(duration) / 60;
     int tot_s = static_cast<int>(duration) % 60;
-    std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d / %02d:%02d", cur_m, cur_s, tot_m,
-                  tot_s);
+    std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d / %02d:%02d", cur_m, cur_s, tot_m, tot_s);
 
     if (ImGui::SliderFloat("##SeekSlider", &slider_time, 0.0f, duration > 0 ? duration : 1.0f,
                            time_buf)) {
@@ -223,9 +223,8 @@ static void render_video_player_modal(float scale, float display_width, float di
                         ? 0
                         : ((g_player_speed == 1.5f) ? 2 : ((g_player_speed == 2.0f) ? 3 : 1));
     if (ImGui::Combo("##SpeedCombo", &speed_idx, speed_items, IM_ARRAYSIZE(speed_items))) {
-      g_player_speed = (speed_idx == 0)
-                           ? 0.5f
-                           : ((speed_idx == 2) ? 1.5f : ((speed_idx == 3) ? 2.0f : 1.0f));
+      g_player_speed =
+          (speed_idx == 0) ? 0.5f : ((speed_idx == 2) ? 1.5f : ((speed_idx == 3) ? 2.0f : 1.0f));
       g_player_controller.set_speed(g_player_speed);
     }
 

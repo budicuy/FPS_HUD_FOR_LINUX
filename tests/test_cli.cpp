@@ -4260,6 +4260,38 @@ void run_all_devices_and_features_suite() {
                "10.13 Clips sorted newest first");
 
     fs::remove_all(test_dir);
+
+    // 10.14 VideoPlayerController handles non-existent file cleanly
+    bool open_nonexistent =
+        controller.open("/nonexistent/file_12345.mp4", "./build/fpshud_recorder_bin");
+    check_cond(!open_nonexistent && !controller.is_active(),
+               "10.14 Player controller safely rejects non-existent video files");
+
+    // 10.15 Mouse isolation contract remains active during in-game GUI & modal player
+    auto& cur_cfg = fpshud::get_mutable_config();
+    check_cond(fpshud::is_mouse_isolation_active() == cur_cfg.gui_open,
+               "10.15 In-game mouse isolation active whenever GUI menu is open");
+
+    // 10.16 Zero DT_NEEDED Decoupled Multimedia Invariant for libfpshud.so
+    bool dt_needed_clean = true;
+    if (fs::exists("build/libfpshud.so")) {
+      FILE* fp = popen("readelf -d build/libfpshud.so 2>/dev/null", "r");
+      if (fp) {
+        char elf_buf[512];
+        while (fgets(elf_buf, sizeof(elf_buf), fp)) {
+          if (std::strstr(elf_buf, "NEEDED") != nullptr) {
+            if (std::strstr(elf_buf, "libav") || std::strstr(elf_buf, "libsw") ||
+                std::strstr(elf_buf, "pulse")) {
+              dt_needed_clean = false;
+              break;
+            }
+          }
+        }
+        pclose(fp);
+      }
+    }
+    check_cond(dt_needed_clean,
+               "10.16 Decoupled DT_NEEDED: libfpshud.so contains zero static multimedia leakage");
   }
 
   std::printf("\n====================================================================\n");

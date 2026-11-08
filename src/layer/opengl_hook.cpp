@@ -561,7 +561,7 @@ static uint32_t g_player_tex_h = 0;
 static uint64_t g_player_last_seq = 0;
 
 static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                                 uint64_t seq) {
+                                                  uint64_t seq) {
   if (!rgba || w == 0 || h == 0 || !g_gl.glGenTextures || !g_gl.glBindTexture) {
     return 0;
   }
