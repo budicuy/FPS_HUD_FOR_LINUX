@@ -3,6 +3,7 @@
 #include "telemetry.hpp"
 #include "png_writer.hpp"
 #include "recorder_ipc.hpp"
+#include "recorder_playback_protocol.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
 #include "input/input_hooks.hpp"
@@ -4200,6 +4201,20 @@ void run_all_devices_and_features_suite() {
                "10.1 FFmpeg script enables h264, hevc, aac decoders");
     check_cond(content.find("--enable-demuxer=mov,mp4,matroska,webm") != std::string::npos,
                "10.2 FFmpeg script enables mov, mp4, matroska, webm demuxers");
+
+    PlaybackShmHeader header{};
+    header.magic = kPlaybackShmMagic;
+    header.width = 1920;
+    header.height = 1080;
+    header.duration_sec = 60.0f;
+    header.current_time_sec.store(15.5f, std::memory_order_relaxed);
+    header.is_playing.store(true, std::memory_order_relaxed);
+    header.frame_seq.store(100, std::memory_order_relaxed);
+
+    check_cond(header.magic == 0x504C4159, "10.3 PlaybackShmHeader magic is 'PLAY'");
+    check_cond(header.current_time_sec.load() == 15.5f,
+               "10.4 PlaybackShmHeader current_time_sec atomic load");
+    check_cond(sizeof(IpcPlaybackRequest) == 8, "10.5 IpcPlaybackRequest is compact 8 bytes");
   }
 
   std::printf("\n====================================================================\n");
