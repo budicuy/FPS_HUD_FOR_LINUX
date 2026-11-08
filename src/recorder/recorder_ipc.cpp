@@ -984,4 +984,205 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
       });
 }
 
+// ----------------------------------------------------------------------------
+// VideoPlayerController Implementation
+// ----------------------------------------------------------------------------
+
+VideoPlayerController::VideoPlayerController() = default;
+
+VideoPlayerController::~VideoPlayerController() {
+  close();
+}
+
+bool VideoPlayerController::open(const std::string& filepath, const std::string& helper_bin_path) {
+  close();
+
+  if (filepath.empty() || helper_bin_path.empty()) {
+    return false;
+  }
+
+  pid_t my_pid = ::getpid();
+  auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+
+  shm_name_ =
+      std::string(kPlaybackShmPrefix) + std::to_string(my_pid) + "_" + std::to_string(now_us);
+  std::string runtime_dir = get_secure_runtime_dir();
+  socket_path_ = runtime_dir + "/" + kPlaybackSocketPrefix + std::to_string(my_pid) + "_" +
+                 std::to_string(now_us) + ".sock";
+
+  const char* argv[] = {helper_bin_path.c_str(), "--player", shm_name_.c_str(),
+                        socket_path_.c_str(), filepath.c_str(), nullptr};
+
+  int res = ::posix_spawnp(&worker_pid_, helper_bin_path.c_str(), nullptr, nullptr,
+                           const_cast<char* const*>(argv), environ);
+  if (res != 0 || worker_pid_ <= 0) {
+    worker_pid_ = -1;
+    return false;
+  }
+
+  bool shm_ready = false;
+  auto start_wait = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() - start_wait < std::chrono::milliseconds(1500)) {
+    int status = 0;
+    pid_t wp = ::waitpid(worker_pid_, &status, WNOHANG);
+    if (wp > 0) {
+      worker_pid_ = -1;
+      return false;
+    }
+
+    if (shm_fd_ < 0) {
+      shm_fd_ = ::shm_open(shm_name_.c_str(), O_RDWR, 0600);
+    }
+    if (shm_fd_ >= 0) {
+      struct stat st {};
+      if (::fstat(shm_fd_, &st) == 0 &&
+          static_cast<size_t>(st.st_size) >= sizeof(PlaybackShmHeader)) {
+        shm_size_ = static_cast<size_t>(st.st_size);
+        void* ptr = ::mmap(nullptr, shm_size_, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd_, 0);
+        if (ptr != MAP_FAILED) {
+          shm_header_ = reinterpret_cast<PlaybackShmHeader*>(ptr);
+          if (shm_header_->magic == kPlaybackShmMagic) {
+            shm_pixels_ = reinterpret_cast<uint8_t*>(ptr) + sizeof(PlaybackShmHeader);
+            shm_ready = true;
+            break;
+          } else {
+            ::munmap(ptr, shm_size_);
+            shm_header_ = nullptr;
+          }
+        }
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  if (!shm_ready) {
+    close();
+    return false;
+  }
+
+  sock_fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sock_fd_ >= 0) {
+    sockaddr_un saddr{};
+    saddr.sun_family = AF_UNIX;
+    std::strncpy(saddr.sun_path, socket_path_.c_str(), sizeof(saddr.sun_path) - 1);
+    auto sock_wait = std::chrono::steady_clock::now();
+    bool connected = false;
+    while (std::chrono::steady_clock::now() - sock_wait < std::chrono::milliseconds(500)) {
+      if (::connect(sock_fd_, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) == 0) {
+        connected = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!connected) {
+      ::close(sock_fd_);
+      sock_fd_ = -1;
+    }
+  }
+
+  last_consumed_seq_ = 0;
+  return true;
+}
+
+void VideoPlayerController::close() {
+  if (worker_pid_ > 0) {
+    send_action(IpcPlaybackAction::Close, 0.0f);
+    if (sock_fd_ >= 0) {
+      ::close(sock_fd_);
+      sock_fd_ = -1;
+    }
+    auto start_wait = std::chrono::steady_clock::now();
+    bool exited = false;
+    while (std::chrono::steady_clock::now() - start_wait < std::chrono::milliseconds(150)) {
+      int status = 0;
+      if (::waitpid(worker_pid_, &status, WNOHANG) > 0) {
+        exited = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!exited) {
+      ::kill(worker_pid_, SIGTERM);
+      int status = 0;
+      ::waitpid(worker_pid_, &status, 0);
+    }
+    worker_pid_ = -1;
+  }
+
+  if (sock_fd_ >= 0) {
+    ::close(sock_fd_);
+    sock_fd_ = -1;
+  }
+  if (!socket_path_.empty()) {
+    ::unlink(socket_path_.c_str());
+    socket_path_.clear();
+  }
+
+  if (shm_header_ != nullptr) {
+    ::munmap(shm_header_, shm_size_);
+    shm_header_ = nullptr;
+    shm_pixels_ = nullptr;
+  }
+  if (shm_fd_ >= 0) {
+    ::close(shm_fd_);
+    shm_fd_ = -1;
+  }
+  if (!shm_name_.empty()) {
+    ::shm_unlink(shm_name_.c_str());
+    shm_name_.clear();
+  }
+
+  shm_size_ = 0;
+  last_consumed_seq_ = 0;
+}
+
+void VideoPlayerController::play() {
+  send_action(IpcPlaybackAction::Play, 0.0f);
+}
+
+void VideoPlayerController::pause() {
+  send_action(IpcPlaybackAction::Pause, 0.0f);
+}
+
+void VideoPlayerController::seek(float sec) {
+  send_action(IpcPlaybackAction::Seek, sec);
+}
+
+void VideoPlayerController::set_speed(float speed) {
+  send_action(IpcPlaybackAction::SetSpeed, speed);
+}
+
+void VideoPlayerController::set_volume(float volume) {
+  send_action(IpcPlaybackAction::SetVolume, volume);
+}
+
+bool VideoPlayerController::is_active() const noexcept {
+  return worker_pid_ > 0 && shm_header_ != nullptr && shm_header_->magic == kPlaybackShmMagic;
+}
+
+const PlaybackShmHeader* VideoPlayerController::header() const noexcept {
+  return is_active() ? shm_header_ : nullptr;
+}
+
+const uint8_t* VideoPlayerController::frame_pixels() const noexcept {
+  return is_active() ? shm_pixels_ : nullptr;
+}
+
+uint64_t VideoPlayerController::last_consumed_seq() const noexcept {
+  return last_consumed_seq_;
+}
+
+void VideoPlayerController::mark_seq_consumed(uint64_t seq) noexcept {
+  last_consumed_seq_ = seq;
+}
+
+void VideoPlayerController::send_action(IpcPlaybackAction action, float value) {
+  if (sock_fd_ >= 0) {
+    IpcPlaybackRequest req{action, value};
+    ::send(sock_fd_, &req, sizeof(req), MSG_NOSIGNAL);
+  }
+}
+
 }  // namespace fpshud

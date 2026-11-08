@@ -4220,6 +4220,20 @@ void run_all_devices_and_features_suite() {
     const char* invalid_argv[] = {"fpshud_recorder_bin", "--player", "test_shm", "test_sock"};
     int rc = run_player_worker(4, const_cast<char**>(invalid_argv));
     check_cond(rc != 0, "10.6 run_player_worker returns error on missing video file path");
+
+    fpshud::VideoPlayerController controller;
+    check_cond(!controller.is_active(), "10.7 Player controller initially inactive");
+    check_cond(controller.header() == nullptr, "10.8 Header is nullptr when inactive");
+    check_cond(controller.frame_pixels() == nullptr, "10.9 Pixels is nullptr when inactive");
+
+    // Verify safe no-op calls when inactive
+    controller.play();
+    controller.pause();
+    controller.seek(10.0f);
+    controller.set_speed(1.5f);
+    controller.set_volume(0.8f);
+    controller.close();
+    check_cond(!controller.is_active(), "10.10 Player controller remains inactive after close");
   }
 
   std::printf("\n====================================================================\n");

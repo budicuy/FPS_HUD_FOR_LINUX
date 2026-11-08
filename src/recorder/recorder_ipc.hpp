@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pack_indexing.hpp"
+#include "recorder_playback_protocol.hpp"
 
 #include <atomic>
 #include <cctype>
@@ -241,5 +242,38 @@ constexpr void resolve_recording_dimensions(int res_mode, int display_w, int dis
   out_w &= ~1u;
   out_h &= ~1u;
 }
+
+class VideoPlayerController {
+ public:
+  VideoPlayerController();
+  ~VideoPlayerController();
+
+  bool open(const std::string& filepath, const std::string& helper_bin_path);
+  void close();
+  void play();
+  void pause();
+  void seek(float sec);
+  void set_speed(float speed);
+  void set_volume(float volume);
+
+  [[nodiscard]] bool is_active() const noexcept;
+  [[nodiscard]] const PlaybackShmHeader* header() const noexcept;
+  [[nodiscard]] const uint8_t* frame_pixels() const noexcept;
+  [[nodiscard]] uint64_t last_consumed_seq() const noexcept;
+  void mark_seq_consumed(uint64_t seq) noexcept;
+
+ private:
+  void send_action(IpcPlaybackAction action, float value);
+
+  int shm_fd_{-1};
+  int sock_fd_{-1};
+  pid_t worker_pid_{-1};
+  PlaybackShmHeader* shm_header_{nullptr};
+  uint8_t* shm_pixels_{nullptr};
+  size_t shm_size_{0};
+  std::string shm_name_;
+  std::string socket_path_;
+  uint64_t last_consumed_seq_{0};
+};
 
 }  // namespace fpshud
