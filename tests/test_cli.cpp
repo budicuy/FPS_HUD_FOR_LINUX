@@ -55,6 +55,7 @@ extern "C" const char* __lsan_default_suppressions() {
 extern "C" {
 uint32_t SDL_GetRelativeMouseState(int* x, int* y);
 uint32_t SDL_GetMouseState(int* x, int* y);
+uint32_t SDL_GetGlobalMouseState(int* x, int* y);
 int SDL_SetRelativeMouseMode(int enabled);
 int SDL_GetRelativeMouseMode();
 int XQueryPointer(void* dpy, unsigned long w, unsigned long* root_return,
@@ -1774,7 +1775,9 @@ void run_elf_and_layer_abi_suite() {
 
     int mx = 50, my = 60;
     uint32_t mouse_btn = SDL_GetMouseState(&mx, &my);
-    bool mouse_btn_zeroed = (mouse_btn == 0);
+    int gmx = 70, gmy = 80;
+    uint32_t global_mouse_btn = SDL_GetGlobalMouseState(&gmx, &gmy);
+    bool mouse_btn_zeroed = (mouse_btn == 0 && global_mouse_btn == 0);
 
     SDL_SetRelativeMouseMode(1);
     int active_rel_mode = SDL_GetRelativeMouseMode();
