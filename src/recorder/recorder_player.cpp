@@ -219,6 +219,7 @@ int run_player_worker(int argc, char** argv) {
 
   int client_sock = -1;
   bool running = true;
+  bool seek_pending = false;
   auto last_frame_time = std::chrono::steady_clock::now();
 
   while (running) {
@@ -256,6 +257,7 @@ int run_player_worker(int argc, char** argv) {
             avcodec_flush_buffers(codec_ctx);
             header->current_time_sec.store(target_sec, std::memory_order_relaxed);
             header->is_ended.store(false, std::memory_order_relaxed);
+            seek_pending = true;
           } else if (req.action == IpcPlaybackAction::SetSpeed) {
             if (req.value >= 0.25f && req.value <= 4.0f) {
               playback_speed = req.value;
@@ -270,14 +272,15 @@ int run_player_worker(int argc, char** argv) {
 
     if (!running) break;
 
-    // 6. Decode and display next video frame if playing
-    if (header->is_playing.load(std::memory_order_relaxed)) {
+    // 6. Decode and display next video frame if playing or seek pending
+    if (header->is_playing.load(std::memory_order_relaxed) || seek_pending) {
       auto now = std::chrono::steady_clock::now();
       double elapsed = std::chrono::duration<double>(now - last_frame_time).count();
       double target_delay = frame_interval / static_cast<double>(playback_speed);
 
-      if (elapsed >= target_delay) {
+      if (seek_pending || elapsed >= target_delay) {
         last_frame_time = now;
+        seek_pending = false;
 
         int read_res = 0;
         bool frame_decoded = false;

@@ -244,7 +244,7 @@ constexpr void resolve_recording_dimensions(int res_mode, int display_w, int dis
 }
 
 class VideoPlayerController {
- public:
+public:
   VideoPlayerController();
   ~VideoPlayerController();
 
@@ -262,7 +262,7 @@ class VideoPlayerController {
   [[nodiscard]] uint64_t last_consumed_seq() const noexcept;
   void mark_seq_consumed(uint64_t seq) noexcept;
 
- private:
+private:
   void send_action(IpcPlaybackAction action, float value);
 
   int shm_fd_{-1};

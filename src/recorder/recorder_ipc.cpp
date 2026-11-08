@@ -1013,10 +1013,55 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
   const char* argv[] = {helper_bin_path.c_str(), "--player",       shm_name_.c_str(),
                         socket_path_.c_str(),    filepath.c_str(), nullptr};
 
+  std::vector<std::string> env_strings;
+  std::string new_ld_path;
+  std::string host_libva_path;
+  build_container_host_env_paths("", new_ld_path, host_libva_path);
+
+  const char* cur_ld = std::getenv("LD_LIBRARY_PATH");
+  if (cur_ld && *cur_ld) {
+    if (!new_ld_path.empty()) {
+      new_ld_path += ":";
+    }
+    new_ld_path += cur_ld;
+  }
+
+  const char* cur_libva = std::getenv("LIBVA_DRIVERS_PATH");
+  bool has_user_libva = (cur_libva && *cur_libva);
+
+  for (char** ep = environ; ep && *ep; ++ep) {
+    std::string e = *ep;
+    if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) {
+      continue;
+    }
+    if (e.rfind("LD_PRELOAD=", 0) == 0) {
+      continue;  // Do not leak game's LD_PRELOAD into player worker
+    }
+    if (!has_user_libva && e.rfind("LIBVA_DRIVERS_PATH=", 0) == 0) {
+      continue;
+    }
+    env_strings.push_back(std::move(e));
+  }
+
+  if (!new_ld_path.empty()) {
+    env_strings.push_back("LD_LIBRARY_PATH=" + new_ld_path);
+  }
+  if (!has_user_libva && !host_libva_path.empty()) {
+    env_strings.push_back("LIBVA_DRIVERS_PATH=" + host_libva_path);
+  }
+
+  std::vector<char*> envp;
+  envp.reserve(env_strings.size() + 1);
+  for (auto& s : env_strings) {
+    envp.push_back(s.data());
+  }
+  envp.push_back(nullptr);
+
   int res = ::posix_spawnp(&worker_pid_, helper_bin_path.c_str(), nullptr, nullptr,
-                           const_cast<char* const*>(argv), environ);
+                           const_cast<char* const*>(argv), envp.data());
   if (res != 0 || worker_pid_ <= 0) {
     worker_pid_ = -1;
+    close();
     return false;
   }
 

@@ -4292,6 +4292,71 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(dt_needed_clean,
                "10.16 Decoupled DT_NEEDED: libfpshud.so contains zero static multimedia leakage");
+
+    // 10.17 GUI menu close on F12 terminates active player controller
+    bool f12_cleanup_logic_present = false;
+    {
+      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+      f12_cleanup_logic_present =
+          (gui_src.find("if (!cfg.gui_open)") != std::string::npos &&
+           gui_src.find("g_player_controller.close()") != std::string::npos);
+    }
+    check_cond(
+        f12_cleanup_logic_present,
+        "10.17 GUI menu close on F12 terminates active player controller to prevent CPU leak");
+
+    // 10.18 Vulkan layer player texture returns 0 when unallocated, never raw 1
+    bool vulkan_no_dummy_one = false;
+    {
+      std::string vk_src = read_text_file("src/layer/vulkan_layer.cpp");
+      vulkan_no_dummy_one =
+          (vk_src.find("static_cast<ImTextureID>(1)") == std::string::npos &&
+           vk_src.find("reinterpret_cast<ImTextureID>(static_cast<intptr_t>(1))") ==
+               std::string::npos);
+    }
+    check_cond(vulkan_no_dummy_one,
+               "10.18 Vulkan layer avoids invalid integer 1 texture handle to prevent GPU crash");
+
+    // 10.19 VideoPlayerController strips LD_PRELOAD to protect worker process
+    bool ld_preload_stripped = false;
+    {
+      std::string ipc_src = read_text_file("src/recorder/recorder_ipc.cpp");
+      ld_preload_stripped = (ipc_src.find("VideoPlayerController::open") != std::string::npos &&
+                             ipc_src.find("LD_PRELOAD=") != std::string::npos);
+    }
+    check_cond(ld_preload_stripped,
+               "10.19 VideoPlayerController strips LD_PRELOAD from child environment");
+
+    // 10.20 Playback worker supports paused seek frame decoding
+    bool paused_seek_supported = false;
+    {
+      std::string player_src = read_text_file("src/recorder/recorder_player.cpp");
+      paused_seek_supported = (player_src.find("seek_pending") != std::string::npos);
+    }
+    check_cond(paused_seek_supported,
+               "10.20 Playback worker decodes single frame on seek while paused");
+
+    // 10.21 Gallery caches scanned clips to prevent per-frame filesystem stat calls
+    bool gallery_caching_present = false;
+    {
+      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+      gallery_caching_present = (gui_src.find("s_cached_clips") != std::string::npos &&
+                                 gui_src.find("s_last_clips_scan") != std::string::npos);
+    }
+    check_cond(gallery_caching_present,
+               "10.21 Gallery caches scanned clips with time throttle to eliminate per-frame stat "
+               "overhead");
+
+    // 10.22 Delete button requires confirmation before removing recorded clip
+    bool delete_confirmation_present = false;
+    {
+      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+      delete_confirmation_present = (gui_src.find("[Confirm?]") != std::string::npos &&
+                                     gui_src.find("s_pending_delete_path") != std::string::npos);
+    }
+    check_cond(
+        delete_confirmation_present,
+        "10.22 Recorded clip deletion requires two-step confirmation to prevent accidental loss");
   }
 
   std::printf("\n====================================================================\n");

@@ -439,7 +439,7 @@ bool init_swapchain_overlay(SwapchainData* sd) {
     fpshud::register_player_texture_backend(
         [](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t /*seq*/) -> ImTextureID {
           if (!rgba || w == 0 || h == 0) return 0;
-          return static_cast<ImTextureID>(1);
+          return 0;
         },
         []() {});
   }

@@ -39,7 +39,7 @@ ImTextureID get_or_update_player_texture(const uint8_t* rgba, uint32_t w, uint32
   if (g_texture_provider) {
     return g_texture_provider(rgba, w, h, seq);
   }
-  return static_cast<ImTextureID>(1);
+  return 0;
 }
 
 void release_player_texture() {
@@ -111,6 +111,7 @@ std::vector<RecordedClipInfo> scan_recorded_clips(const std::string& dir_path) {
 namespace {
 
 void open_system_folder(const std::string& path);
+void set_status_message(const std::string& msg);
 
 static VideoPlayerController g_player_controller;
 static std::string g_player_active_file;
@@ -124,7 +125,11 @@ static void open_modal_player(const std::string& filepath, const std::string& fi
   g_player_active_file = filepath;
   g_player_active_filename = filename;
   std::string helper_bin = get_helper_binary_path();
-  g_player_controller.open(filepath, helper_bin);
+  if (!g_player_controller.open(filepath, helper_bin)) {
+    set_status_message("[!] Failed to open video clip.");
+    g_player_controller.close();
+    return;
+  }
   g_player_modal_open_requested = true;
 }
 
@@ -144,8 +149,17 @@ static void render_video_player_modal(float scale, float display_width, float di
   if (ImGui::BeginPopupModal(
           "In-Game Video Player##Modal", &modal_open,
           ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    if (!g_player_controller.is_active()) {
+      set_status_message("[!] Video playback failed.");
+      g_player_controller.close();
+      release_player_texture();
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+      return;
+    }
+
     const auto* hdr = g_player_controller.header();
-    if (!hdr || !g_player_controller.is_active()) {
+    if (!hdr) {
       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
       if (ImGui::Button("Close Player")) {
         g_player_controller.close();
@@ -421,7 +435,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     if (gui_font) ImGui::PopFont();
   }
 
-  if (!cfg.gui_open) return;
+  if (!cfg.gui_open) {
+    if (g_player_controller.is_active()) {
+      g_player_controller.close();
+      release_player_texture();
+    }
+    return;
+  }
 
   constexpr float kBaseGuiWidth = 1280.0f;
   constexpr float kBaseGuiHeight = 720.0f;
@@ -1506,13 +1526,25 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::Separator();
     draw_section_header("Recorded Clips Gallery", ImVec4(0.38f, 0.84f, 1.0f, 1.0f));
 
-    auto clips = scan_recorded_clips(cur_dir);
-    if (clips.empty()) {
+    static std::vector<RecordedClipInfo> s_cached_clips;
+    static std::string s_cached_clips_dir;
+    static auto s_last_clips_scan = std::chrono::steady_clock::time_point{};
+    static std::string s_pending_delete_path;
+    static auto s_pending_delete_time = std::chrono::steady_clock::time_point{};
+
+    auto now = std::chrono::steady_clock::now();
+    if (s_cached_clips_dir != cur_dir || now - s_last_clips_scan > std::chrono::seconds(2)) {
+      s_cached_clips = scan_recorded_clips(cur_dir);
+      s_cached_clips_dir = cur_dir;
+      s_last_clips_scan = now;
+    }
+
+    if (s_cached_clips.empty()) {
       ImGui::TextDisabled("No recorded video clips found.");
     } else {
       ImGui::BeginChild("##ClipsList", ImVec2(0.0f, 160.0f * scale), true);
-      for (size_t i = 0; i < clips.size(); ++i) {
-        const auto& clip = clips[i];
+      for (size_t i = 0; i < s_cached_clips.size(); ++i) {
+        const auto& clip = s_cached_clips[i];
         ImGui::PushID(static_cast<int>(i));
         ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.95f, 1.0f), "%s", clip.filename.c_str());
         ImGui::TextDisabled("%s | %s", clip.date_str.c_str(), clip.size_str.c_str());
@@ -1524,15 +1556,28 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImGui::PopStyleColor();
 
         ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
-        if (ImGui::Button("[Delete]")) {
-          std::error_code ec;
-          std::filesystem::remove(clip.filepath, ec);
-          set_status_message("Deleted: " + clip.filename);
+        bool is_confirming = (s_pending_delete_path == clip.filepath &&
+                              now - s_pending_delete_time < std::chrono::seconds(3));
+        if (is_confirming) {
+          ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.20f, 0.15f, 1.0f));
+          if (ImGui::Button("[Confirm?]")) {
+            std::error_code ec;
+            std::filesystem::remove(clip.filepath, ec);
+            set_status_message("Deleted: " + clip.filename);
+            s_pending_delete_path.clear();
+            s_last_clips_scan = {};  // Force immediate cache refresh
+          }
+          ImGui::PopStyleColor();
+        } else {
+          ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
+          if (ImGui::Button("[Delete]")) {
+            s_pending_delete_path = clip.filepath;
+            s_pending_delete_time = std::chrono::steady_clock::now();
+          }
+          ImGui::PopStyleColor();
         }
-        ImGui::PopStyleColor();
 
-        if (i + 1 < clips.size()) {
+        if (i + 1 < s_cached_clips.size()) {
           ImGui::Separator();
         }
         ImGui::PopID();
