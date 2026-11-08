@@ -228,6 +228,7 @@ add_library(fpshud SHARED
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     src/input/input_manager.cpp
+    src/input/input_hooks.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
     src/layer/vulkan_layer.cpp
@@ -284,6 +285,7 @@ add_executable(fpshud_test
     src/core/config.cpp
     src/telemetry/telemetry.cpp
     src/input/input_manager.cpp
+    src/input/input_hooks.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     src/ui/gui_menu.cpp
@@ -477,6 +479,7 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_hooks.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
@@ -506,6 +509,8 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_hooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_hooks.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp

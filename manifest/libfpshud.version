@@ -8,6 +8,11 @@
         glXGetProcAddressARB;
         eglSwapBuffers;
         eglGetProcAddress;
+        SDL_PollEvent;
+        SDL_PeepEvents;
+        SDL_WaitEvent;
+        SDL_WaitEventTimeout;
+        XNextEvent;
     local:
         *;
 };

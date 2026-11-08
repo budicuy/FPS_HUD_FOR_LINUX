@@ -30,6 +30,7 @@ compile_commands.json
 
 # Benchmark CSV outputs in workspace
 *.csv
+imgui.ini
 
 # Superpowers SDD workspace
 .superpowers/

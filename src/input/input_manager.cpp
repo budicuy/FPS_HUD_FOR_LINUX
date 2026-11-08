@@ -1,4 +1,5 @@
 #include "input_manager.hpp"
+#include "input/input_hooks.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
@@ -612,6 +613,19 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
     if (io && (cfg.gui_open || !down)) {
       io->AddMouseButtonEvent(btn_idx, down);
     }
+    if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
+      set_mouse_grab(false);
+      fpshud::on_gui_state_changed(false);
+      set_x11_grab(false);
+      pending_ungrab_ = false;
+    }
+  }
+}
+
+void InputManager::handle_pointer_wheel(float x, float y, const HudConfig& cfg,
+                                        ImGuiIO* io) noexcept {
+  if (io && cfg.gui_open) {
+    io->AddMouseWheelEvent(x, y);
   }
 }
 
@@ -854,6 +868,33 @@ void InputManager::set_mouse_grab(bool grab) {
   }
 }
 
+void InputManager::set_x11_grab(bool grab) {
+  if (!x11_display_ || !x11_lib_) return;
+
+  using PFN_XDefaultRootWindow = Window (*)(Display*);
+  using PFN_XGrabPointer =
+      int (*)(Display*, Window, Bool, unsigned int, int, int, Window, Cursor, Time);
+  using PFN_XUngrabPointer = int (*)(Display*, Time);
+
+  auto* dpy = static_cast<Display*>(x11_display_);
+  if (grab) {
+    auto fnDefaultRoot =
+        reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
+    auto fnGrab = reinterpret_cast<PFN_XGrabPointer>(dlsym(x11_lib_, "XGrabPointer"));
+    if (fnDefaultRoot && fnGrab) {
+      Window root = fnDefaultRoot(dpy);
+      // PointerMotionMask (64) | ButtonPressMask (4) | ButtonReleaseMask (8) = 76
+      // GrabModeAsync (1)
+      fnGrab(dpy, root, False, 76, 1, 1, 0, 0, 0);
+    }
+  } else {
+    auto fnUngrab = reinterpret_cast<PFN_XUngrabPointer>(dlsym(x11_lib_, "XUngrabPointer"));
+    if (fnUngrab) {
+      fnUngrab(dpy, 0);
+    }
+  }
+}
+
 void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width,
                               float display_height) {
   struct input_event ev;
@@ -884,6 +925,8 @@ void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width,
   // If ungrab was deferred until mouse button release, complete it now
   if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
     set_mouse_grab(false);
+    fpshud::on_gui_state_changed(false);
+    set_x11_grab(false);
     pending_ungrab_ = false;
   }
 }
@@ -967,6 +1010,8 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     io.MouseDrawCursor = true;
     pending_ungrab_ = false;
     set_mouse_grab(true);
+    fpshud::on_gui_state_changed(true);
+    set_x11_grab(true);
   } else if (!cfg.gui_open && prev_gui_open_) {
     // GUI just closed: auto-save current config, release ImGui cursor/inputs, and ungrab mouse back
     // to game
@@ -974,12 +1019,19 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     release_imgui_inputs(io);
     if (!mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
       set_mouse_grab(false);
+      fpshud::on_gui_state_changed(false);
+      set_x11_grab(false);
       pending_ungrab_ = false;
     } else {
       // Wait for physical mouse button release before ungrabbing so game doesn't receive stray
       // release
       pending_ungrab_ = true;
     }
+  } else if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
+    set_mouse_grab(false);
+    fpshud::on_gui_state_changed(false);
+    set_x11_grab(false);
+    pending_ungrab_ = false;
   }
   prev_gui_open_ = cfg.gui_open;
 }
@@ -990,7 +1042,10 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
     if (prev_gui_open_) {
       release_imgui_inputs(io);
       set_mouse_grab(false);
+      fpshud::on_gui_state_changed(false);
+      set_x11_grab(false);
       prev_gui_open_ = false;
+      pending_ungrab_ = false;
     }
     return;
   }

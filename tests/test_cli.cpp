@@ -5,6 +5,7 @@
 #include "recorder_ipc.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
+#include "input/input_hooks.hpp"
 #include "adaptive_vfr.hpp"
 #include "overlay_ui.hpp"
 #include "gui_menu.hpp"
@@ -1726,6 +1727,109 @@ void run_elf_and_layer_abi_suite() {
 
     check_cond(test_passed, "7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance",
                detail.c_str());
+  }
+
+  // 8. In-Game Mouse Isolation & SDL Event Suppression
+  {
+    bool check_passed = true;
+    fs::path so_path = find_libfpshud_path();
+    void* handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+
+    // 1. Verify dynamic export of SDL and X11 intercept hooks
+    bool sym_poll_ok = (handle && dlsym(handle, "SDL_PollEvent") != nullptr);
+    bool sym_peep_ok = (handle && dlsym(handle, "SDL_PeepEvents") != nullptr);
+    bool sym_wait_ok = (handle && dlsym(handle, "SDL_WaitEvent") != nullptr);
+    bool sym_wait_to_ok = (handle && dlsym(handle, "SDL_WaitEventTimeout") != nullptr);
+    bool sym_x11_ok = (handle && dlsym(handle, "XNextEvent") != nullptr);
+    bool hooks_exported = sym_poll_ok && sym_peep_ok && sym_wait_ok && sym_wait_to_ok && sym_x11_ok;
+
+    // 2. State machine test for mouse isolation and relative mouse mode unlock/restore
+    fpshud::on_gui_state_changed(false);
+    bool init_isolated = fpshud::is_mouse_isolation_active();
+
+    fpshud::on_gui_state_changed(true);
+    bool opened_isolated = fpshud::is_mouse_isolation_active();
+
+    fpshud::on_gui_state_changed(false);
+    bool closed_isolated = fpshud::is_mouse_isolation_active();
+
+    // 3. Test InputManager grab state synchronization & deferred ungrab logic
+    fpshud::InputManager& im = fpshud::get_input_manager();
+    ImGuiContext* prev_ctx = ImGui::GetCurrentContext();
+    ImGuiContext* test_ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(test_ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.ConfigInputTrickleEventQueue = false;
+    unsigned char* font_pixels = nullptr;
+    int font_w = 0, font_h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_w, &font_h);
+
+    fpshud::HudConfig test_cfg;
+    test_cfg.enabled = true;
+
+    // Reset baseline state from prior test suites
+    test_cfg.gui_open = false;
+    im.sync_grab_state(io, test_cfg);
+    fpshud::on_gui_state_changed(false);
+
+    // GUI opened: should center cursor and activate isolation
+    test_cfg.gui_open = true;
+    im.sync_grab_state(io, test_cfg);
+    bool gui_open_iso = fpshud::is_mouse_isolation_active();
+    bool cursor_drawn = io.MouseDrawCursor;
+
+    // Mouse motion forwarded
+    im.handle_pointer_motion(800.0f, 600.0f, test_cfg, &io);
+    bool motion_im_ok = (im.cursor_x() == 800.0f && im.cursor_y() == 600.0f);
+
+    // Mouse wheel forwarded
+    im.handle_pointer_wheel(0.0f, 3.0f, test_cfg, &io);
+
+    // Mouse button pressed
+    im.handle_pointer_button(BTN_LEFT, true, test_cfg, &io);
+    bool btn_down_im_ok = im.is_mouse_button_down(0);
+
+    // Run ImGui::NewFrame() to process queued events into Dear ImGui internal state
+    ImGui::NewFrame();
+    bool motion_imgui_ok = (io.MousePos.x == 800.0f && io.MousePos.y == 600.0f);
+    bool wheel_imgui_ok = (io.MouseWheel == 3.0f);
+    bool btn_imgui_ok = io.MouseDown[0];
+    ImGui::EndFrame();
+
+    // Close GUI while mouse button is still pressed: deferred ungrab
+    test_cfg.gui_open = false;
+    im.sync_grab_state(io, test_cfg);
+    // Button is still held, so isolation stays active to prevent releasing click into game
+    bool pending_ungrab_active = fpshud::is_mouse_isolation_active() && im.is_pending_ungrab();
+
+    // Release mouse button: isolation now completely turns off
+    im.handle_pointer_button(BTN_LEFT, false, test_cfg, &io);
+    bool fully_ungrabbed = !fpshud::is_mouse_isolation_active() && !im.is_pending_ungrab();
+
+    if (test_ctx) {
+      ImGui::DestroyContext(test_ctx);
+    }
+    ImGui::SetCurrentContext(prev_ctx);
+
+    check_passed = hooks_exported && !init_isolated && opened_isolated && !closed_isolated &&
+                   gui_open_iso && cursor_drawn && motion_im_ok && motion_imgui_ok &&
+                   wheel_imgui_ok && btn_down_im_ok && btn_imgui_ok && pending_ungrab_active &&
+                   fully_ungrabbed;
+
+    std::string detail =
+        "hooks_exported=" + std::to_string(hooks_exported) +
+        " (poll=" + std::to_string(sym_poll_ok) + ", peep=" + std::to_string(sym_peep_ok) +
+        ", wait=" + std::to_string(sym_wait_ok) + ", x11=" + std::to_string(sym_x11_ok) +
+        "), isolation_lifecycle=" +
+        std::to_string(!init_isolated && opened_isolated && !closed_isolated) +
+        ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok) +
+        ", wheel=" + std::to_string(wheel_imgui_ok) +
+        ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok) +
+        ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed);
+
+    check_cond(check_passed, "8. In-Game Mouse Isolation & SDL Event Suppression", detail.c_str());
   }
 }
 

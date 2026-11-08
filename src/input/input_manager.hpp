@@ -48,6 +48,7 @@ public:
   void handle_pointer_motion(float x, float y, const HudConfig& cfg, ImGuiIO* io) noexcept;
   void handle_pointer_button(uint32_t button, bool down, const HudConfig& cfg,
                              ImGuiIO* io) noexcept;
+  void handle_pointer_wheel(float x, float y, const HudConfig& cfg, ImGuiIO* io) noexcept;
 
   // Wayland listener callback handlers
   void register_wayland_seat(void* seat, uint32_t id) noexcept;
@@ -70,10 +71,18 @@ public:
   float current_width() const noexcept { return current_w_; }
   float current_height() const noexcept { return current_h_; }
 
+  float cursor_x() const noexcept { return cursor_x_; }
+  float cursor_y() const noexcept { return cursor_y_; }
+  bool is_mouse_button_down(int btn) const noexcept {
+    return (btn >= 0 && btn < 3) ? mouse_buttons_[btn] : false;
+  }
+  bool is_pending_ungrab() const noexcept { return pending_ungrab_; }
+
 private:
   void scan_evdev_devices();
   void close_evdev_devices();
   void set_mouse_grab(bool grab);
+  void set_x11_grab(bool grab);
   void poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width, float display_height);
 
   void init_x11_fallback();
