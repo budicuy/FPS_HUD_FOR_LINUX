@@ -8,11 +8,11 @@
 [![Graphics API: Vulkan & OpenGL](https://img.shields.io/badge/Graphics-Vulkan%20%7C%20OpenGL-orange.svg)](src/)
 [![GPU Support: NVIDIA | AMD | Intel](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-success.svg)](src/telemetry/telemetry.cpp)
 
-> 🌐 **Language / Bahasa Dokumentasi:** **[English (Default)](README.md)** | **[Bahasa Indonesia](README.id.md)**
+> **Language / Bahasa Dokumentasi:** **[English (Default)](README.md)** | **[Bahasa Indonesia](README.id.md)**
 
 ---
 
-## Quick Install (1 Command — No Compiling Required!)
+## Quick Install (Prebuilt Binary)
 
 Install **FPSHUD** in seconds on any Linux distribution (Arch, Ubuntu, Debian, Fedora, Linux Mint, Pop!_OS, Nobara, Bazzite, or SteamOS) without installing compilers or build tools:
 
@@ -39,7 +39,7 @@ To uninstall at any time:
   <img src="preview/menu-ui.png" alt="FPSHUD In-Game GUI Menu" width="100%" />
 </p>
 
-### 🎬 Gameplay Demo
+### Gameplay Demo
 
 <p align="center">
   <img src="preview/preview.gif" alt="FPSHUD Gameplay Demo" width="100%" />
@@ -49,15 +49,15 @@ To uninstall at any time:
 
 ## Overview
 
-### What is FPSHUD for?
-When playing games on Linux (whether through Steam Proton, Lutris, Heroic, or native Linux ports), you often want to check your **FPS**, see if your game is stuttering (**1% Low / Frametime**), or keep an eye on your **GPU and CPU temperatures, clock speeds, power draw, and RAM usage**.
+### Purpose
+When playing games on Linux through Steam Proton, Lutris, Heroic, or native ports, you may want to check frame rates, monitor 1% low pacing, and track GPU and CPU temperatures, clocks, wattage, and memory.
 
-With traditional Linux overlays, customizing what appears on screen usually means closing the game, opening a text editor, and manually typing long configuration lines or environment variables. **FPSHUD solves this by giving you a live, interactive control panel directly inside your game.** You simply turn it on with `FPS_HUD=1`, press **`Insert`** or **`F12`** while playing, and click what you want to see—just like modern overlays on Windows, but built natively and lightweight for Linux.
+Traditional Linux overlays require closing the game and editing text configuration files. FPSHUD provides an interactive in-game configuration menu. Launch the game with `FPS_HUD=1`, press `Insert` or `F12` during gameplay, and toggle metrics or adjust layout directly on screen.
 
-### What is it built with?
-FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architecture (`std::inplace_vector`), Pack Indexing, and SIMD frametime analytics for maximum speed and zero memory allocation overhead during gameplay. It uses **Dear ImGui** to draw both the on-screen HUD and the in-game settings menu, and hooks directly into **Vulkan** (as a standard Vulkan Implicit Layer) and **OpenGL** (`LD_PRELOAD`). Fonts are embedded directly inside the library so text always looks sharp, even inside containerized environments like Steam Linux Runtime and Proton.
+### Architecture
+FPSHUD is written in ISO C++26 using fixed inline storage (`std::inplace_vector`), pack indexing, and SIMD frametime analytics to eliminate heap allocations during gameplay. It uses Dear ImGui for the overlay and configuration menu, hooking into Vulkan (implicit layer) and OpenGL (`LD_PRELOAD`). Fonts are embedded directly in the binary so text renders crisply across native installs and container runtimes like Proton and Steam Linux Runtime.
 
-### What features are inside?
+### Core Features
 - **3-Column Split View In-Game Dashboard (`Insert` / `F12`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors, GUI Render Scale `50%–200%` & 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Presets | Right: Screen Recorder, Instant Replay, Lossless Screenshot & Benchmark Hub).
 - **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**: Dedicated background video capture daemon supporting HEVC (H.265) and H.264 (`.mp4`, `.mkv`, `.webm`) with Adaptive CQP (`16–30`), VBV Max Bitrate Ceiling (`4–80 Mbps`), Experimental Pure `1:1` Adaptive VFR, zero-disk-wear In-RAM Instant Replay (`15s–120s`), dependency-free Lossless PNG Screenshots (Clean Game or With HUD, 8-bit & 10-bit HDR), and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
 - **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 31 sensors), or save your own **Custom** preset.
@@ -65,10 +65,10 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 - **Easy-to-Read Two-Tone Design & 14-Metric Smart Color Alerts**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings across 14 metrics (FPS, 1%/0.1% Low, Frametime, GPU/CPU Load & Temp, VRAM, Fan, RAM, Swap, Memory PSI, Disk Temp & I/O, and Battery).
 - **Accurate 1% & 0.1% Low FPS + CSV Benchmark Recorder (`F9`)**: Measures real frame smoothness over a rolling 3.5-second window (automatically ignoring loading-screen freezes) and lets you record benchmark results directly to a `.csv` file.
 
-### How does it work?
-1. **Install once** using the 1-line `curl` command above (or follow the manual install steps).
-2. **Enable in your game** by adding `FPS_HUD=1 %command%` in Steam Launch Options (or running `FPS_HUD=1 your_game` in terminal).
-3. **Negligible frame pacing impact**: As your game renders each frame, FPSHUD draws the overlay on top of the final image before presentation in less than 8 microseconds. Meanwhile, an asynchronous background thread quietly reads CPU/GPU temperatures and power usage once every 0.5 seconds—preventing frame stutter or render thread lock contention.
+### Workflow
+1. **Install once** via the one-line `curl` script or manual tarball extraction.
+2. **Enable per game** by adding `FPS_HUD=1 %command%` to Steam Launch Options or prepending `FPS_HUD=1` in the terminal.
+3. **Low presentation overhead**: FPSHUD submits the overlay draw calls before presentation in under 8 microseconds per frame. Telemetry runs on an asynchronous worker thread polling sensors every 0.5 seconds, avoiding contention with the game render thread.
 
 ---
 
@@ -162,8 +162,8 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 
 ### Hardware Permissions, Sudo Transparency & Security Model
 > [!NOTE]
-> **100% Zero-Sudo Architecture Out-of-the-Box:**
-> FPSHUD runs **100% sudo-free** out-of-the-box for all features, including CPU power:
+> **Zero-Sudo Architecture**
+> FPSHUD operates without root privileges across all features, including CPU power metrics:
 > - **In-Game Hotkeys & GUI Navigation**: Handled directly in-process via hooked Wayland display event queues (`wl_keyboard` / `wl_pointer`) and X11 events without requiring the `input` group or `/dev/input/event*` root access.
 > - **RAM Metrics**: Dynamic capacity, resident game memory (`VmRSS`), Swap/ZRAM, and memory stall pressure (PSI) are parsed cleanly from world-readable `/proc/meminfo`, `/proc/self/status`, and `/proc/pressure/memory`.
 > - **Graphics Telemetry**: FPS, frametimes, and GPU sensors (NVIDIA NVML, AMD sysfs, Intel Level Zero + DRM hybrid) operate without root privileges.
@@ -173,8 +173,8 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 >   3. **Tier 3 (Optional Scoped `0440` udev Rule)**: For users who want direct hardware RAPL energy counter readings instead of TDP estimation, `fpshud --setup` installs a scoped read-only udev rule.
 
 > [!IMPORTANT]
-> **What Does `sudo` Do? (Complete Transparency & CVE-2020-8694 Platypus Mitigation):**
-> **FPSHUD never runs games or overlay code as `root`.** `sudo` is completely optional and is only invoked interactively if you explicitly confirm setup (`install.sh` prompt or `fpshud --setup`) or during `fpshud --uninstall`. Here is **everything** `sudo` does:
+> **Sudo Actions and Platypus Mitigation (CVE-2020-8694)**
+> Games and overlay hooks never execute as root. Sudo is optional and requested only if the user confirms the RAPL udev prompt during setup or chooses system cleanup during uninstallation:
 > 1. **During `fpshud --setup` (or `install.sh` if confirmed)**:
 >    - Creates `/etc/udev/rules.d/99-fpshud-rapl.rules` containing:
 >      ```udev
@@ -190,8 +190,8 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 >    - Only if `/etc/udev/rules.d/99-fpshud-*.rules` exists on your system, it asks an optional `[y/N]` prompt whether you also want to remove the system udev rule via `sudo` (so you can press `N` to skip `sudo` at any time).
 
 > [!NOTE]
-> **Configure or Verify Permissions Anytime:**
-> You can configure optional RAPL sensor permissions at any time without reinstalling:
+> **Sensor Permission Verification**
+> Optional RAPL sensor permissions can be configured or checked at any time:
 > ```bash
 > ~/.local/bin/fpshud --setup
 > ```
@@ -201,8 +201,8 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 > ```
 
 > [!TIP]
-> **Security Architecture & Trust Boundaries:**
-> Games and overlay processes run strictly with your unprivileged user account. Root privileges are never used during gameplay. Sudo is requested only during initial setup to register udev rules in `/etc/udev/rules.d/`.
+> **Trust Boundaries**
+> Games and overlay processes run strictly with unprivileged user permissions. Root access is never requested during gameplay.
 
 ### 1-Command Uninstallation (Clean Local Removal)
 ```bash
@@ -218,7 +218,7 @@ Right-click your game in Steam -> **Properties** -> **General** -> **Launch Opti
 ```bash
 FPS_HUD=1 %command%
 ```
-*(To disable temporarily without deleting your launch option, change it to `FPS_HUD=0 %command%`. To cleanly and completely disable the overlay, simply remove the environment variable entirely so only `%command%` remains, or leave Launch Options blank).*
+*(To disable temporarily without removing the launch option, change it to `FPS_HUD=0 %command%`. To disable permanently, remove the `FPS_HUD` environment variable).*
 
 > [!NOTE]
 > All Windows games running through Proton, DXVK, and modern native Linux Vulkan games use this single option.
@@ -245,15 +245,15 @@ FPS_HUD=1 ./your_game
 
 ### Anti-Cheat Compatibility Advisory
 > [!WARNING]
-> **Online Multiplayer Games & Anti-Cheat Software (EAC, BattlEye, VAC, Ricochet):**
-> Like MangoHud, OBS Game Capture, and ReShade, FPSHUD functions by injecting into the game's graphics pipeline via a Vulkan Implicit Layer or `LD_PRELOAD`.
-> While performance overlays are benign, strict anti-cheat software in competitive online games (e.g., Easy Anti-Cheat, BattlEye, Valve Anti-Cheat, Ricochet) may flag third-party injected libraries as an integrity violation, potentially preventing the game from launching or risking account sanctions.
+> **Online Multiplayer and Anti-Cheat (EAC, BattlEye, VAC, Ricochet)**
+> Like MangoHud, OBS Game Capture, and ReShade, FPSHUD injects into the graphics pipeline via a Vulkan implicit layer or `LD_PRELOAD`.
+> While performance overlays are benign, anti-cheat systems in competitive multiplayer games (such as Easy Anti-Cheat, BattlEye, Valve Anti-Cheat, or Ricochet) may treat third-party library injection as an integrity violation, which can prevent the game from starting or risk account penalties.
 >
-> **Best Practice:** When playing competitive online multiplayer titles, disable the overlay temporarily by setting `FPS_HUD=0 %command%` in your launch options, or cleanly remove the `FPS_HUD` environment variable entirely so the layer is never touched by the loader.
+> **Recommendation:** When playing competitive online multiplayer titles, disable the overlay by setting `FPS_HUD=0 %command%` or removing `FPS_HUD` from launch options.
 
 ### 32-Bit Game Compatibility
 > [!NOTE]
-> FPSHUD is compiled as a 64-bit (`x86_64`) library covering virtually all modern Linux native games and Proton titles. If you launch a legacy 32-bit game, the dynamic loader gracefully ignores the 64-bit layer without crashing or interfering, though the HUD will not appear.
+> FPSHUD is built as a 64-bit (`x86_64`) library for modern Linux games and Proton titles. When launching legacy 32-bit games, the dynamic loader ignores the 64-bit layer without crashing, and the HUD will not render.
 
 ---
 
@@ -272,8 +272,8 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts. All 6 shortcuts suppor
 | **`ESC`** | Close the GUI menu (or cancel active keybind capture) and return mouse control to the game |
 
 > [!TIP]
-> **Steam Deck & Handheld Gaming Devices:**
-> You can easily open the configuration menu without a physical keyboard by mapping a back grip button (such as **`L4`** or **`R4`**) to keyboard key **`F12`** or **`Insert`** via **Steam Controller Settings -> Edit Layout**. You can also adjust the **GUI Scale (`50%–200%`)** slider in Column 1 for high-DPI or handheld screens.
+> **Steam Deck and Handheld Devices**
+> To open the menu on handhelds without a keyboard, map a grip button (such as `L4` or `R4`) to `F12` or `Insert` in **Steam Controller Settings -> Edit Layout**. The **GUI Scale (50%–200%)** slider in Column 1 adjusts interface size for high-DPI or compact displays.
 
 ### The 4 Built-In Presets
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
@@ -441,10 +441,10 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 | **Per-Frame Heap Stability** | **0 bytes / frame** | **Zero-heap allocation** verified across 10,000 rendered frames |
 
 > [!NOTE]
-> **Total Resource Consumption Range (Summary):**
-> - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds just **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
+> **Resource Consumption Summary**
+> - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
 > - **Memory (RAM) Footprint Range:** **~4.5 MB** internal data & font atlas footprint (**~17 MB** total isolated process VmRSS), with **0 bytes/frame** heap allocation during active gameplay.
-> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 89-check automated simulation test suite (`./build/fpshud_test 1`). Community benchmark contributions across AMD and Intel Arc setups are warmly welcomed!
+> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 94-check automated simulation test suite (`./build/fpshud_test 1`). Benchmark contributions across AMD and Intel Arc hardware are welcome via issues or pull requests.
 
 ---
 
@@ -468,7 +468,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 | **Asset Generator** | **Python 3.8+** | Generates embedded font C++ headers from TTF assets |
 
 > [!NOTE]
-> **Pure Native ISO C++26 Architecture:**
+> **ISO C++26 Architecture**
 > - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ or GCC 15+.
 > - **Zero Polyfills & Shims:** Zero polyfills or legacy standard fallbacks. Enforced via CMake `FATAL_ERROR` gates to ensure modern language standards and strict compile-time verification.
 > - **Why C++26?** Guarantees zero heap allocation churn in the per-frame render loop via fixed inline vector storage and compile-time metric layout serialization.
@@ -481,7 +481,7 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 89-check verification suite across 5 simulated device profiles + memory safety:
+# 2. Run the automated 94-check verification suite across 5 simulated device profiles + memory safety:
 ./build/fpshud_test 1
 
 # 3. (Optional) Install local build directly to ~/.local (offline / no download):
@@ -523,30 +523,30 @@ FPS_HUD_FOR_LINUX/
 │   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
 │   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/
-    └── test_cli.cpp                     # Automated 89-check 5-device simulation, sensor probe & safety suite
+    └── test_cli.cpp                     # Automated 94-check 5-device simulation, sensor probe & safety suite
 ```
 
 ---
 
 ## 9. Troubleshooting & FAQ
 
-1. **Pressing `Insert` / `F12` does not open the GUI or mouse clicks pass through to the game:**
-   - On Wayland and X11, FPSHUD hooks keyboard events and mouse capture in-process out-of-the-box (zero sudo required). Ensure the game window is currently focused, or try pressing `Insert` or `F12`.
-2. **How does CPU Power work without `sudo` vs with `fpshud --setup`?**
-   - Without `sudo`, FPSHUD automatically uses **Tier 2 Dynamic TDP + Frequency-Scaled Estimation** (`constraint_0_max_power_uw`), so CPU wattage is always active and never stuck at `0 W`. If you want direct hardware RAPL energy counter readings (**Tier 1/3**), run `~/.local/bin/fpshud --setup` to install the scoped `0440` (`GROUP="render"`) udev rule (see [Section 2](#2-installation--sensor-permissions)).
-3. **How do I reset all settings back to default?**
-   - Open the In-Game GUI (`Insert` / `F12`) and click **`File` -> `Reset to Standard Default`** in the top menu bar, or delete `~/.config/fpshud/config.ini`.
-4. **Is FPSHUD safe to use with Anti-Cheat in online games?**
-   - See our [Anti-Cheat Compatibility Advisory](#anti-cheat-compatibility-advisory). For competitive multiplayer games protected by EAC, BattlEye, VAC, or Ricochet, we strongly recommend disabling the overlay by setting `FPS_HUD=0 %command%` or cleanly removing the `FPS_HUD` environment variable entirely from your launch options.
-5. **Does FPSHUD work with older 32-bit games?**
-   - FPSHUD targets 64-bit (`x86_64`) games. When running legacy 32-bit titles, the 64-bit layer is safely bypassed by the system loader without issues, though the HUD will not render.
+1. **GUI does not open or mouse clicks pass through to the game:**
+   - On Wayland and X11, FPSHUD handles keyboard events and mouse capture in-process. Verify the game window has active focus, then press `Insert` or `F12`.
+2. **CPU power readings without `sudo` vs with `fpshud --setup`:**
+   - Without `sudo`, FPSHUD uses Tier 2 dynamic estimation (`constraint_0_max_power_uw` scaled by CPU load and boost frequency). To read hardware RAPL energy counters directly (Tier 1/3), run `~/.local/bin/fpshud --setup` to install the scoped `0440` (`GROUP="render"`) udev rule (see [Section 2](#2-installation--sensor-permissions)).
+3. **Resetting settings to default:**
+   - In the in-game GUI (`Insert` / `F12`), select **File -> Reset to Standard Default** in the menu bar, or delete `~/.config/fpshud/config.ini`.
+4. **Anti-cheat compatibility in online games:**
+   - Review the [Anti-Cheat Compatibility Advisory](#anti-cheat-compatibility-advisory). For competitive multiplayer titles using EAC, BattlEye, VAC, or Ricochet, disable the overlay by setting `FPS_HUD=0 %command%` or removing `FPS_HUD` from launch options.
+5. **32-bit game compatibility:**
+   - FPSHUD targets 64-bit (`x86_64`) games. When launching 32-bit games, the loader bypasses the 64-bit layer, and the overlay will not display.
 
 ---
 
 ## 10. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 89 multi-vendor checks and memory safety tests pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 94 multi-vendor checks and memory safety tests pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.
