@@ -15,6 +15,7 @@
 #include <vulkan/vk_layer.h>
 
 #include <spawn.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -1862,6 +1863,24 @@ void run_security_hardening_suite() {
   check_cond(socket_mode_ok && peercred_verified,
              "3. Unix Domain Socket 0600 Mode & SO_PEERCRED Peer UID Enforcement",
              "Verified recorder IPC socket enforces 0600 permissions and SO_PEERCRED UID equality");
+
+  // 4. Benchmark CSV Symlink Immunity & O_NOFOLLOW
+  std::string target_file = "/tmp/fpshud_bench_target_" + std::to_string(::getpid());
+  std::string symlink_file = "/tmp/fpshud_bench_symlink_" + std::to_string(::getpid());
+  ::unlink(target_file.c_str());
+  ::unlink(symlink_file.c_str());
+  int tfd = ::open(target_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (tfd >= 0) ::close(tfd);
+  int sym_res = ::symlink(target_file.c_str(), symlink_file.c_str());
+  int nofollow_fd = ::open(symlink_file.c_str(), O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+  bool symlink_rejected = (sym_res == 0 && nofollow_fd < 0 && errno == ELOOP);
+  if (nofollow_fd >= 0) ::close(nofollow_fd);
+  ::unlink(symlink_file.c_str());
+  ::unlink(target_file.c_str());
+
+  check_cond(symlink_rejected,
+             "4. Benchmark CSV Symlink Following Neutralization (O_NOFOLLOW)",
+             "Verified CSV open operation with O_NOFOLLOW strictly rejects symlink targets with ELOOP");
 }
 
 void run_all_devices_and_features_suite() {

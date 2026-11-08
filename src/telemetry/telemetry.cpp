@@ -1512,25 +1512,30 @@ void TelemetryCollector::stop_benchmark() {
 
   std::error_code ec;
   bool file_exists = fs::exists(csv_path, ec) && fs::file_size(csv_path, ec) > 0;
-  if (FILE* csv = std::fopen(csv_path.c_str(), "a")) {
-    if (!file_exists) {
-      std::fputs(
-          "Timestamp,Duration_Sec,Frames,Avg_FPS,1Pct_Low_FPS,0.1Pct_Low_FPS,Min_FPS,Max_FPS,Max_"
-          "GPU_Temp_C,Max_GPU_Watt,Max_CPU_Temp_C,Max_CPU_Watt\n",
-          csv);
-    }
-    std::time_t t = std::time(nullptr);
-    std::tm tm_buf{};
-    localtime_r(&t, &tm_buf);
-    char ts[32];
-    std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_buf);
+  int fd = ::open(csv_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (fd >= 0) {
+    if (FILE* csv = ::fdopen(fd, "a")) {
+      if (!file_exists) {
+        std::fputs(
+            "Timestamp,Duration_Sec,Frames,Avg_FPS,1Pct_Low_FPS,0.1Pct_Low_FPS,Min_FPS,Max_FPS,Max_"
+            "GPU_Temp_C,Max_GPU_Watt,Max_CPU_Temp_C,Max_CPU_Watt\n",
+            csv);
+      }
+      std::time_t t = std::time(nullptr);
+      std::tm tm_buf{};
+      localtime_r(&t, &tm_buf);
+      char ts[32];
+      std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_buf);
 
-    std::fprintf(csv, "%s,%.1f,%zu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%.1f,%d,%.1f\n", ts,
-                 sum.duration_sec, n, sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low, sum.min_fps,
-                 sum.max_fps, sum.max_gpu_temp_c, sum.max_gpu_power_w, sum.max_cpu_temp_c,
-                 sum.max_cpu_power_w);
-    std::fflush(csv);
-    std::fclose(csv);
+      std::fprintf(csv, "%s,%.1f,%zu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%.1f,%d,%.1f\n", ts,
+                   sum.duration_sec, n, sum.avg_fps, sum.fps_1pct_low, sum.fps_01pct_low, sum.min_fps,
+                   sum.max_fps, sum.max_gpu_temp_c, sum.max_gpu_power_w, sum.max_cpu_temp_c,
+                   sum.max_cpu_power_w);
+      std::fflush(csv);
+      std::fclose(csv);
+    } else {
+      ::close(fd);
+    }
   }
 
   last_bench_summary_ = sum;
