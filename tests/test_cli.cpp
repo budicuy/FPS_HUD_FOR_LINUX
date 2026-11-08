@@ -4366,6 +4366,24 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(im_queue_cleaned,
                "11.1 InputManager removes redundant intercepted queue and dead mutexes");
+
+    bool mouse_state_hooks_present = false;
+    {
+      std::string hooks_src = read_text_file("src/input/input_hooks.cpp");
+      std::string ver_src = read_text_file("manifest/libfpshud.version");
+      mouse_state_hooks_present =
+          (hooks_src.find("SDL_GetRelativeMouseState") != std::string::npos &&
+           hooks_src.find("SDL_GetMouseState") != std::string::npos &&
+           hooks_src.find("SDL_WarpMouseInWindow") != std::string::npos &&
+           hooks_src.find("XQueryPointer") != std::string::npos &&
+           ver_src.find("SDL_GetRelativeMouseState") != std::string::npos &&
+           ver_src.find("SDL_GetMouseState") != std::string::npos &&
+           ver_src.find("SDL_WarpMouseInWindow") != std::string::npos &&
+           ver_src.find("XQueryPointer") != std::string::npos);
+    }
+    check_cond(mouse_state_hooks_present,
+               "11.2 In-process SDL relative mouse state, button mask, and XQueryPointer isolation "
+               "implemented and exported");
   }
 
   std::printf("\n====================================================================\n");

@@ -12,7 +12,14 @@
         SDL_PeepEvents;
         SDL_WaitEvent;
         SDL_WaitEventTimeout;
+        SDL_GetRelativeMouseState;
+        SDL_GetMouseState;
+        SDL_GetGlobalMouseState;
+        SDL_SetRelativeMouseMode;
+        SDL_GetRelativeMouseMode;
+        SDL_WarpMouseInWindow;
         XNextEvent;
+        XQueryPointer;
     local:
         *;
 };

@@ -99,7 +99,15 @@ using PFN_SdlWaitEventTimeout = int (*)(void* event, int timeout);
 using PFN_SdlGetRelativeMouseMode = int (*)();
 using PFN_SdlSetRelativeMouseMode = int (*)(int enabled);
 using PFN_SdlShowCursor = int (*)(int toggle);
+using PFN_SdlGetRelativeMouseState = uint32_t (*)(int* x, int* y);
+using PFN_SdlGetMouseState = uint32_t (*)(int* x, int* y);
+using PFN_SdlGetGlobalMouseState = uint32_t (*)(int* x, int* y);
+using PFN_SdlWarpMouseInWindow = void (*)(void* window, int x, int y);
 using PFN_XNextEvent = int (*)(void* dpy, void* ev);
+using PFN_XQueryPointer = int (*)(void* dpy, unsigned long w, unsigned long* root_return,
+                                  unsigned long* child_return, int* root_x_return,
+                                  int* root_y_return, int* win_x_return, int* win_y_return,
+                                  unsigned int* mask_return);
 
 PFN_SdlPollEvent g_real_sdl_poll_event = nullptr;
 PFN_SdlPeepEvents g_real_sdl_peep_events = nullptr;
@@ -108,7 +116,12 @@ PFN_SdlWaitEventTimeout g_real_sdl_wait_event_timeout = nullptr;
 PFN_SdlGetRelativeMouseMode g_real_sdl_get_relative_mouse_mode = nullptr;
 PFN_SdlSetRelativeMouseMode g_real_sdl_set_relative_mouse_mode = nullptr;
 PFN_SdlShowCursor g_real_sdl_show_cursor = nullptr;
+PFN_SdlGetRelativeMouseState g_real_sdl_get_relative_mouse_state = nullptr;
+PFN_SdlGetMouseState g_real_sdl_get_mouse_state = nullptr;
+PFN_SdlGetGlobalMouseState g_real_sdl_get_global_mouse_state = nullptr;
+PFN_SdlWarpMouseInWindow g_real_sdl_warp_mouse_in_window = nullptr;
 PFN_XNextEvent g_real_x_next_event = nullptr;
+PFN_XQueryPointer g_real_x_query_pointer = nullptr;
 
 std::atomic<bool> g_hooks_initialized{false};
 std::atomic<bool> g_was_relative_mouse{false};
@@ -128,7 +141,16 @@ void ensure_input_hooks_initialized() noexcept {
   g_real_sdl_set_relative_mouse_mode =
       reinterpret_cast<PFN_SdlSetRelativeMouseMode>(dlsym(RTLD_NEXT, "SDL_SetRelativeMouseMode"));
   g_real_sdl_show_cursor = reinterpret_cast<PFN_SdlShowCursor>(dlsym(RTLD_NEXT, "SDL_ShowCursor"));
+  g_real_sdl_get_relative_mouse_state =
+      reinterpret_cast<PFN_SdlGetRelativeMouseState>(dlsym(RTLD_NEXT, "SDL_GetRelativeMouseState"));
+  g_real_sdl_get_mouse_state =
+      reinterpret_cast<PFN_SdlGetMouseState>(dlsym(RTLD_NEXT, "SDL_GetMouseState"));
+  g_real_sdl_get_global_mouse_state =
+      reinterpret_cast<PFN_SdlGetGlobalMouseState>(dlsym(RTLD_NEXT, "SDL_GetGlobalMouseState"));
+  g_real_sdl_warp_mouse_in_window =
+      reinterpret_cast<PFN_SdlWarpMouseInWindow>(dlsym(RTLD_NEXT, "SDL_WarpMouseInWindow"));
   g_real_x_next_event = reinterpret_cast<PFN_XNextEvent>(dlsym(RTLD_NEXT, "XNextEvent"));
+  g_real_x_query_pointer = reinterpret_cast<PFN_XQueryPointer>(dlsym(RTLD_NEXT, "XQueryPointer"));
 
   g_hooks_initialized.store(true, std::memory_order_release);
 }
@@ -334,6 +356,73 @@ __attribute__((visibility("default"))) int XNextEvent(void* display, void* event
   }
 
   t_in_hook = false;
+  return res;
+}
+
+__attribute__((visibility("default"))) uint32_t SDL_GetRelativeMouseState(int* x, int* y) {
+  ensure_input_hooks_initialized();
+  if (fpshud::is_mouse_isolation_active()) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+    return 0;
+  }
+  return g_real_sdl_get_relative_mouse_state ? g_real_sdl_get_relative_mouse_state(x, y) : 0;
+}
+
+__attribute__((visibility("default"))) uint32_t SDL_GetMouseState(int* x, int* y) {
+  ensure_input_hooks_initialized();
+  uint32_t btn = g_real_sdl_get_mouse_state ? g_real_sdl_get_mouse_state(x, y) : 0;
+  if (fpshud::is_mouse_isolation_active()) return 0;
+  return btn;
+}
+
+__attribute__((visibility("default"))) uint32_t SDL_GetGlobalMouseState(int* x, int* y) {
+  ensure_input_hooks_initialized();
+  uint32_t btn = g_real_sdl_get_global_mouse_state ? g_real_sdl_get_global_mouse_state(x, y) : 0;
+  if (fpshud::is_mouse_isolation_active()) return 0;
+  return btn;
+}
+
+__attribute__((visibility("default"))) int SDL_SetRelativeMouseMode(int enabled) {
+  ensure_input_hooks_initialized();
+  if (fpshud::is_mouse_isolation_active()) {
+    g_was_relative_mouse.store(enabled == 1, std::memory_order_relaxed);
+    if (g_real_sdl_set_relative_mouse_mode) g_real_sdl_set_relative_mouse_mode(0);
+    if (g_real_sdl_show_cursor) g_real_sdl_show_cursor(1);
+    return 0;
+  }
+  return g_real_sdl_set_relative_mouse_mode ? g_real_sdl_set_relative_mouse_mode(enabled) : 0;
+}
+
+__attribute__((visibility("default"))) int SDL_GetRelativeMouseMode() {
+  ensure_input_hooks_initialized();
+  if (fpshud::is_mouse_isolation_active()) {
+    return g_was_relative_mouse.load(std::memory_order_relaxed) ? 1 : 0;
+  }
+  return g_real_sdl_get_relative_mouse_mode ? g_real_sdl_get_relative_mouse_mode() : 0;
+}
+
+__attribute__((visibility("default"))) void SDL_WarpMouseInWindow(void* window, int x, int y) {
+  ensure_input_hooks_initialized();
+  if (fpshud::is_mouse_isolation_active()) return;
+  if (g_real_sdl_warp_mouse_in_window) g_real_sdl_warp_mouse_in_window(window, x, y);
+}
+
+__attribute__((visibility("default"))) int XQueryPointer(void* dpy, unsigned long w,
+                                                         unsigned long* root_return,
+                                                         unsigned long* child_return,
+                                                         int* root_x_return, int* root_y_return,
+                                                         int* win_x_return, int* win_y_return,
+                                                         unsigned int* mask_return) {
+  ensure_input_hooks_initialized();
+  int res = g_real_x_query_pointer
+                ? g_real_x_query_pointer(dpy, w, root_return, child_return, root_x_return,
+                                         root_y_return, win_x_return, win_y_return, mask_return)
+                : 0;
+  if (res && fpshud::is_mouse_isolation_active() && mask_return) {
+    // Strip Button1Mask (0x100) through Button5Mask (0x1000)
+    *mask_return &= ~(0x100 | 0x200 | 0x400 | 0x800 | 0x1000);
+  }
   return res;
 }
 
