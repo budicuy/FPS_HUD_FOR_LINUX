@@ -288,6 +288,7 @@ add_executable(fpshud_test
     src/input/input_hooks.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
+    src/recorder/recorder_player.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
     ${IMGUI_CORE_SOURCES}
@@ -348,7 +349,12 @@ endif()
 if (BUILD_STATIC_RECORDER)
     add_executable(fpshud_recorder_bin
         src/recorder/recorder_main.cpp
+        src/recorder/recorder_player.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    )
+
+    target_compile_definitions(fpshud_recorder_bin PRIVATE
+        FPSHUD_RECORDER_DAEMON=1
     )
 
     target_include_directories(fpshud_recorder_bin PRIVATE
@@ -407,7 +413,12 @@ elseif (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgC
         TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
     add_executable(fpshud_recorder_bin
         src/recorder/recorder_main.cpp
+        src/recorder/recorder_player.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    )
+
+    target_compile_definitions(fpshud_recorder_bin PRIVATE
+        FPSHUD_RECORDER_DAEMON=1
     )
 
     target_include_directories(fpshud_recorder_bin PRIVATE
@@ -519,6 +530,9 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_playback_protocol.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp

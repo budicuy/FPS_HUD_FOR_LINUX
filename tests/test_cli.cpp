@@ -4,6 +4,7 @@
 #include "png_writer.hpp"
 #include "recorder_ipc.hpp"
 #include "recorder_playback_protocol.hpp"
+#include "recorder_player.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
 #include "input/input_hooks.hpp"
@@ -4215,6 +4216,10 @@ void run_all_devices_and_features_suite() {
     check_cond(header.current_time_sec.load() == 15.5f,
                "10.4 PlaybackShmHeader current_time_sec atomic load");
     check_cond(sizeof(IpcPlaybackRequest) == 8, "10.5 IpcPlaybackRequest is compact 8 bytes");
+
+    const char* invalid_argv[] = {"fpshud_recorder_bin", "--player", "test_shm", "test_sock"};
+    int rc = run_player_worker(4, const_cast<char**>(invalid_argv));
+    check_cond(rc != 0, "10.6 run_player_worker returns error on missing video file path");
   }
 
   std::printf("\n====================================================================\n");

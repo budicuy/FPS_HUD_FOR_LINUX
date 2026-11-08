@@ -1,4 +1,5 @@
 #include "recorder_ipc.hpp"
+#include "recorder_player.hpp"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -231,6 +232,10 @@ struct PulseAudioCapture {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  if (argc > 1 && std::strcmp(argv[1], "--player") == 0) {
+    return fpshud::run_player_worker(argc, argv);
+  }
+
   signal(SIGINT, sigint_handler);
   signal(SIGTERM, sigint_handler);
   signal(SIGPIPE, SIG_IGN);
