@@ -2,6 +2,7 @@
 #if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
 #endif
+#include "gui_menu.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -124,6 +125,16 @@ struct GlDispatchTable {
   using PFN_glBindFramebuffer = void (*)(GLenum target, GLuint framebuffer);
   using PFN_glPixelStorei = void (*)(GLenum pname, GLint param);
   using PFN_glGetError = GLenum (*)();
+  using PFN_glGenTextures = void (*)(GLsizei n, GLuint* textures);
+  using PFN_glDeleteTextures = void (*)(GLsizei n, const GLuint* textures);
+  using PFN_glBindTexture = void (*)(GLenum target, GLuint texture);
+  using PFN_glTexImage2D = void (*)(GLenum target, GLint level, GLint internalformat, GLsizei width,
+                                    GLsizei height, GLint border, GLenum format, GLenum type,
+                                    const void* pixels);
+  using PFN_glTexSubImage2D = void (*)(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                       GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                       const void* pixels);
+  using PFN_glTexParameteri = void (*)(GLenum target, GLenum pname, GLint param);
 
   using PFN_glXGetCurrentContext = GLXContext (*)();
   using PFN_glXQueryDrawable = void (*)(Display* dpy, GLXDrawable draw, int attribute,
@@ -146,6 +157,12 @@ struct GlDispatchTable {
   PFN_glBindFramebuffer glBindFramebuffer = nullptr;
   PFN_glPixelStorei glPixelStorei = nullptr;
   PFN_glGetError glGetError = nullptr;
+  PFN_glGenTextures glGenTextures = nullptr;
+  PFN_glDeleteTextures glDeleteTextures = nullptr;
+  PFN_glBindTexture glBindTexture = nullptr;
+  PFN_glTexImage2D glTexImage2D = nullptr;
+  PFN_glTexSubImage2D glTexSubImage2D = nullptr;
+  PFN_glTexParameteri glTexParameteri = nullptr;
 
   PFN_glXGetCurrentContext glXGetCurrentContext = nullptr;
   PFN_glXQueryDrawable glXQueryDrawable = nullptr;
@@ -350,6 +367,18 @@ void ensure_core_gl_resolved() {
   g_gl.glPixelStorei =
       reinterpret_cast<GlDispatchTable::PFN_glPixelStorei>(resolve_proc("glPixelStorei"));
   g_gl.glGetError = reinterpret_cast<GlDispatchTable::PFN_glGetError>(resolve_proc("glGetError"));
+  g_gl.glGenTextures =
+      reinterpret_cast<GlDispatchTable::PFN_glGenTextures>(resolve_proc("glGenTextures"));
+  g_gl.glDeleteTextures =
+      reinterpret_cast<GlDispatchTable::PFN_glDeleteTextures>(resolve_proc("glDeleteTextures"));
+  g_gl.glBindTexture =
+      reinterpret_cast<GlDispatchTable::PFN_glBindTexture>(resolve_proc("glBindTexture"));
+  g_gl.glTexImage2D =
+      reinterpret_cast<GlDispatchTable::PFN_glTexImage2D>(resolve_proc("glTexImage2D"));
+  g_gl.glTexSubImage2D =
+      reinterpret_cast<GlDispatchTable::PFN_glTexSubImage2D>(resolve_proc("glTexSubImage2D"));
+  g_gl.glTexParameteri =
+      reinterpret_cast<GlDispatchTable::PFN_glTexParameteri>(resolve_proc("glTexParameteri"));
 
   g_core_gl_resolved = true;
 }
@@ -526,6 +555,60 @@ private:
 
 GlAsyncPboRing g_gl_pbo_ring;
 
+static GLuint g_player_gl_tex = 0;
+static uint32_t g_player_tex_w = 0;
+static uint32_t g_player_tex_h = 0;
+static uint64_t g_player_last_seq = 0;
+
+static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                 uint64_t seq) {
+  if (!rgba || w == 0 || h == 0 || !g_gl.glGenTextures || !g_gl.glBindTexture) {
+    return 0;
+  }
+  if (g_player_gl_tex == 0) {
+    g_gl.glGenTextures(1, &g_player_gl_tex);
+    g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
+    if (g_gl.glTexParameteri) {
+      g_gl.glTexParameteri(GL_TEXTURE_2D, 0x2801 /* GL_TEXTURE_MIN_FILTER */,
+                           0x2601 /* GL_LINEAR */);
+      g_gl.glTexParameteri(GL_TEXTURE_2D, 0x2800 /* GL_TEXTURE_MAG_FILTER */,
+                           0x2601 /* GL_LINEAR */);
+      g_gl.glTexParameteri(GL_TEXTURE_2D, 0x2802 /* GL_TEXTURE_WRAP_S */,
+                           0x812F /* GL_CLAMP_TO_EDGE */);
+      g_gl.glTexParameteri(GL_TEXTURE_2D, 0x2803 /* GL_TEXTURE_WRAP_T */,
+                           0x812F /* GL_CLAMP_TO_EDGE */);
+    }
+  }
+  if (g_player_tex_w != w || g_player_tex_h != h) {
+    g_player_tex_w = w;
+    g_player_tex_h = h;
+    g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
+    if (g_gl.glTexImage2D) {
+      g_gl.glTexImage2D(GL_TEXTURE_2D, 0, 0x1908 /* GL_RGBA */, w, h, 0, 0x1908 /* GL_RGBA */,
+                        GL_UNSIGNED_BYTE, rgba);
+    }
+    g_player_last_seq = seq;
+  } else if (seq != g_player_last_seq) {
+    g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
+    if (g_gl.glTexSubImage2D) {
+      g_gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, 0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE,
+                           rgba);
+    }
+    g_player_last_seq = seq;
+  }
+  return static_cast<ImTextureID>(g_player_gl_tex);
+}
+
+static void opengl_player_texture_releaser() {
+  if (g_player_gl_tex != 0 && g_gl.glDeleteTextures) {
+    g_gl.glDeleteTextures(1, &g_player_gl_tex);
+    g_player_gl_tex = 0;
+  }
+  g_player_tex_w = 0;
+  g_player_tex_h = 0;
+  g_player_last_seq = 0;
+}
+
 void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fallback_h) {
   auto& cfg = fpshud::get_mutable_config();
   if (!cfg.enabled || !current_ctx) return;
@@ -543,6 +626,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
       ImGui::DestroyContext(g_gl_imgui_ctx);
       g_gl_imgui_ctx = nullptr;
       g_gl_backend_initialized = false;
+      opengl_player_texture_releaser();
     }
     g_gl_pbo_ring.cleanup(g_gl);
     g_core_gl_resolved = false;
@@ -568,6 +652,10 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
           (std::strstr(gl_ver, "OpenGL ES 2") != nullptr) ? "#version 100" : "#version 300 es";
     }
     g_gl_backend_initialized = ImGui_ImplOpenGL3_Init(glsl_version);
+    if (g_gl_backend_initialized) {
+      fpshud::register_player_texture_backend(opengl_player_texture_provider,
+                                              opengl_player_texture_releaser);
+    }
   }
 
   if (!g_gl_backend_initialized) return;

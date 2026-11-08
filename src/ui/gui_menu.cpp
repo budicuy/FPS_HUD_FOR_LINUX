@@ -22,6 +22,31 @@
 
 namespace fpshud {
 
+static TextureProviderFn g_texture_provider = nullptr;
+static TextureReleaseFn g_texture_releaser = nullptr;
+
+void register_player_texture_backend(TextureProviderFn provider, TextureReleaseFn releaser) {
+  g_texture_provider = provider;
+  g_texture_releaser = releaser;
+}
+
+ImTextureID get_or_update_player_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                         uint64_t seq) {
+  if (!rgba || w == 0 || h == 0) {
+    return 0;
+  }
+  if (g_texture_provider) {
+    return g_texture_provider(rgba, w, h, seq);
+  }
+  return static_cast<ImTextureID>(1);
+}
+
+void release_player_texture() {
+  if (g_texture_releaser) {
+    g_texture_releaser();
+  }
+}
+
 namespace {
 
 std::string g_status_msg;

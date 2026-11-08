@@ -2,6 +2,7 @@
 #if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
 #endif
+#include "gui_menu.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -434,6 +435,14 @@ bool init_swapchain_overlay(SwapchainData* sd) {
   init_info.DescriptorPoolSize = 16;
 
   sd->imgui_initialized = ImGui_ImplVulkan_Init(&init_info);
+  if (sd->imgui_initialized) {
+    fpshud::register_player_texture_backend(
+        [](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t /*seq*/) -> ImTextureID {
+          if (!rgba || w == 0 || h == 0) return 0;
+          return static_cast<ImTextureID>(1);
+        },
+        []() {});
+  }
   return sd->imgui_initialized;
 }
 

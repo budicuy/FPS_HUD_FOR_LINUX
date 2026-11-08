@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "imgui.h"
 #include "telemetry.hpp"
 
 namespace fpshud {
@@ -9,5 +10,13 @@ namespace fpshud {
 // and a brief startup notification hint when cfg.gui_enabled is true.
 void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_width,
                      float display_height);
+
+// In-Game Video Texture Management (implemented across Vulkan & OpenGL layers)
+using TextureProviderFn = ImTextureID (*)(const uint8_t*, uint32_t, uint32_t, uint64_t);
+using TextureReleaseFn = void (*)();
+
+void register_player_texture_backend(TextureProviderFn provider, TextureReleaseFn releaser);
+ImTextureID get_or_update_player_texture(const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t seq);
+void release_player_texture();
 
 }  // namespace fpshud

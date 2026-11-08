@@ -4234,6 +4234,9 @@ void run_all_devices_and_features_suite() {
     controller.set_volume(0.8f);
     controller.close();
     check_cond(!controller.is_active(), "10.10 Player controller remains inactive after close");
+
+    check_cond(fpshud::get_or_update_player_texture(nullptr, 0, 0, 0) == 0,
+               "10.11 Null texture returns 0 safely");
   }
 
   std::printf("\n====================================================================\n");
