@@ -279,14 +279,23 @@ if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
 fi
 
 # Launch game with LD_PRELOAD
+if [ ! -f "$LIB_SO" ]; then
+    echo "[!] ERROR: libfpshud.so not found at '$LIB_SO' or standard paths." >&2
+    echo "    Please verify FPSHUD installation before launching games." >&2
+    exit 1
+fi
+
 if [ -z "$FPS_HUD" ]; then
     export FPS_HUD=1
 fi
-export LD_LIBRARY_PATH="$(dirname "$LIB_SO")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+LIB_DIR="$(dirname "$LIB_SO")"
+if [ -n "$LIB_DIR" ] && [ "$LIB_DIR" != "." ]; then
+    export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 if [ -n "$ASAN_RT" ] && [ -f "$ASAN_RT" ]; then
-    export LD_PRELOAD="${ASAN_RT}:libfpshud.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    export LD_PRELOAD="${ASAN_RT}:$LIB_SO${LD_PRELOAD:+:$LD_PRELOAD}"
 else
-    export LD_PRELOAD="libfpshud.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    export LD_PRELOAD="$LIB_SO${LD_PRELOAD:+:$LD_PRELOAD}"
 fi
 
 exec "$@"
