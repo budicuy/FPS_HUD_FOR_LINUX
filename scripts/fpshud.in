@@ -169,11 +169,12 @@ EOF'
         fi
         VK_SRC="${XDG_DATA_HOME:-$TARGET_HOME/.local/share}/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
         VK_DST="$FLATPAK_STEAM_DIR/data/vulkan/implicit_layer.d"
-        mkdir -p "$VK_DST" 2>/dev/null || true
-        if [ -f "$VK_SRC" ]; then
-            cp -f "$VK_SRC" "$VK_DST/VkLayer_FPSHUD_overlay.json" 2>/dev/null || true
-            if [ -n "$TARGET_USER" ]; then
-                $SUDO_CMD chown -R "$TARGET_USER:" "$VK_DST" 2>/dev/null || true
+        if [ -n "$SUDO_USER" ] && [ "$EUID" -eq 0 ]; then
+            su - "$SUDO_USER" -c "mkdir -p '$VK_DST' && [ -f '$VK_SRC' ] && cp -f '$VK_SRC' '$VK_DST/VkLayer_FPSHUD_overlay.json'" 2>/dev/null || true
+        else
+            mkdir -p "$VK_DST" 2>/dev/null || true
+            if [ -f "$VK_SRC" ]; then
+                cp -f "$VK_SRC" "$VK_DST/VkLayer_FPSHUD_overlay.json" 2>/dev/null || true
             fi
         fi
         echo "    [+] Flatpak Steam permissions and Vulkan implicit layer configured successfully."
