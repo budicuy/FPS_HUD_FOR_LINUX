@@ -625,29 +625,42 @@ int main(int argc, char* argv[]) {
   if (audio_enabled) {
     const AVCodec* acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
     if (acodec) {
-      astream = avformat_new_stream(oc, nullptr);
       actx = avcodec_alloc_context3(acodec);
-      astream->id = 1;
-      actx->sample_rate = 48000;
-      av_channel_layout_default(&actx->ch_layout, 2);
-      actx->sample_fmt = AV_SAMPLE_FMT_FLTP;
-      actx->bit_rate = 192000;
-      actx->time_base = AVRational{1, actx->sample_rate};
-      astream->time_base = actx->time_base;
+      if (actx) {
+        actx->sample_rate = 48000;
+        av_channel_layout_default(&actx->ch_layout, 2);
+        actx->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        actx->bit_rate = 192000;
+        actx->time_base = AVRational{1, actx->sample_rate};
+        actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-      actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-      if (avcodec_open2(actx, acodec, nullptr) >= 0) {
-        avcodec_parameters_from_context(astream->codecpar, actx);
-        if (start_cfg.audio_source == 1) {
-          monitor_source = get_default_mic_source();
-        } else if (start_cfg.audio_source == 2) {
-          monitor_source = get_default_monitor_source();
-          mic_source = get_default_mic_source();
+        if (avcodec_open2(actx, acodec, nullptr) >= 0) {
+          astream = avformat_new_stream(oc, nullptr);
+          if (astream) {
+            astream->id = 1;
+            astream->time_base = actx->time_base;
+            avcodec_parameters_from_context(astream->codecpar, actx);
+            if (start_cfg.audio_source == 1) {
+              monitor_source = get_default_mic_source();
+            } else if (start_cfg.audio_source == 2) {
+              monitor_source = get_default_monitor_source();
+              mic_source = get_default_mic_source();
+            } else {
+              monitor_source = get_default_monitor_source();
+            }
+          } else {
+            avcodec_free_context(&actx);
+            audio_enabled = false;
+          }
         } else {
-          monitor_source = get_default_monitor_source();
+          avcodec_free_context(&actx);
+          audio_enabled = false;
         }
+      } else {
+        audio_enabled = false;
       }
+    } else {
+      audio_enabled = false;
     }
   }
 
@@ -716,7 +729,9 @@ int main(int argc, char* argv[]) {
     if (!is_replay) {
       av_packet_rescale_ts(pkt, src_tb, stream_tb);
       pkt->stream_index = stream_idx;
-      av_interleaved_write_frame(oc, pkt);
+      if (av_interleaved_write_frame(oc, pkt) < 0) {
+        g_running.store(false, std::memory_order_relaxed);
+      }
       return;
     }
 
@@ -883,7 +898,10 @@ int main(int argc, char* argv[]) {
           }
           mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mix_n);
         }
-        av_frame_make_writable(aframe);
+        if (av_frame_make_writable(aframe) < 0) {
+          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+          continue;
+        }
         const uint8_t* in_data[1] = {reinterpret_cast<const uint8_t*>(pcm_ring.data())};
         if (swr) {
           swr_convert(swr, aframe->data, kAudioSamplesPerFrame, in_data, kAudioSamplesPerFrame);
@@ -917,6 +935,7 @@ int main(int argc, char* argv[]) {
     av_packet_free(&pkt);
     av_frame_free(&aframe);
     if (swr) swr_free(&swr);
+    av_channel_layout_uninit(&in_ch_layout);
     pulse_mic.cleanup();
     pulse.cleanup();
   });
@@ -1071,7 +1090,7 @@ int main(int argc, char* argv[]) {
                                     .count());
                   last_encoded_pts = 0;
 
-                  av_frame_make_writable(vframe);
+                  if (av_frame_make_writable(vframe) < 0) continue;
                   if (notify.flip_y) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
@@ -1087,7 +1106,7 @@ int main(int argc, char* argv[]) {
                   encode_frame_to_stream(0);
                 } else if (is_vfr) {
                   // Pure VFR Mode: 1:1 frame capture at exact presentation timestamp
-                  av_frame_make_writable(vframe);
+                  if (av_frame_make_writable(vframe) < 0) continue;
                   if (notify.flip_y) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
@@ -1139,7 +1158,7 @@ int main(int argc, char* argv[]) {
                   }
 
                   // Scale newly arrived game frame into vframe
-                  av_frame_make_writable(vframe);
+                  if (av_frame_make_writable(vframe) < 0) continue;
                   if (notify.flip_y) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};

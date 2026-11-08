@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -197,16 +198,27 @@ static inline int safe_strtoi(const std::string& str, int fallback = 0) {
   return static_cast<int>(v);
 }
 
-static inline float safe_strtof(const std::string& str, float fallback = 0.0f) {
-  if (str.empty()) return fallback;
-  char* end = nullptr;
-  errno = 0;
-  float v = std::strtof(str.c_str(), &end);
-  if (errno != 0 || end == str.c_str() || std::isnan(v) || std::isinf(v)) return fallback;
-  return v;
-}
-
 }  // namespace
+
+float safe_strtof(std::string_view str, float fallback) noexcept {
+  if (str.empty()) return fallback;
+  // Locale-independent parsing: reliably parses '.' decimal separator across all user locales
+  const char* start = str.data();
+  const char* end = str.data() + str.size();
+  while (start < end && (*start == ' ' || *start == '\t')) ++start;
+  while (end > start &&
+         (*(end - 1) == ' ' || *(end - 1) == '\t' || *(end - 1) == '\r' || *(end - 1) == '\n')) {
+    --end;
+  }
+  if (start >= end) return fallback;
+
+  float v = fallback;
+  auto [ptr, ec] = std::from_chars(start, end, v);
+  if (ec == std::errc() && !std::isnan(v) && !std::isinf(v)) {
+    return v;
+  }
+  return fallback;
+}
 
 bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
   if (path.empty()) return false;
@@ -282,8 +294,16 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "\n[Experimental]\n");
   std::fprintf(fp, "record_adaptive_vfr=%d\n", cfg.record_adaptive_vfr ? 1 : 0);
   std::fprintf(fp, "record_vfr_max_fps=%d\n", cfg.record_vfr_max_fps);
-  std::fflush(fp);
+
+  bool write_error = (std::ferror(fp) != 0 || std::fflush(fp) != 0);
   std::fclose(fp);
+
+  if (write_error) {
+    if (!tmp_path.empty()) {
+      std::remove(tmp_path.c_str());
+    }
+    return false;
+  }
 
   if (!tmp_path.empty()) {
     if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {

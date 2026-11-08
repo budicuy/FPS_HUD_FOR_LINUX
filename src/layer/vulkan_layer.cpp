@@ -140,6 +140,7 @@ struct SwapchainData {
 };
 
 std::mutex g_map_mutex;
+std::mutex g_vulkan_imgui_mutex;
 std::unordered_map<void*, InstanceData*> g_instance_map;
 std::unordered_map<void*, DeviceData*> g_device_map;
 std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainData>> g_swapchain_map;
@@ -307,13 +308,22 @@ bool init_swapchain_overlay(SwapchainData* sd) {
   subpass.colorAttachmentCount = 1;
   subpass.pColorAttachments = &color_attachment;
 
-  VkSubpassDependency dependency{};
-  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependency.dstSubpass = 0;
-  dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependency.srcAccessMask = 0;
-  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  std::array<VkSubpassDependency, 2> dependencies{};
+  // Ingress: wait for external color attachment output before drawing HUD
+  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[0].dstSubpass = 0;
+  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].srcAccessMask = 0;
+  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+  // Egress: transition color attachment writes to presentation engine before present
+  dependencies[1].srcSubpass = 0;
+  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[1].dstAccessMask = 0;
 
   VkRenderPassCreateInfo rp_info{};
   rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -321,8 +331,8 @@ bool init_swapchain_overlay(SwapchainData* sd) {
   rp_info.pAttachments = &attachment;
   rp_info.subpassCount = 1;
   rp_info.pSubpasses = &subpass;
-  rp_info.dependencyCount = 1;
-  rp_info.pDependencies = &dependency;
+  rp_info.dependencyCount = static_cast<uint32_t>(dependencies.size());
+  rp_info.pDependencies = dependencies.data();
 
   if (dd->CreateRenderPass(dd->device, &rp_info, nullptr, &sd->render_pass) != VK_SUCCESS) {
     return false;
@@ -561,7 +571,7 @@ static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, Frame
     return false;
   }
 
-  if (dd->MapMemory(dd->device, frame.staging_memory, 0, required_size, 0, &frame.mapped_ptr) !=
+  if (dd->MapMemory(dd->device, frame.staging_memory, 0, VK_WHOLE_SIZE, 0, &frame.mapped_ptr) !=
       VK_SUCCESS) {
     dd->FreeMemory(dd->device, frame.staging_memory, nullptr);
     dd->DestroyBuffer(dd->device, frame.staging_buffer, nullptr);
@@ -571,7 +581,7 @@ static bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, Frame
     return false;
   }
 
-  frame.buffer_size = required_size;
+  frame.buffer_size = mem_req.size;
   return true;
 }
 
@@ -1357,22 +1367,26 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       frame.has_valid_capture = false;
     }
 
-    ImGui::SetCurrentContext(sd->imgui_context);
-    ImGuiIO& io = ImGui::GetIO();
     float w = static_cast<float>(sd->extent.width);
     float h = static_cast<float>(sd->extent.height);
-    io.DisplaySize = ImVec2(w, h);
 
     {
-      std::lock_guard<std::mutex> cfg_lock(fpshud::get_config_mutex());
-      fpshud::get_input_manager().update_for_frame(io, cfg, w, h);
+      std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);
+      ImGui::SetCurrentContext(sd->imgui_context);
+      ImGuiIO& io = ImGui::GetIO();
+      io.DisplaySize = ImVec2(w, h);
 
-      ImGui_ImplVulkan_NewFrame();
-      ImGui::NewFrame();
+      {
+        std::lock_guard<std::mutex> cfg_lock(fpshud::get_config_mutex());
+        fpshud::get_input_manager().update_for_frame(io, cfg, w, h);
 
-      fpshud::render_overlay_ui(cfg, telemetry.get_snapshot(), w, h);
+        ImGui_ImplVulkan_NewFrame();
+        ImGui::NewFrame();
 
-      ImGui::Render();
+        fpshud::render_overlay_ui(cfg, telemetry.get_snapshot(), w, h);
+
+        ImGui::Render();
+      }
     }
 
     bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request() &&
@@ -1426,12 +1440,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       b2.subresourceRange.baseArrayLayer = 0;
       b2.subresourceRange.layerCount = 1;
       b2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      b2.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+      b2.dstAccessMask = 0;
 
-      dd->CmdPipelineBarrier(
-          frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
-          0, nullptr, 0, nullptr, 1, &b2);
+      dd->CmdPipelineBarrier(frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &b2);
     };
 
     VkCommandBufferBeginInfo begin_info{};

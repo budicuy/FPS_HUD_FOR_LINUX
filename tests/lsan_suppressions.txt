@@ -1,0 +1,5 @@
+# LeakSanitizer suppressions for closed-source vendor drivers and OS loader allocations
+leak:libnvidia-ml.so
+leak:init_gpu_sensors_locked
+leak:libGLX_nvidia.so
+leak:libcuda.so

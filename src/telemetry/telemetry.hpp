@@ -205,7 +205,9 @@ public:
   TelemetryCollector(const TelemetryCollector&) = delete;
   TelemetryCollector& operator=(const TelemetryCollector&) = delete;
 
-  [[nodiscard]] GpuBackendType get_gpu_backend() const noexcept { return gpu_backend_; }
+  [[nodiscard]] GpuBackendType get_gpu_backend() const noexcept {
+    return gpu_backend_.load(std::memory_order_relaxed);
+  }
 
   void inject_mock_level_zero(const LevelZeroDispatch& dispatch) noexcept;
 
@@ -273,7 +275,7 @@ private:
   void poll_local_clock();
 
   mutable std::mutex gpu_sensor_mutex_;
-  GpuBackendType gpu_backend_ = GpuBackendType::None;
+  std::atomic<GpuBackendType> gpu_backend_{GpuBackendType::None};
   std::string root_prefix_;
   bool disable_nvml_ = false;
   uint32_t bound_vendor_id_ = 0;
@@ -398,6 +400,7 @@ private:
 
   std::atomic<const char*> active_api_{"VULKAN"};
   std::atomic<const char*> translated_api_{nullptr};
+  std::atomic<bool> translated_api_cached_{false};
   std::atomic<float> displayed_fps_{0.0f};
   std::atomic<float> displayed_fps_avg_{0.0f};
   std::atomic<float> displayed_fps_1low_{0.0f};

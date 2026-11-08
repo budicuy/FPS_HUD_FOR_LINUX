@@ -58,6 +58,7 @@ echo "----------------------------------------------------------"
 
 export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+export LSAN_OPTIONS="suppressions=${ROOT_DIR}/tests/lsan_suppressions.txt"
 
 "${BUILD_DIR}/fpshud_test" 1
 

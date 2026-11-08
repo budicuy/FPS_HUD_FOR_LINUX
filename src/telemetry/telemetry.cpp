@@ -859,8 +859,14 @@ void TelemetryCollector::init_gpu_sensors_locked() {
             gpu_bus_width_bits_ = bw_bits;
           }
           return;
+        } else {
+          shutdown_sensors_locked();
         }
+      } else {
+        shutdown_sensors_locked();
       }
+    } else {
+      shutdown_sensors_locked();
     }
   }
 
@@ -1300,7 +1306,8 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
         float worst_1 = recent_ft[1];
         float blended_01_ms = worst_0 * 0.65f + worst_1 * 0.35f;
         float tw_01 = calc_time_weighted_low_fps(0.002);
-        fps_01low = std::min(fps_1low, (1000.0f / blended_01_ms) * 0.5f + tw_01 * 0.5f);
+        float blended_fps = (blended_01_ms > 0.0001f) ? (1000.0f / blended_01_ms) : 0.0f;
+        fps_01low = std::min(fps_1low, blended_fps * 0.5f + tw_01 * 0.5f);
       } else {
         fps_01low = calc_time_weighted_low_fps(0.001);
       }
@@ -1490,8 +1497,12 @@ void TelemetryCollector::stop_benchmark() {
       weighted_sum += ft * ft;
       accum_ms += ft;
     }
-    if (accum_ms <= 0.0001) return 1000.0f / bench_frametimes_ms_[0];
-    return static_cast<float>(1000.0 / (weighted_sum / accum_ms));
+    if (accum_ms <= 0.0001) {
+      return (n > 0 && bench_frametimes_ms_[0] > 0.0001f) ? (1000.0f / bench_frametimes_ms_[0])
+                                                          : 0.0f;
+    }
+    double denom = weighted_sum / accum_ms;
+    return (denom > 0.0001) ? static_cast<float>(1000.0 / denom) : 0.0f;
   };
 
   sum.fps_1pct_low = calc_bench_time_weighted_low(0.01);
@@ -1668,10 +1679,17 @@ void TelemetryCollector::poll_local_clock() {
   localtime_r(&t, &tm_buf);
   char buf[8];
   std::strftime(buf, sizeof(buf), "%H:%M", &tm_buf);
-  std::string maps_path =
-      root_prefix_.empty() ? "/proc/self/maps" : (root_prefix_ + "/proc/self/maps");
-  translated_api_.store(detect_effective_render_api("VULKAN", maps_path.c_str()),
-                        std::memory_order_relaxed);
+  if (!translated_api_cached_.load(std::memory_order_relaxed)) {
+    std::string maps_path =
+        root_prefix_.empty() ? "/proc/self/maps" : (root_prefix_ + "/proc/self/maps");
+    const char* detected = detect_effective_render_api("VULKAN", maps_path.c_str());
+    if (detected && std::strcmp(detected, "VULKAN") != 0) {
+      translated_api_.store(detected, std::memory_order_relaxed);
+      translated_api_cached_.store(true, std::memory_order_relaxed);
+    } else {
+      translated_api_.store("VULKAN", std::memory_order_relaxed);
+    }
+  }
   std::lock_guard<std::mutex> lock(data_mutex_);
   std::memcpy(hw_data_.local_time_str, buf, sizeof(hw_data_.local_time_str));
 }
@@ -1764,15 +1782,15 @@ void TelemetryCollector::poll_battery() {
 
   if (!battery_power_uw_path_.empty() &&
       read_sysfs_buf(battery_power_uw_path_.c_str(), buf, sizeof(buf))) {
-    uint64_t uw = std::strtoull(buf, nullptr, 10);
-    power_w = static_cast<float>(uw) / 1000000.0f;
+    long long uw = std::strtoll(buf, nullptr, 10);
+    power_w = static_cast<float>(std::abs(uw)) / 1000000.0f;
   } else if (!battery_current_ua_path_.empty() && !battery_voltage_uv_path_.empty()) {
     char c_buf[64] = {0};
     char v_buf[64] = {0};
     if (read_sysfs_buf(battery_current_ua_path_.c_str(), c_buf, sizeof(c_buf)) &&
         read_sysfs_buf(battery_voltage_uv_path_.c_str(), v_buf, sizeof(v_buf))) {
-      double ua = std::strtod(c_buf, nullptr);
-      double uv = std::strtod(v_buf, nullptr);
+      double ua = std::abs(std::strtod(c_buf, nullptr));
+      double uv = std::abs(std::strtod(v_buf, nullptr));
       power_w = static_cast<float>((ua * uv) / 1e12);
     }
   }
@@ -2010,9 +2028,10 @@ void TelemetryCollector::poll_cpu_load() {
           uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
           if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
             uint64_t total_d = total - prev_cpu_total_;
-            uint64_t idle_d = idle_all - prev_cpu_idle_;
-            float usage =
-                100.0f * static_cast<float>(total_d - idle_d) / static_cast<float>(total_d);
+            uint64_t idle_d = (idle_all > prev_cpu_idle_) ? (idle_all - prev_cpu_idle_) : 0;
+            uint64_t busy_d = (total_d > idle_d) ? (total_d - idle_d) : 0;
+            float usage = std::clamp(
+                100.0f * static_cast<float>(busy_d) / static_cast<float>(total_d), 0.0f, 100.0f);
             std::lock_guard<std::mutex> lock(data_mutex_);
             hw_data_.cpu_load_pct = usage;
           }
@@ -2416,6 +2435,7 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
       while ((nread = syscall(SYS_getdents64, dfd, d_buf, sizeof(d_buf))) > 0) {
         for (long bpos = 0; bpos < nread;) {
           auto* d = reinterpret_cast<const LinuxDirent64*>(d_buf + bpos);
+          if (d->d_reclen == 0 || bpos + d->d_reclen > nread) break;
           if (d->d_name[0] != '.') {
             char fd_path[256];
             std::snprintf(fd_path, sizeof(fd_path), "%s/%s", fdinfo_dir, d->d_name);
@@ -2647,6 +2667,7 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     prev_gpu_energy_time_ = now;
   }
 
+  int eff_temp = 0;
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     hw_data_.gpu_available = true;
@@ -2659,14 +2680,14 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
     hw_data_.gpu_max_bandwidth_gbs = max_bw_gbs;
     // On integrated GPUs (same silicon die as CPU), fallback to CPU die temperature if GPU hwmon
     // temp is absent
-    hw_data_.gpu_temp_c = (temp_c > 0) ? temp_c : hw_data_.cpu_temp_c;
+    eff_temp = (temp_c > 0) ? temp_c : hw_data_.cpu_temp_c;
+    hw_data_.gpu_temp_c = eff_temp;
     hw_data_.gpu_fan_pct = fan_pct;
     hw_data_.gpu_power_w = watts;
   }
 
   if (bench_active_.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> block(bench_mutex_);
-    int eff_temp = (temp_c > 0) ? temp_c : hw_data_.cpu_temp_c;
     if (eff_temp > bench_max_gpu_temp_c_) bench_max_gpu_temp_c_ = eff_temp;
     if (watts > bench_max_gpu_power_w_) bench_max_gpu_power_w_ = watts;
   }

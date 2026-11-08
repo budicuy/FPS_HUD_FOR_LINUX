@@ -213,13 +213,22 @@ bool is_mod_held(uint32_t mod_key, const std::bitset<512>& keys_down) noexcept {
   return (mod_key < 512) ? keys_down.test(mod_key) : false;
 }
 
+}  // namespace
+
 bool matches_keybind(uint32_t code, const Keybind& kb, const std::bitset<512>& keys_down) noexcept {
   if (kb.main_key == 0 || code != kb.main_key) return false;
   if (kb.mod_key != 0) {
     return is_mod_held(kb.mod_key, keys_down);
   }
-  return true;
+  // When mod_key is 0 (bare key), ensure no standard modifiers are held
+  // so modifier combos (e.g. Shift+F12, Ctrl+F7) are not masked by single-key binds.
+  return !(keys_down.test(KEY_LEFTSHIFT) || keys_down.test(KEY_RIGHTSHIFT) ||
+           keys_down.test(KEY_LEFTCTRL) || keys_down.test(KEY_RIGHTCTRL) ||
+           keys_down.test(KEY_LEFTALT) || keys_down.test(KEY_RIGHTALT) ||
+           keys_down.test(KEY_LEFTMETA) || keys_down.test(KEY_RIGHTMETA));
 }
+
+namespace {
 
 // Forward-declared listener callback trampolines
 void wl_reg_global(void* data, struct wl_registry* registry, uint32_t name, const char* interface,
@@ -510,34 +519,35 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
 
   // Hotkey toggle shortcuts trigger on key press (down == true)
   if (down) {
-    const bool gui_default_bind =
-        (cfg.bind_toggle_gui.mod_key == 0 && cfg.bind_toggle_gui.main_key == KEY_F12 &&
-         cfg.key_toggle_gui >= 0);
-    const bool hud_default_bind =
-        (cfg.bind_toggle_hud.mod_key == 0 && cfg.bind_toggle_hud.main_key == KEY_F11 &&
-         cfg.key_toggle_hud >= 0);
-    const bool bench_default_bind =
-        (cfg.bind_benchmark.mod_key == 0 && cfg.bind_benchmark.main_key == KEY_F9 &&
-         cfg.key_benchmark >= 0);
-    const bool rec_default_bind =
-        (cfg.bind_record.mod_key == 0 && cfg.bind_record.main_key == KEY_F7 && cfg.key_record >= 0);
+    const bool has_mod = (keys_down_.test(KEY_LEFTSHIFT) || keys_down_.test(KEY_RIGHTSHIFT) ||
+                          keys_down_.test(KEY_LEFTCTRL) || keys_down_.test(KEY_RIGHTCTRL) ||
+                          keys_down_.test(KEY_LEFTALT) || keys_down_.test(KEY_RIGHTALT) ||
+                          keys_down_.test(KEY_LEFTMETA) || keys_down_.test(KEY_RIGHTMETA));
 
-    if (matches_keybind(code, cfg.bind_toggle_gui, keys_down_) ||
-        (gui_default_bind && is_gui_toggle_key(code, cfg.key_toggle_gui))) {
-      cfg.gui_open = !cfg.gui_open;
-    } else if (matches_keybind(code, cfg.bind_toggle_hud, keys_down_) ||
-               (hud_default_bind && is_hud_toggle_key(code, cfg.key_toggle_hud))) {
-      cfg.hud_visible = !cfg.hud_visible;
-    } else if (matches_keybind(code, cfg.bind_benchmark, keys_down_) ||
-               (bench_default_bind && is_bench_toggle_key(code, cfg.key_benchmark))) {
-      get_telemetry().toggle_benchmark();
-    } else if (matches_keybind(code, cfg.bind_record, keys_down_) ||
-               (rec_default_bind && is_record_toggle_key(code, cfg.key_record, alt_pressed_))) {
-      RecorderController::instance().toggle_recording(cfg, display_width, display_height);
-    } else if (matches_keybind(code, cfg.bind_save_replay, keys_down_)) {
+    // Check custom multi-key combo keybinds (mod_key != 0) first to prevent masking
+    if (matches_keybind(code, cfg.bind_save_replay, keys_down_)) {
       RecorderController::instance().trigger_save_replay();
     } else if (matches_keybind(code, cfg.bind_screenshot, keys_down_)) {
       RecorderController::instance().request_screenshot();
+    } else if (matches_keybind(code, cfg.bind_toggle_gui, keys_down_) ||
+               (!has_mod && cfg.bind_toggle_gui.mod_key == 0 &&
+                cfg.bind_toggle_gui.main_key == KEY_F12 && cfg.key_toggle_gui >= 0 &&
+                is_gui_toggle_key(code, cfg.key_toggle_gui))) {
+      cfg.gui_open = !cfg.gui_open;
+    } else if (matches_keybind(code, cfg.bind_toggle_hud, keys_down_) ||
+               (!has_mod && cfg.bind_toggle_hud.mod_key == 0 &&
+                cfg.bind_toggle_hud.main_key == KEY_F11 && cfg.key_toggle_hud >= 0 &&
+                is_hud_toggle_key(code, cfg.key_toggle_hud))) {
+      cfg.hud_visible = !cfg.hud_visible;
+    } else if (matches_keybind(code, cfg.bind_benchmark, keys_down_) ||
+               (!has_mod && cfg.bind_benchmark.mod_key == 0 &&
+                cfg.bind_benchmark.main_key == KEY_F9 && cfg.key_benchmark >= 0 &&
+                is_bench_toggle_key(code, cfg.key_benchmark))) {
+      get_telemetry().toggle_benchmark();
+    } else if (matches_keybind(code, cfg.bind_record, keys_down_) ||
+               (!has_mod && cfg.bind_record.mod_key == 0 && cfg.bind_record.main_key == KEY_F7 &&
+                cfg.key_record >= 0 && is_record_toggle_key(code, cfg.key_record, alt_pressed_))) {
+      RecorderController::instance().toggle_recording(cfg, display_width, display_height);
     } else if (code == KEY_ESC && cfg.gui_open) {
       cfg.gui_open = false;
     }

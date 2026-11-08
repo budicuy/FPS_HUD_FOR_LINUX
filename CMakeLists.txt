@@ -90,6 +90,7 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
         -Wl,--wrap=__isoc23_strtol
         -Wl,--wrap=__isoc23_strtoul
         -Wl,--wrap=__isoc23_strtoull
+        -Wl,--wrap=__isoc23_strtoll
         -Wl,--wrap=arc4random
     )
 endif()

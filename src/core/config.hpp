@@ -216,6 +216,7 @@ const HudConfig& get_global_config();
 std::mutex& get_config_mutex();
 
 // Helper names for GUI & CLI diagnostics
+float safe_strtof(std::string_view str, float fallback = 0.0f) noexcept;
 const char* layout_name(LayoutPosition p);
 const char* arrangement_name(ArrangementMode a);
 const char* linux_keycode_name(uint32_t code) noexcept;

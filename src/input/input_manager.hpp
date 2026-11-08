@@ -27,6 +27,9 @@ struct EvdevDevice {
   bool is_grabbed = false;
 };
 
+// Check whether a key event matches a configured keybind given currently pressed keys
+bool matches_keybind(uint32_t code, const Keybind& kb, const std::bitset<512>& keys_down) noexcept;
+
 class InputManager {
 public:
   InputManager() = default;

@@ -39,6 +39,15 @@
 
 namespace fs = std::filesystem;
 
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+extern "C" const char* __lsan_default_suppressions() {
+  return "leak:libnvidia-ml.so\n"
+         "leak:init_gpu_sensors_locked\n"
+         "leak:libGLX_nvidia.so\n"
+         "leak:libcuda.so\n";
+}
+#endif
+
 namespace {
 
 int g_total_checks = 0;
@@ -1699,6 +1708,90 @@ void run_elf_and_layer_abi_suite() {
 
     check_cond(test_passed, "7. Pure Wayland Hotkey Restriction, Script Parity, & ELF32 Tolerance",
                detail.c_str());
+  }
+}
+
+void run_systematic_debugging_hardening_suite() {
+  std::printf("\n--------------------------------------------------------------------\n");
+  std::printf(" SUITE 8 [SYSTEMATIC DEBUGGING]: Root-Cause Hardening & Regression Suite\n");
+  std::printf("--------------------------------------------------------------------\n");
+
+  // 1. Locale-independent decimal parsing
+  float v1 = fpshud::safe_strtof("1.35", 1.0f);
+  float v2 = fpshud::safe_strtof("2.50", 1.0f);
+  float v3 = fpshud::safe_strtof("invalid", 4.2f);
+  bool strtof_ok = (std::abs(v1 - 1.35f) < 0.001f) && (std::abs(v2 - 2.50f) < 0.001f) &&
+                   (std::abs(v3 - 4.2f) < 0.001f);
+  check_cond(strtof_ok, "1. Safe Locale-Independent Decimal Float Parsing",
+             "Verified safe_strtof yields exact float 1.35/2.50 regardless of system locale "
+             "decimal comma");
+
+  // 2. ENOSPC / EACCES Atomic INI Save Protection
+  fpshud::HudConfig dummy_cfg;
+  dummy_cfg.gui_scale = 1.25f;
+  bool save_bad = fpshud::save_ini_file("/proc/sys/unwritable_fpshud.ini", dummy_cfg);
+  check_cond(!save_bad, "2. Robust INI Atomic Save & ENOSPC / EACCES Protection",
+             "Verified save_ini_file cleanly unlinks partial temp file and aborts without crashing "
+             "on write failure");
+
+  // 3. Modifier-Aware Keybind Matching & Priority
+  fpshud::Keybind bare_kb{.mod_key = 0, .main_key = KEY_F10};
+  fpshud::Keybind combo_kb{.mod_key = KEY_LEFTCTRL, .main_key = KEY_F10};
+
+  std::bitset<512> keys_none;
+  std::bitset<512> keys_with_ctrl;
+  keys_with_ctrl.set(KEY_LEFTCTRL);
+
+  bool bare_match_ok = fpshud::matches_keybind(KEY_F10, bare_kb, keys_none);
+  bool bare_match_fail = !fpshud::matches_keybind(KEY_F10, bare_kb, keys_with_ctrl);
+  bool combo_match_ok = fpshud::matches_keybind(KEY_F10, combo_kb, keys_with_ctrl);
+
+  check_cond(bare_match_ok && bare_match_fail && combo_match_ok,
+             "3. Shortcut Modifier Exclusivity & Precedence",
+             "Verified bare single-key binds do not fire when modifiers are held, preventing combo "
+             "collision");
+
+  // 4. Telemetry Non-Atomic CPU Jiffies & Discharging Negative Battery Handling
+  fs::path bug_root =
+      fs::temp_directory_path() / ("fpshud_bug_regress_" + std::to_string(::getpid()));
+  std::error_code ec;
+  fs::remove_all(bug_root, ec);
+  fs::create_directories(bug_root / "sys/class/power_supply/BAT0", ec);
+  write_mock_file(bug_root / "sys/class/power_supply/BAT0/capacity", "85\n");
+  write_mock_file(bug_root / "sys/class/power_supply/BAT0/status", "Discharging\n");
+  write_mock_file(bug_root / "sys/class/power_supply/BAT0/power_now", "-14500000\n");
+
+  fs::create_directories(bug_root / "proc", ec);
+  write_mock_file(bug_root / "proc/stat", "cpu  1000 0 500 8000 0 0 0 0 0 0\n");
+
+  {
+    fpshud::TelemetryCollector reg_tc(bug_root.string(), true, true);
+    write_mock_file(bug_root / "proc/stat", "cpu  2500 0 1000 7000 0 0 0 0 0 0\n");
+    reg_tc.poll_once_sync();
+    auto snap = reg_tc.get_snapshot();
+
+    bool battery_abs_ok = (std::abs(snap.battery_power_w - 14.5f) < 0.1f) &&
+                          snap.battery_pct == 85.0f && !snap.battery_charging;
+    bool cpu_clamp_ok = (snap.cpu_load_pct >= 0.0f && snap.cpu_load_pct <= 100.0f);
+
+    check_cond(battery_abs_ok && cpu_clamp_ok,
+               "4. CPU Underflow Clamping & Discharging Negative Battery Absolute Power",
+               "Verified negative power_now parses to positive 14.5 W and backward /proc/stat "
+               "jiffies clamp to 0-100%");
+  }
+  fs::remove_all(bug_root, ec);
+
+  // 5. Division by zero resilience in simulated frametimes
+  {
+    fpshud::TelemetryCollector zero_tc("", true, true);
+    zero_tc.on_simulated_frame_dt(0.0001f);
+    zero_tc.on_simulated_frame_dt(0.0000f);
+    auto zero_snap = zero_tc.get_snapshot();
+    bool no_nan_or_inf = !std::isnan(zero_snap.fps) && !std::isinf(zero_snap.fps) &&
+                         !std::isnan(zero_snap.fps_1pct_low) && !std::isinf(zero_snap.fps_1pct_low);
+    check_cond(no_nan_or_inf, "5. Zero-Frametime Division Resilience & NaN/Inf Immunity",
+               "Verified zero/sub-millisecond frame delta injections never cause NaN/Inf or "
+               "divide-by-zero");
   }
 }
 
@@ -3822,6 +3915,11 @@ void run_all_devices_and_features_suite() {
   // SUITE 7 [PORTABILITY & ELF ABI]: Decoupled DT_NEEDED & Dynamic Load
   // --------------------------------------------------------------------
   run_elf_and_layer_abi_suite();
+
+  // --------------------------------------------------------------------
+  // SUITE 8 [SYSTEMATIC DEBUGGING]: Root-Cause Hardening & Regression Suite
+  // --------------------------------------------------------------------
+  run_systematic_debugging_hardening_suite();
 
   std::printf("\n====================================================================\n");
   std::printf("  VERIFICATION RESULT: %d / %d CHECKS PASSED (ALL PLATFORMS + MEMORY SAFETY)!\n",

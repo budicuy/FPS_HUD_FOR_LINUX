@@ -207,6 +207,7 @@ void RecorderController::toggle_recording(const HudConfig& cfg, float display_w,
 }
 
 void RecorderController::start_recording(const HudConfig& cfg, float display_w, float display_h) {
+  std::thread prev_save;
   std::thread prev_replay_save;
   {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -220,6 +221,12 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
     if (replay_save_thread_.joinable()) {
       prev_replay_save = std::move(replay_save_thread_);
     }
+    if (save_thread_.joinable()) {
+      prev_save = std::move(save_thread_);
+    }
+  }
+  if (prev_save.joinable()) {
+    prev_save.join();
   }
   if (prev_replay_save.joinable()) {
     prev_replay_save.join();
@@ -246,11 +253,6 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
     cleanup_shm();
   }
 
-  // If a background save thread is currently finalizing the previous recording,
-  // wait for it to cleanly finish before starting a new session (prevents socket/SHM collision)
-  if (save_thread_.joinable()) {
-    save_thread_.join();
-  }
   is_finalizing_.store(false, std::memory_order_relaxed);
 
   if (!spawn_helper_process(cfg, display_w, display_h)) {
@@ -308,6 +310,20 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
 }
 
 void RecorderController::stop_recording() {
+  std::thread prev_save;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!is_recording_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    if (save_thread_.joinable()) {
+      prev_save = std::move(save_thread_);
+    }
+  }
+  if (prev_save.joinable()) {
+    prev_save.join();
+  }
+
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (!is_recording_.load(std::memory_order_relaxed)) {
     return;
@@ -327,13 +343,9 @@ void RecorderController::stop_recording() {
   toast_msg_ = "[REC] Saving video in background...";
   toast_time_ = std::chrono::steady_clock::now();
 
-  // If previous save thread is still active, join it before launching a new save thread
-  if (save_thread_.joinable()) {
-    save_thread_.join();
-  }
-
-  // Offload final socket communication, disk remuxing wait, and child process reaping
-  // to a managed background worker thread so the game render thread NEVER freezes.
+  // Offload final socket communication, disk remuxing wait, child process reaping,
+  // and shared memory cleanup to background thread so game render thread never freezes or drops
+  // tail frames.
   save_thread_ = std::thread([this, sfd, lingering_pid, s_path]() {
     std::string saved_path;
     if (sfd >= 0) {
@@ -349,7 +361,7 @@ void RecorderController::stop_recording() {
       ::send(sfd, &stop_hdr, sizeof(stop_hdr), MSG_NOSIGNAL);
 
       IpcStatusResponse resp{};
-      ssize_t n = ::recv(sfd, &resp, sizeof(resp), 0);
+      ssize_t n = ::recv(sfd, &resp, sizeof(resp), MSG_WAITALL);
       if (n >= static_cast<ssize_t>(sizeof(IpcStatusResponse)) && resp.magic == kRecorderIpcMagic) {
         if (resp.last_saved_file[0] != '\0') {
           saved_path = resp.last_saved_file;
@@ -367,6 +379,9 @@ void RecorderController::stop_recording() {
       ::unlink(s_path.c_str());
     }
 
+    // Now that the daemon has finalized the video, clean up shared memory
+    cleanup_shm();
+
     {
       std::lock_guard<std::recursive_mutex> lk(this->mutex_);
       if (!saved_path.empty()) {
@@ -377,9 +392,6 @@ void RecorderController::stop_recording() {
       this->is_finalizing_.store(false, std::memory_order_relaxed);
     }
   });
-
-  // Clean up shared memory in the game process immediately
-  cleanup_shm();
 }
 
 bool build_container_host_env_paths(const std::string& root_prefix, std::string& out_ld_path,
@@ -758,6 +770,7 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
   }
 
   std::thread finished_replay_save;
+  std::thread finished_save;
   {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (is_saving_replay_.load(std::memory_order_relaxed)) {
@@ -766,9 +779,15 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     if (replay_save_thread_.joinable()) {
       finished_replay_save = std::move(replay_save_thread_);
     }
+    if (save_thread_.joinable()) {
+      finished_save = std::move(save_thread_);
+    }
   }
   if (finished_replay_save.joinable()) {
     finished_replay_save.join();
+  }
+  if (finished_save.joinable()) {
+    finished_save.join();
   }
 
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -810,9 +829,6 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
 
   if (cfg.replay_enabled && !is_replay_active_.load(std::memory_order_relaxed) &&
       display_w >= 64.0f && display_h >= 64.0f) {
-    if (save_thread_.joinable()) {
-      save_thread_.join();
-    }
     if (!spawn_helper_process(cfg, display_w, display_h)) {
       cleanup_shm();
       return;

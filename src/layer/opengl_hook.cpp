@@ -123,6 +123,7 @@ struct GlDispatchTable {
   using PFN_glUnmapBuffer = GLboolean (*)(GLenum target);
   using PFN_glBindFramebuffer = void (*)(GLenum target, GLuint framebuffer);
   using PFN_glPixelStorei = void (*)(GLenum pname, GLint param);
+  using PFN_glGetError = GLenum (*)();
 
   using PFN_glXGetCurrentContext = GLXContext (*)();
   using PFN_glXQueryDrawable = void (*)(Display* dpy, GLXDrawable draw, int attribute,
@@ -144,6 +145,7 @@ struct GlDispatchTable {
   PFN_glUnmapBuffer glUnmapBuffer = nullptr;
   PFN_glBindFramebuffer glBindFramebuffer = nullptr;
   PFN_glPixelStorei glPixelStorei = nullptr;
+  PFN_glGetError glGetError = nullptr;
 
   PFN_glXGetCurrentContext glXGetCurrentContext = nullptr;
   PFN_glXQueryDrawable glXQueryDrawable = nullptr;
@@ -347,6 +349,7 @@ void ensure_core_gl_resolved() {
       reinterpret_cast<GlDispatchTable::PFN_glBindFramebuffer>(resolve_proc("glBindFramebuffer"));
   g_gl.glPixelStorei =
       reinterpret_cast<GlDispatchTable::PFN_glPixelStorei>(resolve_proc("glPixelStorei"));
+  g_gl.glGetError = reinterpret_cast<GlDispatchTable::PFN_glGetError>(resolve_proc("glGetError"));
 
   g_core_gl_resolved = true;
 }
@@ -575,8 +578,10 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   if (g_gl.glGetIntegerv) {
     g_gl.glGetIntegerv(GL_VIEWPORT, vp);
   }
-  float width = (vp[2] > 0) ? static_cast<float>(vp[2]) : static_cast<float>(fallback_w);
-  float height = (vp[3] > 0) ? static_cast<float>(vp[3]) : static_cast<float>(fallback_h);
+  float width = (fallback_w > 0) ? static_cast<float>(fallback_w)
+                                 : ((vp[2] > 0) ? static_cast<float>(vp[2]) : 0.0f);
+  float height = (fallback_h > 0) ? static_cast<float>(fallback_h)
+                                  : ((vp[3] > 0) ? static_cast<float>(vp[3]) : 0.0f);
 
   if (width <= 0.0f || height <= 0.0f) return;
 
@@ -641,7 +646,19 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
     capture_gl_screenshot();
   }
 
+  GLint prev_draw_fbo = 0;
+  if (g_gl.glGetIntegerv) {
+    g_gl.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw_fbo);
+  }
+  if (g_gl.glBindFramebuffer && prev_draw_fbo != 0) {
+    g_gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  }
+
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+  if (g_gl.glBindFramebuffer && prev_draw_fbo != 0) {
+    g_gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prev_draw_fbo));
+  }
 
   if (take_shot && cfg.screenshot_with_hud) {
     capture_gl_screenshot();
@@ -677,6 +694,11 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
     }
   } else {
     g_gl_pbo_ring.reset_pending();
+  }
+
+  if (g_gl.glGetError) {
+    while (g_gl.glGetError() != GL_NO_ERROR) {
+    }
   }
 }
 
