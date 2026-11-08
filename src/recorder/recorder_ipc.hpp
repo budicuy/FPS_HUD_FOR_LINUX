@@ -120,6 +120,9 @@ std::string get_secure_runtime_dir();
 std::string sanitize_filename_prefix(const std::string& input,
                                      const std::string& fallback = "FPSHUD");
 
+// Finds the trusted fpshud_recorder helper binary path (dladdr, user prefix, or PATH)
+std::string get_helper_binary_path();
+
 // Singleton controller in libfpshud.so to manage on-demand helper process & IPC
 class RecorderController {
 public:

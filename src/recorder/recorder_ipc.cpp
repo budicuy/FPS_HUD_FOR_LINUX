@@ -29,23 +29,26 @@ namespace fs = std::filesystem;
 
 namespace fpshud {
 
-namespace {
-
 std::string get_helper_binary_path() {
   // 1. Check next to running libfpshud.so via dladdr
   Dl_info info;
   if (dladdr(reinterpret_cast<void*>(&get_helper_binary_path), &info) && info.dli_fname) {
-    fs::path p = fs::path(info.dli_fname).parent_path() / "fpshud_recorder";
     std::error_code ec;
-    if (fs::exists(p, ec)) return p.string();
+    fs::path base = fs::canonical(fs::path(info.dli_fname), ec);
+    if (ec) {
+      base = fs::absolute(fs::path(info.dli_fname), ec);
+    }
+
+    fs::path p = base.parent_path() / "fpshud_recorder";
+    if (fs::exists(p, ec)) return fs::canonical(p, ec).string();
 
     fs::path p_bin =
-        fs::path(info.dli_fname).parent_path().parent_path() / "bin" / "fpshud_recorder";
-    if (fs::exists(p_bin, ec)) return p_bin.string();
+        base.parent_path().parent_path() / "bin" / "fpshud_recorder";
+    if (fs::exists(p_bin, ec)) return fs::canonical(p_bin, ec).string();
 
-    fs::path p_prefix_bin = fs::path(info.dli_fname).parent_path().parent_path().parent_path() /
+    fs::path p_prefix_bin = base.parent_path().parent_path().parent_path() /
                             "bin" / "fpshud_recorder";
-    if (fs::exists(p_prefix_bin, ec)) return p_prefix_bin.string();
+    if (fs::exists(p_prefix_bin, ec)) return fs::canonical(p_prefix_bin, ec).string();
   }
 
   // 2. Standard user installation: ~/.local/bin/fpshud_recorder &
@@ -53,25 +56,17 @@ std::string get_helper_binary_path() {
   if (const char* home = std::getenv("HOME"); home && *home) {
     fs::path p1 = fs::path(home) / ".local" / "bin" / "fpshud_recorder";
     std::error_code ec;
-    if (fs::exists(p1, ec)) return p1.string();
+    if (fs::exists(p1, ec)) return fs::canonical(p1, ec).string();
 
     fs::path p2 = fs::path(home) / ".local" / "lib" / "fpshud" / "fpshud_recorder";
-    if (fs::exists(p2, ec)) return p2.string();
+    if (fs::exists(p2, ec)) return fs::canonical(p2, ec).string();
   }
 
-  // 3. Current working directory / build directory
-  std::error_code ec;
-  if (fs::exists("./build/fpshud_recorder", ec)) {
-    return "./build/fpshud_recorder";
-  }
-  if (fs::exists("./fpshud_recorder", ec)) {
-    return "./fpshud_recorder";
-  }
-
-  // 4. Default fallback to PATH lookup
+  // 3. Fallback to system PATH lookup (relative ./ search removed for security hardening)
   return "fpshud_recorder";
 }
 
+namespace {
 }  // namespace
 
 std::string get_secure_runtime_dir() {

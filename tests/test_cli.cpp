@@ -1814,6 +1814,13 @@ void run_security_hardening_suite() {
   check_cond(s1_ok && s2_ok && s3_ok && s4_ok,
              "1. IPC Filename Prefix Path Traversal Neutralization",
              "Verified sanitize_filename_prefix strips relative and absolute path traversal components");
+
+  // 2. Untrusted CWD binary search elimination
+  std::string helper_path = fpshud::get_helper_binary_path();
+  bool helper_not_relative = (helper_path.rfind("./", 0) != 0) && (helper_path.rfind("../", 0) != 0);
+  check_cond(helper_not_relative,
+             "2. Untrusted CWD Binary Search Elimination",
+             "Verified get_helper_binary_path never returns relative paths from current working directory");
 }
 
 void run_all_devices_and_features_suite() {
