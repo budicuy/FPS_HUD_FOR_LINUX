@@ -4384,6 +4384,20 @@ void run_all_devices_and_features_suite() {
     check_cond(mouse_state_hooks_present,
                "11.2 In-process SDL relative mouse state, button mask, and XQueryPointer isolation "
                "implemented and exported");
+
+    bool launch_guidance_present = false;
+    {
+      std::string fpshud_in = read_text_file("scripts/fpshud.in");
+      std::string readme_en = read_text_file("README.md");
+      std::string readme_id = read_text_file("README.id.md");
+      launch_guidance_present =
+          (fpshud_in.find("fpshud %command%") != std::string::npos &&
+           fpshud_in.find("Steam Launch Options for Proton & Native games") != std::string::npos &&
+           readme_en.find("~/.local/bin/fpshud %command%") != std::string::npos &&
+           readme_id.find("~/.local/bin/fpshud %command%") != std::string::npos);
+    }
+    check_cond(launch_guidance_present,
+               "11.3 Universal fpshud wrapper and Steam Proton input isolation documented");
   }
 
   std::printf("\n====================================================================\n");

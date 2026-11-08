@@ -31,7 +31,7 @@ Usage:
 
 Examples:
   fpshud glxgears
-  fpshud %command%                 (Steam Launch Options for OpenGL games)
+  fpshud %command%                 (Steam Launch Options for Proton & Native games)
   fpshud --status                  (Check hardware sensor readability)
   fpshud --setup                   (Grant CPU Wattage sensor permissions anytime without reinstalling)
   fpshud --uninstall               (Cleanly remove all overlay files, layers, and binaries)

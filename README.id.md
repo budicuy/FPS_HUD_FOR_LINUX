@@ -213,20 +213,20 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 
 ## 3. Cara Pakai di Steam, Lutris, Heroic & Terminal
 
-### 1. Steam (Game Proton / DXVK / Vulkan — 99% Game Steam)
+### 1. Steam (Game Proton & Native — Sangat Direkomendasikan)
 Klik kanan game di Steam -> **Properties** -> **General** -> **Launch Options**:
 ```bash
-FPS_HUD=1 %command%
+~/.local/bin/fpshud %command%
 ```
-*(Untuk menonaktifkan sementara tanpa menghapus opsi peluncuran, ubah menjadi `FPS_HUD=0 %command%`. Untuk mematikan secara permanen, hapus variabel `FPS_HUD` dari Launch Options).*
+*(Atau injeksi murni Vulkan layer tanpa LD_PRELOAD: `FPS_HUD=1 %command%`. Penggunaan `~/.local/bin/fpshud %command%` sangat direkomendasikan pada game Steam Proton agar isolasi mouse, rotasi kamera, dan tombol klik terisolasi sempurna saat menu GUI overlay dibuka).*
 
 > [!NOTE]
-> Seluruh game Windows yang berjalan melalui Proton, DXVK, dan game native Linux modern berbasis Vulkan menggunakan opsi ini.
+> Seluruh game Windows yang berjalan melalui Proton, DXVK, serta game native Linux (Vulkan & OpenGL) bekerja langsung dengan `~/.local/bin/fpshud %command%`.
 
-### 2. Steam (Khusus Game Native Linux OpenGL Lawas)
-Hanya dibutuhkan untuk game native Linux jadul yang masih memakai API OpenGL:
+### 2. Peluncuran Terminal (Executable Native & Wine/Proton)
+Jalankan game apa saja langsung dari terminal:
 ```bash
-FPS_HUD=1 ~/.local/bin/fpshud %command%
+~/.local/bin/fpshud ./game_anda
 ```
 
 ### 3. Lutris & Heroic Games Launcher

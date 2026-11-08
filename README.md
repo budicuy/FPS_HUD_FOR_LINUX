@@ -213,20 +213,20 @@ ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
 
 ## 3. How to Use in Steam, Lutris, Heroic & Terminal
 
-### 1. Steam (Proton / DXVK / Vulkan Games — 99% of Steam Games)
+### 1. Steam (Proton & Native Games — Recommended)
 Right-click your game in Steam -> **Properties** -> **General** -> **Launch Options**:
 ```bash
-FPS_HUD=1 %command%
+~/.local/bin/fpshud %command%
 ```
-*(To disable temporarily without removing the launch option, change it to `FPS_HUD=0 %command%`. To disable permanently, remove the `FPS_HUD` environment variable).*
+*(Alternatively, for pure Vulkan layer injection without LD_PRELOAD: `FPS_HUD=1 %command%`. Using `~/.local/bin/fpshud %command%` is strongly recommended for Steam Proton titles to guarantee full in-process mouse and cursor state isolation when opening the in-game GUI menu).*
 
 > [!NOTE]
-> All Windows games running through Proton, DXVK, and modern native Linux Vulkan games use this single option.
+> All Windows games running through Proton, DXVK, and native Linux games (Vulkan & OpenGL) work out-of-the-box with `~/.local/bin/fpshud %command%`.
 
-### 2. Steam (Legacy Native Linux OpenGL Games Only)
-Only required for older native Linux games running on legacy OpenGL:
+### 2. Terminal Launch (Native Executables & Wine/Proton)
+Launch any game directly from terminal:
 ```bash
-FPS_HUD=1 ~/.local/bin/fpshud %command%
+~/.local/bin/fpshud ./your_game
 ```
 
 ### 3. Lutris & Heroic Games Launcher
