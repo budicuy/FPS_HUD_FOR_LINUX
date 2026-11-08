@@ -19,19 +19,19 @@ show_help() {
 ====================================================================
   FPSHUD — Linux Gaming Performance Overlay & Management CLI
 ====================================================================
-Penggunaan / Usage:
-  fpshud <perintah/game> [args...] Launch OpenGL / Vulkan game with overlay
-  fpshud --status, -c              Periksa status izin sensor hardware (RAPL CPU Power)
-  fpshud --setup, -s               Konfigurasi izin sensor hardware RAPL CPU Power (Sudo opsional)
-  fpshud --uninstall               Hapus instalasi FPSHUD secara bersih dari sistem
-  fpshud --help, -h                Tampilkan bantuan ini
+Usage:
+  fpshud <command/game> [args...]  Launch OpenGL / Vulkan game with overlay
+  fpshud --status, -c              Check hardware sensor permissions & availability
+  fpshud --setup, -s               Configure hardware sensor permissions (RAPL CPU Power, sudo optional)
+  fpshud --uninstall               Cleanly uninstall FPSHUD from system
+  fpshud --help, -h                Show this help message
 
-Contoh / Examples:
+Examples:
   fpshud glxgears
-  fpshud %command%                 (Steam Launch Options untuk game OpenGL)
-  fpshud --status                  (Periksa apakah CPU Watt terbaca)
-  fpshud --setup                   (Beri izin sensor CPU Wattage kapan saja tanpa instal ulang)
-  fpshud --uninstall               (Hapus seluruh file overlay, layer, dan bin)
+  fpshud %command%                 (Steam Launch Options for OpenGL games)
+  fpshud --status                  (Check hardware sensor readability)
+  fpshud --setup                   (Grant CPU Wattage sensor permissions anytime without reinstalling)
+  fpshud --uninstall               (Cleanly remove all overlay files, layers, and binaries)
 ====================================================================
 EOF
 }
@@ -53,7 +53,7 @@ check_status() {
     done
 
     echo "===================================================================="
-    echo "  FPSHUD — Status Izin & Akses Sensor Perangkat Keras"
+    echo "  FPSHUD — Hardware Sensor Permissions & Access Status"
     echo "===================================================================="
 
     local rapl_ok=0
@@ -73,14 +73,14 @@ check_status() {
         echo -e "\033[32mAVAILABLE (TDP Dynamic Estimation - Sudo-Free)\033[0m"
     fi
 
-    echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAVAILABLE (Bebas Sudo)\033[0m"
-    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAVAILABLE (In-Process Hook, Bebas Sudo)\033[0m"
+    echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAVAILABLE (Sudo-Free)\033[0m"
+    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAVAILABLE (In-Process Hook, Sudo-Free)\033[0m"
 
     echo "--------------------------------------------------------------------"
     if [ "$rapl_ok" -eq 1 ]; then
-        echo -e "\033[32mSemua izin sensor hardware lengkap dan siap digunakan!\033[0m"
+        echo -e "\033[32mAll hardware sensor permissions are complete and ready to use!\033[0m"
     else
-        echo -e "\033[33mInput & RAM 100% aktif tanpa sudo. Untuk mengaktifkan sensor CPU Wattage (RAPL), jalankan:\033[0m"
+        echo -e "\033[33mInput & RAM are 100% active without sudo. To enable direct CPU Wattage (RAPL), run:\033[0m"
         echo "    fpshud --setup"
     fi
     echo "===================================================================="
@@ -88,34 +88,34 @@ check_status() {
 
 run_setup() {
     echo "===================================================================="
-    echo "  FPSHUD — Konfigurasi Izin Sensor Hardware (RAPL CPU Wattage)"
+    echo "  FPSHUD — Hardware Sensor Permissions Setup (RAPL CPU Wattage)"
     echo "===================================================================="
-    echo "Mengonfigurasi aturan udev standar Linux agar sensor CPU Wattage (RAPL)"
-    echo "dapat dibaca oleh user biasa tanpa hak root saat bermain game."
+    echo "Configuring standard Linux udev rules so that CPU Wattage (RAPL)"
+    echo "can be read by unprivileged users without root privileges during gaming."
     echo ""
-    echo "Perhatian Keamanan / Security Notice (I6):"
-    echo "  1. Memberikan izin baca RAPL CPU Watt (GROUP=\"render\", MODE=\"0440\") memungkinkan"
-    echo "     anggota grup 'render' membaca counter daya CPU (trade-off CVE-2020-8694 Platypus)."
-    echo "  2. Yang dilakukan sudo: menulis /etc/udev/rules.d/99-fpshud-rapl.rules (mode 0440)"
-    echo "     dan menjalankan 'udevadm control --reload-rules'. Tanpa sudo, FPSHUD otomatis"
-    echo "     menggunakan estimasi TDP & frekuensi CPU yang aman (tidak pernah 0W)."
-    echo "  3. Input hotkeys & RAM telah bebas sudo dan tidak memerlukan izin tambahan."
+    echo "Security Notice (I6):"
+    echo "  1. Granting read access to RAPL CPU Watt (GROUP=\"render\", MODE=\"0440\") allows"
+    echo "     members of the 'render' group to read CPU energy counters (CVE-2020-8694 Platypus trade-off)."
+    echo "  2. What sudo does: writes /etc/udev/rules.d/99-fpshud-rapl.rules (mode 0440)"
+    echo "     and executes 'udevadm control --reload-rules'. Without sudo, FPSHUD automatically"
+    echo "     uses safe TDP + CPU frequency estimation (never stuck at 0W)."
+    echo "  3. Input hotkeys & RAM are already sudo-free and require no additional permissions."
     echo "--------------------------------------------------------------------"
 
     local user_consent=0
     if [ "${FORCE_SETUP:-0}" = "1" ] || [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
         user_consent=1
     elif [ -t 0 ]; then
-        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm || confirm="n"
+        read -r -p "Proceed with sensor permissions setup? [y/N] " confirm || confirm="n"
         case "$confirm" in
             [yY][eE][sS]|[yY]) user_consent=1 ;;
-            *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
+            *) echo "Setup cancelled by user."; return 0 ;;
         esac
     elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-        read -r -p "Lanjutkan konfigurasi izin ini? / Proceed with setup? [y/N] " confirm < /dev/tty || confirm="n"
+        read -r -p "Proceed with sensor permissions setup? [y/N] " confirm < /dev/tty || confirm="n"
         case "$confirm" in
             [yY][eE][sS]|[yY]) user_consent=1 ;;
-            *) echo "Konfigurasi dibatalkan oleh pengguna."; return 0 ;;
+            *) echo "Setup cancelled by user."; return 0 ;;
         esac
     else
         echo "[!] Non-interactive environment detected without TTY. To run setup, use: fpshud --setup -y"
@@ -127,18 +127,18 @@ run_setup() {
         SUDO_CMD=""
     else
         if ! command -v sudo >/dev/null 2>&1; then
-            echo "[!] Perintah 'sudo' tidak ditemukan pada sistem ini."
+            echo "[!] 'sudo' command not found on this system."
             exit 1
         fi
-        echo "[*] Meminta izin administrator (sudo)..."
+        echo "[*] Requesting administrator permissions (sudo)..."
         if ! sudo -v; then
-            echo "[!] Gagal mendapatkan izin sudo. Konfigurasi dibatalkan."
+            echo "[!] Failed to acquire sudo permissions. Setup cancelled."
             exit 1
         fi
     fi
 
     # 1. RAPL CPU Wattage udev rule (scoped to 'render' group 0440 instead of world-readable 0444)
-    echo "[*] Memasang udev rule untuk CPU Wattage (/etc/udev/rules.d/99-fpshud-rapl.rules)..."
+    echo "[*] Installing udev rule for CPU Wattage (/etc/udev/rules.d/99-fpshud-rapl.rules)..."
     $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-rapl.rules << "EOF"
 SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
 SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!="", GROUP="render", MODE="0440"
@@ -146,7 +146,7 @@ EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
     # 2. Reload udev rules
-    echo "[*] Me-reload aturan udev sistem..."
+    echo "[*] Reloading system udev rules..."
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
     $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
 
@@ -159,7 +159,7 @@ EOF'
     fi
     FLATPAK_STEAM_DIR="$TARGET_HOME/.var/app/com.valvesoftware.Steam"
     if [ -d "$FLATPAK_STEAM_DIR" ]; then
-        echo "[*] Mendeteksi direktori Flatpak Steam: $FLATPAK_STEAM_DIR"
+        echo "[*] Detected Flatpak Steam directory: $FLATPAK_STEAM_DIR"
         if command -v flatpak >/dev/null 2>&1; then
             if [ -n "$SUDO_USER" ] && [ "$EUID" -eq 0 ]; then
                 su - "$SUDO_USER" -c 'flatpak override --user --filesystem="$HOME/.local/lib/fpshud:ro" --filesystem=xdg-config/fpshud:create --filesystem=xdg-data/fpshud:ro com.valvesoftware.Steam' 2>/dev/null || true
@@ -176,15 +176,15 @@ EOF'
                 $SUDO_CMD chown -R "$TARGET_USER:" "$VK_DST" 2>/dev/null || true
             fi
         fi
-        echo "    [+] Izin dan Vulkan implicit layer Flatpak Steam berhasil dikonfigurasi."
+        echo "    [+] Flatpak Steam permissions and Vulkan implicit layer configured successfully."
     fi
 
     echo ""
     echo "===================================================================="
-    echo "  [✓] Konfigurasi Izin Sensor Berhasil Selesai!"
+    echo "  [✓] Sensor Permissions Setup Completed Successfully!"
     echo "===================================================================="
-    echo "Catatan: Sensor CPU Wattage (RAPL) telah aktif."
-    echo "Input dan RAM bekerja 100% tanpa hak akses khusus (sudo-free)."
+    echo "Note: CPU Wattage (RAPL) sensor is now active."
+    echo "Input and RAM operate 100% without special privileges (sudo-free)."
     echo "===================================================================="
     check_status
 }

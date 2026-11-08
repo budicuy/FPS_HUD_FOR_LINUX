@@ -53,12 +53,12 @@ if [ -f /etc/udev/rules.d/99-fpshud-rapl.rules ] || [ -f /etc/udev/rules.d/99-fp
             if [ "${FORCE_UNINSTALL_SUDO:-0}" = "1" ] || [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
                 UNINSTALL_SUDO_CONFIRM=1
             elif [ -t 0 ]; then
-                read -r -p "Remove system udev rule via sudo? / Hapus aturan udev sistem via sudo? [y/N] " confirm || confirm="n"
+                read -r -p "Remove system udev rule via sudo? [y/N] " confirm || confirm="n"
                 case "$confirm" in
                     [yY][eE][sS]|[yY]) UNINSTALL_SUDO_CONFIRM=1 ;;
                 esac
             else
-                read -r -p "Remove system udev rule via sudo? / Hapus aturan udev sistem via sudo? [y/N] " confirm < /dev/tty || confirm="n"
+                read -r -p "Remove system udev rule via sudo? [y/N] " confirm < /dev/tty || confirm="n"
                 case "$confirm" in
                     [yY][eE][sS]|[yY]) UNINSTALL_SUDO_CONFIRM=1 ;;
                 esac

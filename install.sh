@@ -174,7 +174,7 @@ echo "sensors, CPU power estimation (TDP fallback), RAM usage/swap/PSI,"
 echo "and in-game GUI/hotkeys on Wayland & X11."
 echo "Only direct hardware RAPL energy counters require an optional udev rule."
 echo ""
-echo "Security Notice / Perhatian Keamanan:"
+echo "Security Notice:"
 echo "  Granting read access to RAPL CPU Wattage (GROUP=\"render\", MODE=\"0440\")"
 echo "  allows local render-group apps to read exact CPU power counters"
 echo "  (side-channel CVE-2020-8694 Platypus trade-off)."
@@ -189,13 +189,13 @@ if [ "${FORCE_SETUP:-0}" = "1" ] || [ "$FORCE_OPT" -eq 1 ]; then
 elif [ -n "${CI:-}" ]; then
     USER_CONFIRM=0
 elif [ -t 0 ]; then
-    read -r -p "Proceed with sudo RAPL sensor setup? / Konfigurasi sensor CPU Watt via sudo? [y/N] " confirm || confirm="n"
+    read -r -p "Proceed with optional sudo RAPL sensor setup? [y/N] " confirm || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
     esac
 elif ( : < /dev/tty ) 2>/dev/null; then
-    read -r -p "Proceed with sudo RAPL sensor setup? / Konfigurasi sensor CPU Watt via sudo? [y/N] " confirm < /dev/tty || confirm="n"
+    read -r -p "Proceed with optional sudo RAPL sensor setup? [y/N] " confirm < /dev/tty || confirm="n"
     case "$confirm" in
         [yY][eE][sS]|[yY]) USER_CONFIRM=1 ;;
         *) echo "[*] Sudo hardware sensor setup skipped by user."; USER_CONFIRM=0 ;;
