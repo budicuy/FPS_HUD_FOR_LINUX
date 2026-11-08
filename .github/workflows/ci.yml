@@ -100,15 +100,19 @@ jobs:
           cp src/core/pack_indexing.hpp build/src/core/
           # Build secondary Arch Linux recorder binary variant (FFmpeg 8.x / libavformat.so.63) in Docker
           echo "[*] Building secondary Arch Linux recorder binary variant in Docker..."
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
           docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -c \
             "pacman -Syu --noconfirm --needed clang ffmpeg libpulse pkgconf && \
              clang++ -std=c++26 -O3 -Isrc -Isrc/recorder -Isrc/core \
              \$(pkg-config --cflags --libs libavcodec libavformat libavutil libswscale libswresample libpulse) \
              src/recorder/recorder_main.cpp -o build/fpshud_recorder_bin-arch && \
-             strip --strip-unneeded build/fpshud_recorder_bin-arch" || echo "[!] Docker Arch build fallback: skipped"
+             strip --strip-unneeded build/fpshud_recorder_bin-arch && \
+             chown $HOST_UID:$HOST_GID build/fpshud_recorder_bin-arch && \
+             chmod 755 build/fpshud_recorder_bin-arch" || echo "[!] Docker Arch build fallback: skipped"
           TAR_ITEMS="libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh src"
           if [ -f "build/fpshud_recorder_bin-arch" ]; then
-            chmod 755 build/fpshud_recorder_bin-arch
+            chmod 755 build/fpshud_recorder_bin-arch 2>/dev/null || true
             TAR_ITEMS="$TAR_ITEMS fpshud_recorder_bin-arch"
           fi
           chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
