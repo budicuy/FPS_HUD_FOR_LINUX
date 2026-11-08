@@ -1588,7 +1588,10 @@ void run_elf_and_layer_abi_suite() {
            readme_id.find("Instant Replay") != std::string::npos &&
            readme_id.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
            readme_id.find(".webm") != std::string::npos && single_config_ini_only);
-      setup_security_notice_ok = setup_security_notice_ok && readme_parity_ok;
+      bool multi_variant_recorder_ok =
+          (install_sh_content.find("fpshud_recorder_bin-arch") != std::string::npos &&
+           pkg_script_content.find("fpshud_recorder_bin-*") != std::string::npos);
+      setup_security_notice_ok = setup_security_notice_ok && readme_parity_ok && multi_variant_recorder_ok;
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;

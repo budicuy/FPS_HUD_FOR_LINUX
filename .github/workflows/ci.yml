@@ -98,9 +98,22 @@ jobs:
           mkdir -p build/src/recorder build/src/core
           cp src/recorder/recorder_main.cpp src/recorder/recorder_ipc.hpp build/src/recorder/
           cp src/core/pack_indexing.hpp build/src/core/
+          # Build secondary Arch Linux recorder binary variant (FFmpeg 8.x / libavformat.so.63) in Docker
+          echo "[*] Building secondary Arch Linux recorder binary variant in Docker..."
+          docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -c \
+            "pacman -Syu --noconfirm --needed clang ffmpeg libpulse pkgconf && \
+             clang++ -std=c++26 -O3 -Isrc -Isrc/recorder -Isrc/core \
+             \$(pkg-config --cflags --libs libavcodec libavformat libavutil libswscale libswresample libpulse) \
+             src/recorder/recorder_main.cpp -o build/fpshud_recorder_bin-arch && \
+             strip --strip-unneeded build/fpshud_recorder_bin-arch" || echo "[!] Docker Arch build fallback: skipped"
+          TAR_ITEMS="libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh src"
+          if [ -f "build/fpshud_recorder_bin-arch" ]; then
+            chmod 755 build/fpshud_recorder_bin-arch
+            TAR_ITEMS="$TAR_ITEMS fpshud_recorder_bin-arch"
+          fi
           chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
-          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh src
-          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)
+          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build $TAR_ITEMS
+          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > release_pkg/fpshud-linux-x86_64.tar.gz.sha256)
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4

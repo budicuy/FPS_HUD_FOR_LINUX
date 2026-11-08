@@ -104,20 +104,45 @@ if [ -f "$TMP_DIR/fpshud_recorder" ]; then
     chmod 755 "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
 fi
 
-if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+if [ -f "$TMP_DIR/fpshud_recorder_bin" ] || [ -f "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
     RECORDER_COMPATIBLE=0
-    # Test if prebuilt fpshud_recorder_bin can resolve its shared libraries on this host distro
-    REC_TEST_STATUS=0
-    "$TMP_DIR/fpshud_recorder_bin" --help >/dev/null 2>&1 || REC_TEST_STATUS=$?
-    if [ "$REC_TEST_STATUS" -ne 127 ]; then
+    # Probe candidate prebuilt recorder binaries for host FFmpeg ABI compatibility
+    CANDIDATES=()
+    if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+        CANDIDATES+=("$TMP_DIR/fpshud_recorder_bin")
+    fi
+    if [ -f "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
+        CANDIDATES+=("$TMP_DIR/fpshud_recorder_bin-arch")
+    fi
+    for extra_rec in "$TMP_DIR"/fpshud_recorder_bin-*; do
+        if [ -f "$extra_rec" ] && [ "$extra_rec" != "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
+            CANDIDATES+=("$extra_rec")
+        fi
+    done
+
+    MATCHED_BIN=""
+    for cand in "${CANDIDATES[@]}"; do
+        STATUS=0
+        "$cand" --help >/dev/null 2>&1 || STATUS=$?
+        if [ "$STATUS" -ne 127 ]; then
+            MATCHED_BIN="$cand"
+            break
+        fi
+    done
+
+    if [ -n "$MATCHED_BIN" ]; then
         RECORDER_COMPATIBLE=1
-        cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-        cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+        cp -f "$MATCHED_BIN" "$LIB_DIR/fpshud_recorder_bin"
+        cp -f "$MATCHED_BIN" "$BIN_DIR/fpshud_recorder_bin"
         chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        cand_name="$(basename "$MATCHED_BIN")"
+        if [ "$cand_name" != "fpshud_recorder_bin" ]; then
+            echo "[✓] Selected compatible prebuilt recorder binary: $cand_name"
+        fi
     fi
 
     if [ "$RECORDER_COMPATIBLE" -eq 0 ]; then
-        echo "[*] Notice: Prebuilt recorder daemon requires different FFmpeg versions on this system."
+        echo "[*] Notice: Bundled prebuilt recorder binaries require different FFmpeg versions on this system."
         COMPILED_NATIVE=0
         # 1. Check if a local native build already exists
         if [ -f "./build/fpshud_recorder_bin" ]; then

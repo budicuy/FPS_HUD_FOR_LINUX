@@ -34,6 +34,14 @@ if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     TAR_FILES+=("src")
 fi
 
+for rec_variant in "$BUILD_DIR"/fpshud_recorder_bin-*; do
+    if [ -f "$rec_variant" ]; then
+        rec_name="$(basename "$rec_variant")"
+        STRIP_TARGETS+=("$rec_variant")
+        TAR_FILES+=("$rec_name")
+    fi
+done
+
 if [ -n "$STRIP_BIN" ]; then
     "$STRIP_BIN" --strip-unneeded "${STRIP_TARGETS[@]}"
 fi
