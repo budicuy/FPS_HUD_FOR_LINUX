@@ -84,6 +84,8 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
         -Wl,--wrap=acosf
         -Wl,--wrap=atan2f
         -Wl,--wrap=fmodf
+        -Wl,--wrap=sinh
+        -Wl,--wrap=cosh
         -Wl,--wrap=__isoc23_sscanf
         -Wl,--wrap=__isoc23_strtol
         -Wl,--wrap=__isoc23_strtoul
@@ -313,6 +315,20 @@ target_link_options(fpshud_test PRIVATE
 )
 
 # Screen Recorder Helper Daemon (On-Demand)
+set(FFMPEG_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/ffmpeg_minimal" CACHE PATH "Path to minimal static FFmpeg build")
+set(FPSHUD_STATIC_RECORDER "AUTO" CACHE STRING "Statically link recorder binary with minimal FFmpeg (AUTO/ON/OFF)")
+
+set(BUILD_STATIC_RECORDER FALSE)
+if(FPSHUD_STATIC_RECORDER STREQUAL "ON" OR
+   (FPSHUD_STATIC_RECORDER STREQUAL "AUTO" AND
+    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a" AND
+    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a" AND
+    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswscale.a" AND
+    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswresample.a" AND
+    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavutil.a"))
+    set(BUILD_STATIC_RECORDER TRUE)
+endif()
+
 find_package(PkgConfig QUIET)
 if (PKG_CONFIG_FOUND)
     pkg_check_modules(AVFORMAT IMPORTED_TARGET libavformat)
@@ -321,10 +337,71 @@ if (PKG_CONFIG_FOUND)
     pkg_check_modules(SWSCALE IMPORTED_TARGET libswscale)
     pkg_check_modules(SWRESAMPLE IMPORTED_TARGET libswresample)
     pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
+    pkg_check_modules(LIBVA IMPORTED_TARGET libva)
+    pkg_check_modules(LIBVA_DRM IMPORTED_TARGET libva-drm)
+    pkg_check_modules(LIBDRM IMPORTED_TARGET libdrm)
 endif()
 
-if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
-    TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
+if (BUILD_STATIC_RECORDER)
+    add_executable(fpshud_recorder_bin
+        src/recorder/recorder_main.cpp
+        ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    )
+
+    target_include_directories(fpshud_recorder_bin PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${FFMPEG_MINIMAL_DIR}/include
+    )
+
+    target_compile_options(fpshud_recorder_bin PRIVATE
+        -ffunction-sections
+        -fdata-sections
+    )
+
+    target_link_libraries(fpshud_recorder_bin PRIVATE
+        ${FFMPEG_MINIMAL_DIR}/lib/libavformat.a
+        ${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a
+        ${FFMPEG_MINIMAL_DIR}/lib/libswscale.a
+        ${FFMPEG_MINIMAL_DIR}/lib/libswresample.a
+        ${FFMPEG_MINIMAL_DIR}/lib/libavutil.a
+        $<$<TARGET_EXISTS:PkgConfig::PULSE>:PkgConfig::PULSE>
+        $<$<NOT:$<TARGET_EXISTS:PkgConfig::PULSE>>:pulse>
+        $<$<TARGET_EXISTS:PkgConfig::LIBVA>:PkgConfig::LIBVA>
+        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA>>:va>
+        $<$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>:PkgConfig::LIBVA_DRM>
+        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>>:va-drm>
+        $<$<TARGET_EXISTS:PkgConfig::LIBDRM>:PkgConfig::LIBDRM>
+        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBDRM>>:drm>
+        z
+        m
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+
+    target_link_options(fpshud_recorder_bin PRIVATE
+        -Wl,--gc-sections
+        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+        -static-libgcc
+        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+    )
+
+    # Universal lightweight container-aware launcher
+    add_executable(fpshud_recorder
+        src/recorder/recorder_launcher.c
+        ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    )
+    target_link_libraries(fpshud_recorder PRIVATE
+        ${CMAKE_DL_LIBS}
+    )
+    target_link_options(fpshud_recorder PRIVATE
+        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+    )
+
+    message(STATUS "Screen Recorder: ENABLED [Minimal Hardware Static FFmpeg < 5 MB] (fpshud_recorder & fpshud_recorder_bin)")
+elseif (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
+        TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
     add_executable(fpshud_recorder_bin
         src/recorder/recorder_main.cpp
         ${FPSHUD_GLIBC_COMPAT_SOURCES}
@@ -368,7 +445,7 @@ if (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfi
         ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
     )
 
-    message(STATUS "Screen Recorder: ENABLED (fpshud_recorder & fpshud_recorder_bin will be built)")
+    message(STATUS "Screen Recorder: ENABLED [Dynamic System FFmpeg] (fpshud_recorder & fpshud_recorder_bin will be built)")
 else()
     message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse not found)")
 endif()

@@ -1240,7 +1240,21 @@ void run_elf_and_layer_abi_suite() {
       test_passed = true;
       detail = "Verified at build time (standalone deployment without recorder binary)";
     } else {
-      // Step 1: Probe Encoders
+      // Step 1: Verify Zero dynamic libav dependencies (Single Universal Static Binary < 5 MB)
+      std::string readelf_cmd = "LC_ALL=C readelf -d " + rec_path.string() + " 2>&1";
+      FILE* re_pipe = popen(readelf_cmd.c_str(), "r");
+      std::string readelf_output;
+      if (re_pipe) {
+        char rbuf[256];
+        while (fgets(rbuf, sizeof(rbuf), re_pipe)) {
+          readelf_output += rbuf;
+        }
+        pclose(re_pipe);
+      }
+      bool has_dynamic_libav = (readelf_output.find("libavformat") != std::string::npos ||
+                                readelf_output.find("libavcodec") != std::string::npos);
+
+      // Step 2: Probe Encoders
       std::string probe_cmd = rec_path.string() + " --probe-encoders 2>&1";
       FILE* pipe = popen(probe_cmd.c_str(), "r");
       std::string probe_output;
@@ -1254,12 +1268,17 @@ void run_elf_and_layer_abi_suite() {
         exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
       }
 
-      bool ffmpeg_missing =
+      bool runtime_missing =
           (probe_output.find("error while loading shared libraries") != std::string::npos ||
            exit_code == 127);
-      if (ffmpeg_missing) {
+      if (has_dynamic_libav) {
+        test_passed = false;
+        detail =
+            "Failed: Dynamic libav*.so dependency detected in fpshud_recorder_bin (expected "
+            "static minimal FFmpeg)";
+      } else if (runtime_missing) {
         test_passed = true;
-        detail = "Verified: Host FFmpeg runtime library is optional on target container";
+        detail = "Verified: Host dynamic runtime libraries optional on target container";
       } else {
         bool probe_ok = (exit_code == 0 && probe_output.find("hevc_vaapi") != std::string::npos &&
                          probe_output.find("h264_vaapi") != std::string::npos);
@@ -1588,11 +1607,12 @@ void run_elf_and_layer_abi_suite() {
            readme_id.find("Instant Replay") != std::string::npos &&
            readme_id.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
            readme_id.find(".webm") != std::string::npos && single_config_ini_only);
-      bool multi_variant_recorder_ok =
-          (install_sh_content.find("fpshud_recorder_bin-arch") != std::string::npos &&
-           pkg_script_content.find("fpshud_recorder_bin-*") != std::string::npos);
+      bool single_universal_recorder_ok =
+          (install_sh_content.find("Installed single universal screen recorder daemon") !=
+               std::string::npos &&
+           pkg_script_content.find("Zero dynamic libav dependencies") != std::string::npos);
       setup_security_notice_ok =
-          setup_security_notice_ok && readme_parity_ok && multi_variant_recorder_ok;
+          setup_security_notice_ok && readme_parity_ok && single_universal_recorder_ok;
     } else {
       scripts_install_ok = true;
       uninstall_ok = true;

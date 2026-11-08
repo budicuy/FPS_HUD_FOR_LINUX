@@ -36,7 +36,12 @@ jobs:
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
             fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev \
+            libva-dev libdrm-dev upx-ucl \
             mesa-vulkan-drivers vulkan-tools xvfb
+
+      - name: Build Minimal Hardware Static FFmpeg (< 4 MB)
+        run: |
+          ./scripts/build_static_ffmpeg.sh build/ffmpeg_minimal
 
       - name: Configure, Build & Verify ABI/GLIBC Portability Gates
         run: |
@@ -75,9 +80,21 @@ jobs:
             exit 1
           fi
           "$CXX_BIN" -std=c++26 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsyntax-only -Isrc -Isrc/recorder -Isrc/core \
-            $(pkg-config --cflags libavcodec libavformat libavutil libswscale libswresample libpulse) \
+            -Ibuild/ffmpeg_minimal/include \
             src/recorder/recorder_main.cpp
           strip --strip-unneeded build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
+          if [ -f "build/fpshud_recorder_bin" ]; then
+            REC_SIZE="$(stat -c%s build/fpshud_recorder_bin)"
+            if [ "$REC_SIZE" -gt 5242880 ]; then
+              echo "::error::fpshud_recorder_bin exceeds 5 MB limit ($REC_SIZE bytes)!"
+              exit 1
+            fi
+            if LC_ALL=C readelf -d build/fpshud_recorder_bin | grep NEEDED | grep "libav"; then
+              echo "::error::Dynamic libav dependency detected in fpshud_recorder_bin!"
+              exit 1
+            fi
+            echo "[✓] Static minimal recorder verified: $REC_SIZE bytes (< 5 MB), 0 dynamic libav dependencies."
+          fi
 
       - name: Run Multi-Device Simulation & Feature Verification Suite
         run: |
@@ -95,26 +112,12 @@ jobs:
         run: |
           mkdir -p release_pkg
           cp scripts/uninstall.sh build/uninstall.sh
-          mkdir -p build/src/recorder build/src/core
-          cp src/recorder/recorder_main.cpp src/recorder/recorder_ipc.hpp build/src/recorder/
-          cp src/core/pack_indexing.hpp build/src/core/
-          # Build secondary Arch Linux recorder binary variant (FFmpeg 8.x / libavformat.so.63) in Docker
-          echo "[*] Building secondary Arch Linux recorder binary variant in Docker..."
-          HOST_UID="$(id -u)"
-          HOST_GID="$(id -g)"
-          docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -c \
-            "pacman -Syu --noconfirm --needed clang ffmpeg libpulse pkgconf && \
-             clang++ -std=c++26 -O3 -Isrc -Isrc/recorder -Isrc/core \
-             \$(pkg-config --cflags --libs libavcodec libavformat libavutil libswscale libswresample libpulse) \
-             src/recorder/recorder_main.cpp -o build/fpshud_recorder_bin-arch && \
-             strip --strip-unneeded build/fpshud_recorder_bin-arch && \
-             chown $HOST_UID:$HOST_GID build/fpshud_recorder_bin-arch && \
-             chmod 755 build/fpshud_recorder_bin-arch" || echo "[!] Docker Arch build fallback: skipped"
-          TAR_ITEMS="libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh src"
-          if [ -f "build/fpshud_recorder_bin-arch" ]; then
-            chmod 755 build/fpshud_recorder_bin-arch 2>/dev/null || true
-            TAR_ITEMS="$TAR_ITEMS fpshud_recorder_bin-arch"
+          # Optional UPX compression to further shrink the self-contained recorder
+          if command -v upx >/dev/null 2>&1 && [ -f "build/fpshud_recorder_bin" ]; then
+            echo "[*] Compressing fpshud_recorder_bin with UPX..."
+            upx --best build/fpshud_recorder_bin || true
           fi
+          TAR_ITEMS="libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh"
           chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
           tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build $TAR_ITEMS
           (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)

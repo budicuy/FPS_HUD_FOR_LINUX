@@ -6,6 +6,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 
+echo "[*] Ensuring minimal static FFmpeg is built..."
+"$SCRIPT_DIR/build_static_ffmpeg.sh" "$BUILD_DIR/ffmpeg_minimal"
+
 echo "[*] Compiling FPSHUD from source with Clang 23 + LLD + ThinLTO..."
 "$SCRIPT_DIR/build_clang.sh"
 
@@ -37,16 +40,29 @@ if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     TAR_FILES+=("src")
 fi
 
-for rec_variant in "$BUILD_DIR"/fpshud_recorder_bin-*; do
-    if [ -f "$rec_variant" ]; then
-        rec_name="$(basename "$rec_variant")"
-        STRIP_TARGETS+=("$rec_variant")
-        TAR_FILES+=("$rec_name")
-    fi
-done
-
 if [ -n "$STRIP_BIN" ]; then
     "$STRIP_BIN" --strip-unneeded "${STRIP_TARGETS[@]}"
+fi
+
+# Optional UPX compression for developer/CI releases
+if command -v upx >/dev/null 2>&1 && [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
+    echo "[*] UPX detected: Compressing fpshud_recorder_bin..."
+    upx --best "$BUILD_DIR/fpshud_recorder_bin" || true
+fi
+
+if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
+    REC_SIZE="$(stat -c%s "$BUILD_DIR/fpshud_recorder_bin")"
+    if [ "$REC_SIZE" -gt 5242880 ]; then
+        echo "[!] ERROR: fpshud_recorder_bin exceeds 5 MB limit ($REC_SIZE bytes)! Aborting packaging." >&2
+        exit 1
+    fi
+    echo "[✓] Recorder binary size gate PASSED ($REC_SIZE bytes < 5 MB limit)."
+
+    if LC_ALL=C readelf -d "$BUILD_DIR/fpshud_recorder_bin" | grep NEEDED | grep "libav"; then
+        echo "[!] ERROR: Dynamic libav dependency detected in fpshud_recorder_bin! Aborting packaging." >&2
+        exit 1
+    fi
+    echo "[✓] Zero dynamic libav dependencies in fpshud_recorder_bin PASSED."
 fi
 
 echo "[*] Verifying GLIBC symbol version floor on baseline portable binaries (must be <= GLIBC_2.35)..."

@@ -104,103 +104,16 @@ if [ -f "$TMP_DIR/fpshud_recorder" ]; then
     chmod 755 "$BIN_DIR/fpshud_recorder" "$LIB_DIR/fpshud_recorder"
 fi
 
-if [ -f "$TMP_DIR/fpshud_recorder_bin" ] || [ -f "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
-    RECORDER_COMPATIBLE=0
-    # Probe candidate prebuilt recorder binaries for host FFmpeg ABI compatibility
-    CANDIDATES=()
-    if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
-        CANDIDATES+=("$TMP_DIR/fpshud_recorder_bin")
-    fi
-    if [ -f "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
-        CANDIDATES+=("$TMP_DIR/fpshud_recorder_bin-arch")
-    fi
-    for extra_rec in "$TMP_DIR"/fpshud_recorder_bin-*; do
-        if [ -f "$extra_rec" ] && [ "$extra_rec" != "$TMP_DIR/fpshud_recorder_bin-arch" ]; then
-            CANDIDATES+=("$extra_rec")
-        fi
-    done
-
-    MATCHED_BIN=""
-    for cand in "${CANDIDATES[@]}"; do
-        STATUS=0
-        "$cand" --probe-encoders >/dev/null 2>&1 || STATUS=$?
-        if [ "$STATUS" -eq 0 ]; then
-            MATCHED_BIN="$cand"
-            break
-        fi
-    done
-
-    if [ -n "$MATCHED_BIN" ]; then
-        RECORDER_COMPATIBLE=1
-        cp -f "$MATCHED_BIN" "$LIB_DIR/fpshud_recorder_bin"
-        cp -f "$MATCHED_BIN" "$BIN_DIR/fpshud_recorder_bin"
-        chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-        cand_name="$(basename "$MATCHED_BIN")"
-        if [ "$cand_name" != "fpshud_recorder_bin" ]; then
-            echo "[✓] Selected compatible prebuilt recorder binary: $cand_name"
-        fi
-    fi
-
-    if [ "$RECORDER_COMPATIBLE" -eq 0 ]; then
-        echo "[*] Notice: Bundled prebuilt recorder binaries require different FFmpeg versions on this system."
-        COMPILED_NATIVE=0
-        # 1. Check if a local native build already exists
-        if [ -f "./build/fpshud_recorder_bin" ]; then
-            LOC_STATUS=0
-            "./build/fpshud_recorder_bin" --probe-encoders >/dev/null 2>&1 || LOC_STATUS=$?
-            if [ "$LOC_STATUS" -eq 0 ]; then
-                echo "[+] Found compatible local build of fpshud_recorder_bin; installing native binary..."
-                cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-                cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-                chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-                COMPILED_NATIVE=1
-            fi
-        fi
-
-        # 2. Check if recorder source is bundled or present in repository and can be compiled natively
-        if [ "$COMPILED_NATIVE" -eq 0 ]; then
-            REC_SRC=""
-            if [ -f "$TMP_DIR/src/recorder/recorder_main.cpp" ]; then
-                REC_SRC="$TMP_DIR/src/recorder/recorder_main.cpp"
-            elif [ -f "./src/recorder/recorder_main.cpp" ]; then
-                REC_SRC="./src/recorder/recorder_main.cpp"
-            fi
-
-            if [ -n "$REC_SRC" ]; then
-                COMPILER=""
-                for c in clang++ g++ c++; do
-                    if command -v "$c" >/dev/null 2>&1; then
-                        COMPILER="$c"
-                        break
-                    fi
-                done
-                if [ -n "$COMPILER" ] && command -v pkg-config >/dev/null 2>&1; then
-                    if pkg-config --exists libavcodec libavformat libavutil libswscale libswresample libpulse 2>/dev/null; then
-                        echo "[*] Compiling native hardware recorder daemon against host FFmpeg ($COMPILER)..."
-                        SRC_BASE="$(cd "$(dirname "$REC_SRC")/../.." && pwd)"
-                        if "$COMPILER" -std=c++26 -O3 \
-                            -I"$SRC_BASE/src" -I"$SRC_BASE/src/recorder" -I"$SRC_BASE/src/core" \
-                            $(pkg-config --cflags --libs libavcodec libavformat libavutil libswscale libswresample libpulse) \
-                            "$REC_SRC" -o "$LIB_DIR/fpshud_recorder_bin" 2>/dev/null; then
-                            cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-                            chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-                            echo "[✓] Native recorder daemon compiled and installed successfully!"
-                            COMPILED_NATIVE=1
-                        fi
-                    fi
-                fi
-            fi
-        fi
-
-        if [ "$COMPILED_NATIVE" -eq 0 ]; then
-            echo "[!] Warning: Screen recording daemon could not run due to FFmpeg version mismatch."
-            echo "    (The core HUD, FPS, telemetry, and in-game menu will function 100% normally.)"
-            echo "    To enable screen recording on your Linux distribution, install development packages:"
-            echo "      - Arch Linux / CachyOS : sudo pacman -S clang ffmpeg libpulse pkgconf"
-            echo "      - Fedora / RHEL        : sudo dnf install gcc-c++ ffmpeg-free-devel pulseaudio-libs-devel pkgconf"
-            echo "      - Ubuntu / Debian      : sudo apt install g++ libavcodec-dev libavformat-dev libswscale-dev libpulse-dev"
-        fi
-    fi
+if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
+    cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+    chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    echo "[✓] Installed single universal screen recorder daemon: $LIB_DIR/fpshud_recorder_bin"
+elif [ -f "./build/fpshud_recorder_bin" ]; then
+    cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+    chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    echo "[✓] Installed local build of screen recorder daemon: $LIB_DIR/fpshud_recorder_bin"
 fi
 
 if [ -f "$TMP_DIR/uninstall.sh" ]; then
