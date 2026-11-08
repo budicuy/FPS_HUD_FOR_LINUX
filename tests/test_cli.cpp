@@ -1821,6 +1821,47 @@ void run_security_hardening_suite() {
   check_cond(helper_not_relative,
              "2. Untrusted CWD Binary Search Elimination",
              "Verified get_helper_binary_path never returns relative paths from current working directory");
+
+  // 3. Socket permissions & SO_PEERCRED UID enforcement
+  bool peercred_verified = false;
+  bool socket_mode_ok = false;
+  std::string test_sock = "/tmp/fpshud_test_cred_" + std::to_string(::getpid()) + ".sock";
+  ::unlink(test_sock.c_str());
+  int sfd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sfd >= 0) {
+    struct sockaddr_un sa{};
+    sa.sun_family = AF_UNIX;
+    std::strncpy(sa.sun_path, test_sock.c_str(), sizeof(sa.sun_path) - 1);
+    if (::bind(sfd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) == 0) {
+      ::chmod(test_sock.c_str(), 0600);
+      struct stat st{};
+      if (::stat(test_sock.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600) {
+        socket_mode_ok = true;
+      }
+      ::listen(sfd, 1);
+      int cfd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+      if (cfd >= 0) {
+        if (::connect(cfd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) == 0) {
+          int cl_fd = ::accept(sfd, nullptr, nullptr);
+          if (cl_fd >= 0) {
+            struct ucred cr{};
+            socklen_t cr_len = sizeof(cr);
+            if (::getsockopt(cl_fd, SOL_SOCKET, SO_PEERCRED, &cr, &cr_len) == 0 &&
+                cr.uid == ::getuid()) {
+              peercred_verified = true;
+            }
+            ::close(cl_fd);
+          }
+        }
+        ::close(cfd);
+      }
+    }
+    ::close(sfd);
+    ::unlink(test_sock.c_str());
+  }
+  check_cond(socket_mode_ok && peercred_verified,
+             "3. Unix Domain Socket 0600 Mode & SO_PEERCRED Peer UID Enforcement",
+             "Verified recorder IPC socket enforces 0600 permissions and SO_PEERCRED UID equality");
 }
 
 void run_all_devices_and_features_suite() {

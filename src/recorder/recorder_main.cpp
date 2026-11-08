@@ -336,6 +336,7 @@ int main(int argc, char* argv[]) {
     close(server_fd);
     return 1;
   }
+  chmod(socket_path.c_str(), 0600);
 
   if (listen(server_fd, 2) < 0) {
     std::perror("[FPSHUD Recorder] listen() failed");
@@ -355,6 +356,19 @@ int main(int argc, char* argv[]) {
     close(server_fd);
     unlink(socket_path.c_str());
     return 0;
+  }
+
+  // Peer credentials verification (SO_PEERCRED) to prevent unauthorized local processes
+  struct ucred cr{};
+  socklen_t cr_len = sizeof(cr);
+  if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cr, &cr_len) < 0 || cr.uid != ::getuid()) {
+    std::fprintf(stderr,
+                 "[FPSHUD Recorder] Rejected unauthorized connection from UID %d (expected UID %d)\n",
+                 cr.uid, ::getuid());
+    close(client_fd);
+    close(server_fd);
+    unlink(socket_path.c_str());
+    return 1;
   }
 
   // 2. Read Start Command & Parameters
