@@ -94,7 +94,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
   - `FPS_HUD=1`: Menyalakan HUD Overlay, Perekam Layar, Instant Replay, Lossless Screenshot, dan menu In-Game GUI Configurator.
   - `FPS_HUD=0` (atau dikosongkan/dihapus dari launch options): Mematikan overlay sepenuhnya tanpa beban di latar belakang.
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
-  - Tekan **`Insert`** atau **`F12`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Skala GUI `50%–200%`, Shortcut 1/2 Tombol | Tengah: 31 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar, Instant Replay, Screenshot & Benchmark).
+  - Tekan **`Insert`** atau **`F12`** di dalam game untuk membuka antarmuka widescreen 3 kolom berbahasa Inggris (Kiri: Posisi, Kotak Preview Monitor Interaktif + Input Manual X/Y & Tombol Reset Layout, Susunan, Font, Warna, Skala GUI `50%–200%`, Shortcut 1/2 Tombol | Tengah: 31 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar, Instant Replay, Screenshot & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
   - Setiap perubahan tersimpan ke satu file konfigurasi di `~/.config/fpshud/config.ini`.
 - **Perekam Layar Hardware (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**:

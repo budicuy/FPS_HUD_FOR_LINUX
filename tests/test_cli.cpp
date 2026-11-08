@@ -3538,6 +3538,9 @@ void run_all_devices_and_features_suite() {
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
+    cfg.layout = fpshud::LayoutPosition::Custom;
+    cfg.custom_pos_x = 0.95f;
+    cfg.custom_pos_y = 0.95f;
     ImGui::NewFrame();
     fpshud::render_overlay_ui(cfg, td, 1920.0f, 1080.0f);
     ImGui::Render();
@@ -3549,12 +3552,33 @@ void run_all_devices_and_features_suite() {
     if (!rroot.empty()) {
       std::string ovl_src = read_text_file(rroot / "src" / "ui" / "overlay_ui.cpp");
       std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+      std::string vfr_src =
+          read_text_file(rroot / "src" / "experimental-feature" / "adaptive_vfr.cpp");
       bool smart_alerts_ok =
           (ovl_src.find("33.3f") != std::string::npos &&
            ovl_src.find("22.2f") != std::string::npos &&
            ovl_src.find("1500.0f") != std::string::npos &&
            ovl_src.find("DSK:") != std::string::npos &&
            ovl_src.find("NVME:") != std::string::npos && ovl_src.find("NET:") != std::string::npos);
+      bool custom_layout_ui_ok = (gui_src.find("##MonitorPreviewDrag") != std::string::npos &&
+                                  gui_src.find("##CustomPosX") != std::string::npos &&
+                                  gui_src.find("##CustomPosY") != std::string::npos &&
+                                  gui_src.find("Reset Layout") != std::string::npos &&
+                                  gui_src.find("reset_layout_to_default") != std::string::npos &&
+                                  gui_src.find("Custom (Free Position)") != std::string::npos);
+      bool english_only_ui_ok = (gui_src.find("Tersimpan") == std::string::npos &&
+                                 gui_src.find("Ubah") == std::string::npos &&
+                                 gui_src.find("Batal") == std::string::npos &&
+                                 gui_src.find("Tekan 1/2") == std::string::npos &&
+                                 gui_src.find("Tanpa HUD") == std::string::npos &&
+                                 gui_src.find("Saja") == std::string::npos &&
+                                 gui_src.find("Rekomendasi") == std::string::npos &&
+                                 gui_src.find("Hemat") == std::string::npos &&
+                                 gui_src.find("Redup") == std::string::npos &&
+                                 gui_src.find("Pintasan") == std::string::npos &&
+                                 gui_src.find("dikunci") == std::string::npos &&
+                                 vfr_src.find("Terkunci") == std::string::npos &&
+                                 vfr_src.find("Merekam") == std::string::npos);
       bool gui_controls_ok =
           (gui_src.find("Smart Color Alerts") != std::string::npos &&
            gui_src.find("KeybindTarget::SaveReplay") != std::string::npos &&
@@ -3566,7 +3590,8 @@ void run_all_devices_and_features_suite() {
            gui_src.find("##Col3ScrollSettings") != std::string::npos &&
            gui_src.find("##SensorsSplitGrid") == std::string::npos &&
            gui_src.find("if (cfg.active_preset == \"custom\")") == std::string::npos &&
-           gui_src.find("save_custom_preset_to_disk") == std::string::npos);
+           gui_src.find("save_custom_preset_to_disk") == std::string::npos && custom_layout_ui_ok &&
+           english_only_ui_ok);
       ui_src_ok = smart_alerts_ok && gui_controls_ok;
     }
 

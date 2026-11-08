@@ -94,7 +94,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
   - `FPS_HUD=1`: Turns on the HUD overlay, Screen Recorder, Instant Replay, Screenshot Hub, and the In-Game GUI Configurator.
   - `FPS_HUD=0` (or unset / deleted from launch options): Completely disabled with zero background impact.
 - **3-Column Split View In-Game GUI (`FPSHUD Configuration Tool`)**:
-  - Press **`Insert`** or **`F12`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Live GUI Scale `50%–200%`, 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Quick Filters | Right: Screen Recorder, Instant Replay, Screenshot & Benchmark Hub).
+  - Press **`Insert`** or **`F12`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Interactive Draggable Monitor Preview + Manual X/Y Position & Reset Layout, Layout, Font, Colors, Live GUI Scale `50%–200%`, 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Quick Filters | Right: Screen Recorder, Instant Replay, Screenshot & Benchmark Hub).
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
   - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
 - **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**:

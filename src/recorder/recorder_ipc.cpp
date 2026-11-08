@@ -256,7 +256,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   if (!spawn_helper_process(cfg, display_w, display_h)) {
     cleanup_shm();
     is_recording_.store(false, std::memory_order_relaxed);
-    set_toast("[!] Gagal menjalankan fpshud_recorder binary.");
+    set_toast("[!] Failed to launch fpshud_recorder binary.");
     return;
   }
 
@@ -273,7 +273,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
     }
     cleanup_shm();
     is_recording_.store(false, std::memory_order_relaxed);
-    set_toast("[!] Gagal menghubungkan ke recorder daemon.");
+    set_toast("[!] Failed to connect to recorder daemon.");
     return;
   }
 
@@ -303,7 +303,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   record_start_time_ = std::chrono::steady_clock::now();
   recorded_frames_.store(0, std::memory_order_relaxed);
 
-  toast_msg_ = "[REC] Perekaman dimulai (F7 untuk berhenti)";
+  toast_msg_ = "[REC] Recording started (Press F7 to stop)";
   toast_time_ = std::chrono::steady_clock::now();
 }
 
@@ -324,7 +324,7 @@ void RecorderController::stop_recording() {
   // Note: socket_path_ is intentionally preserved so subsequent recordings can reuse it!
 
   // Show immediate non-blocking toast indicating background save in progress
-  toast_msg_ = "[REC] Menyimpan video di latar belakang...";
+  toast_msg_ = "[REC] Saving video in background...";
   toast_time_ = std::chrono::steady_clock::now();
 
   // If previous save thread is still active, join it before launching a new save thread
@@ -371,7 +371,7 @@ void RecorderController::stop_recording() {
       std::lock_guard<std::recursive_mutex> lk(this->mutex_);
       if (!saved_path.empty()) {
         this->last_saved_file_ = saved_path;
-        this->toast_msg_ = "[✓] Video tersimpan: " + saved_path;
+        this->toast_msg_ = "[✓] Video saved: " + saved_path;
         this->toast_time_ = std::chrono::steady_clock::now();
       }
       this->is_finalizing_.store(false, std::memory_order_relaxed);
@@ -803,7 +803,7 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     }
     cleanup_shm();
     if (!cfg.replay_enabled) {
-      set_toast("[REPLAY] Instant Replay dinonaktifkan (0 MB RAM).");
+      set_toast("[REPLAY] Instant Replay disabled (0 MB RAM).");
       return;
     }
   }
@@ -858,7 +858,7 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     send_command(RecorderCommand::StartRecord, &payload, sizeof(payload));
     is_replay_active_.store(true, std::memory_order_relaxed);
     active_replay_duration_sec_ = cfg.replay_duration_sec;
-    set_toast("[REPLAY] Instant Replay aktif (" + std::to_string(cfg.replay_duration_sec) + "s)");
+    set_toast("[REPLAY] Instant Replay active (" + std::to_string(cfg.replay_duration_sec) + "s)");
   }
 }
 
@@ -895,7 +895,7 @@ void RecorderController::trigger_save_replay() {
   setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   send_command(RecorderCommand::SaveReplay, nullptr, 0);
-  set_toast("[REPLAY] Menyimpan klip replay...");
+  set_toast("[REPLAY] Saving Instant Replay clip...");
   int sfd = socket_fd_;
 
   replay_save_thread_ = std::thread([this, sfd]() {
@@ -905,9 +905,9 @@ void RecorderController::trigger_save_replay() {
         resp.last_saved_file[0] != '\0') {
       std::lock_guard<std::recursive_mutex> guard(mutex_);
       last_saved_file_ = resp.last_saved_file;
-      set_toast("[✓] Replay tersimpan: " + last_saved_file_);
+      set_toast("[✓] Replay saved: " + last_saved_file_);
     } else {
-      set_toast("[!] Buffer replay belum memiliki keyframe yang cukup.");
+      set_toast("[!] Replay buffer does not have enough keyframes yet.");
     }
     is_saving_replay_.store(false, std::memory_order_release);
   });
@@ -967,9 +967,9 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
         std::lock_guard<std::recursive_mutex> lk(this->mutex_);
         if (ok) {
           this->last_saved_file_ = out_path;
-          this->toast_msg_ = "[✓] Screenshot tersimpan: " + out_path;
+          this->toast_msg_ = "[✓] Screenshot saved: " + out_path;
         } else {
-          this->toast_msg_ = "[!] Gagal menyimpan screenshot PNG.";
+          this->toast_msg_ = "[!] Failed to save PNG screenshot.";
         }
         this->toast_time_ = std::chrono::steady_clock::now();
       });

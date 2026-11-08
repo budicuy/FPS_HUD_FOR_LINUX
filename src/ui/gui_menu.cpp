@@ -120,10 +120,10 @@ void draw_keybind_row(const char* label, KeybindTarget target, const Keybind& kb
   if (is_cap) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.42f, 0.08f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.50f, 0.12f, 1.0f));
-    ImGui::Button("Tekan 1/2 Tombol...", ImVec2(box_w, 0.0f));
+    ImGui::Button("Press 1/2 Keys...", ImVec2(box_w, 0.0f));
     ImGui::PopStyleColor(2);
     ImGui::SameLine(0.0f, 6.0f * scale);
-    if (ImGui::Button("Batal", ImVec2(btn_w, 0.0f))) {
+    if (ImGui::Button("Cancel", ImVec2(btn_w, 0.0f))) {
       im.cancel_keybind_capture();
     }
   } else {
@@ -136,7 +136,7 @@ void draw_keybind_row(const char* label, KeybindTarget target, const Keybind& kb
     }
     ImGui::PopStyleColor(2);
     ImGui::SameLine(0.0f, 6.0f * scale);
-    if (ImGui::Button("Ubah", ImVec2(btn_w, 0.0f))) {
+    if (ImGui::Button("Change", ImVec2(btn_w, 0.0f))) {
       im.start_keybind_capture(target);
     }
   }
@@ -235,17 +235,18 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Save Configuration (config.ini)")) {
           if (save_config_to_disk(cfg)) {
-            set_status_message("Tersimpan ke config.ini");
+            set_status_message("Saved to config.ini");
           }
         }
         if (ImGui::MenuItem("Reload Config from Disk")) {
           if (load_config_from_disk(cfg)) {
-            set_status_message("Konfigurasi dimuat ulang.");
+            set_status_message("Configuration reloaded from disk.");
           }
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Reset to Standard Default")) {
           apply_preset_standard(cfg);
+          reset_layout_to_default(cfg);
           cfg.gui_scale = 1.0f;
           cfg.text_color = {255, 255, 255, 255};
           cfg.text_opacity = 1.0f;
@@ -258,7 +259,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
           cfg.category_colors_enabled = true;
           cfg.thermal_warnings_enabled = true;
           cfg.dim_labels_enabled = true;
-          set_status_message("Direset ke Preset Standard.");
+          set_status_message("Reset to Standard Preset.");
         }
         if (ImGui::MenuItem("Close GUI (ESC)")) {
           cfg.gui_open = false;
@@ -304,7 +305,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         }
         if (ImGui::Button(label, ImVec2(74.0f * scale, 28.0f * scale))) {
           apply_fn(cfg);
-          set_status_message(std::string("Preset ") + label + " aktif.");
+          set_status_message(std::string("Preset ") + label + " applied.");
         }
         if (is_active) {
           ImGui::PopStyleColor(2);
@@ -370,11 +371,203 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Screen Position");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* layout_items[] = {"Top-Left",    "Top-Center",    "Top-Right",
-                                    "Bottom-Left", "Bottom-Center", "Bottom-Right"};
-      int current_layout = static_cast<int>(cfg.layout);
+      const char* layout_items[] = {"Top-Left",
+                                    "Top-Center",
+                                    "Top-Right",
+                                    "Bottom-Left",
+                                    "Bottom-Center",
+                                    "Bottom-Right",
+                                    "Custom (Free Position)"};
+      int current_layout = std::clamp(static_cast<int>(cfg.layout), 0, 6);
       if (ImGui::Combo("##Position", &current_layout, layout_items, IM_ARRAYSIZE(layout_items))) {
         cfg.layout = static_cast<LayoutPosition>(current_layout);
+        switch (cfg.layout) {
+          case LayoutPosition::TopLeft:
+            cfg.custom_pos_x = 0.01f;
+            cfg.custom_pos_y = 0.02f;
+            break;
+          case LayoutPosition::TopCenter:
+            cfg.custom_pos_x = 0.50f;
+            cfg.custom_pos_y = 0.02f;
+            break;
+          case LayoutPosition::TopRight:
+            cfg.custom_pos_x = 0.99f;
+            cfg.custom_pos_y = 0.02f;
+            break;
+          case LayoutPosition::BottomLeft:
+            cfg.custom_pos_x = 0.01f;
+            cfg.custom_pos_y = 0.98f;
+            break;
+          case LayoutPosition::BottomCenter:
+            cfg.custom_pos_x = 0.50f;
+            cfg.custom_pos_y = 0.98f;
+            break;
+          case LayoutPosition::BottomRight:
+            cfg.custom_pos_x = 0.99f;
+            cfg.custom_pos_y = 0.98f;
+            break;
+          case LayoutPosition::Custom:
+            break;
+        }
+      }
+
+      float eff_nx = std::clamp(cfg.custom_pos_x, 0.0f, 1.0f);
+      float eff_ny = std::clamp(cfg.custom_pos_y, 0.0f, 1.0f);
+      if (cfg.layout != LayoutPosition::Custom) {
+        switch (cfg.layout) {
+          case LayoutPosition::TopLeft:
+            eff_nx = 0.01f;
+            eff_ny = 0.02f;
+            break;
+          case LayoutPosition::TopCenter:
+            eff_nx = 0.50f;
+            eff_ny = 0.02f;
+            break;
+          case LayoutPosition::TopRight:
+            eff_nx = 0.99f;
+            eff_ny = 0.02f;
+            break;
+          case LayoutPosition::BottomLeft:
+            eff_nx = 0.01f;
+            eff_ny = 0.98f;
+            break;
+          case LayoutPosition::BottomCenter:
+            eff_nx = 0.50f;
+            eff_ny = 0.98f;
+            break;
+          case LayoutPosition::BottomRight:
+            eff_nx = 0.99f;
+            eff_ny = 0.98f;
+            break;
+          case LayoutPosition::Custom:
+            break;
+        }
+      }
+
+      // Interactive Mini Monitor Preview Box (16:9 aspect ratio, single live FPS badge)
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Monitor Preview");
+      ImGui::TableSetColumnIndex(1);
+      {
+        float avail_mon_w = std::max(120.0f * scale, ImGui::GetContentRegionAvail().x);
+        float mon_h = std::round(avail_mon_w * (9.0f / 16.0f));
+        ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+        ImVec2 canvas_p1(canvas_p0.x + avail_mon_w, canvas_p0.y + mon_h);
+
+        ImGui::InvisibleButton("##MonitorPreviewDrag", ImVec2(avail_mon_w, mon_h));
+        bool is_hovered = ImGui::IsItemHovered();
+        bool is_dragging = ImGui::IsItemActive();
+
+        float pad = 4.0f * scale;
+        ImVec2 inner_min(canvas_p0.x + pad, canvas_p0.y + pad);
+        ImVec2 inner_max(canvas_p1.x - pad, canvas_p1.y - pad);
+
+        char fps_badge[32];
+        std::snprintf(fps_badge, sizeof(fps_badge), "%.0f FPS", data.fps);
+        ImVec2 txt_sz = ImGui::CalcTextSize(fps_badge);
+        ImVec2 badge_sz(txt_sz.x + 10.0f * scale, txt_sz.y + 4.0f * scale);
+
+        float usable_w = std::max(1.0f, (inner_max.x - inner_min.x) - badge_sz.x);
+        float usable_h = std::max(1.0f, (inner_max.y - inner_min.y) - badge_sz.y);
+
+        if (is_dragging) {
+          ImVec2 mouse_pos = ImGui::GetIO().MousePos;
+          float new_nx = (mouse_pos.x - inner_min.x - badge_sz.x * 0.5f) / usable_w;
+          float new_ny = (mouse_pos.y - inner_min.y - badge_sz.y * 0.5f) / usable_h;
+          cfg.custom_pos_x = std::clamp(new_nx, 0.0f, 1.0f);
+          cfg.custom_pos_y = std::clamp(new_ny, 0.0f, 1.0f);
+          cfg.layout = LayoutPosition::Custom;
+          cfg.active_preset = "custom";
+          eff_nx = cfg.custom_pos_x;
+          eff_ny = cfg.custom_pos_y;
+        }
+
+        if (is_hovered) {
+          ImGui::SetTooltip(
+              "Drag anywhere inside the monitor preview to position the HUD overlay.\n"
+              "Clamped automatically so the overlay never leaves your screen.");
+        }
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Monitor outer bezel & dark screen background
+        dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(14, 18, 26, 245), 5.0f * scale);
+        dl->AddRect(canvas_p0, canvas_p1,
+                    is_dragging
+                        ? IM_COL32(95, 215, 255, 255)
+                        : (is_hovered ? IM_COL32(80, 165, 220, 230) : IM_COL32(55, 72, 96, 210)),
+                    5.0f * scale, 0, 1.5f * scale);
+
+        // Subtle center guide lines
+        float mid_x = (inner_min.x + inner_max.x) * 0.5f;
+        float mid_y = (inner_min.y + inner_max.y) * 0.5f;
+        dl->AddLine(ImVec2(mid_x, inner_min.y), ImVec2(mid_x, inner_max.y),
+                    IM_COL32(45, 60, 82, 110), 1.0f);
+        dl->AddLine(ImVec2(inner_min.x, mid_y), ImVec2(inner_max.x, mid_y),
+                    IM_COL32(45, 60, 82, 110), 1.0f);
+
+        // Clamped mini FPS badge inside the monitor preview
+        float bx = std::clamp(inner_min.x + eff_nx * usable_w, inner_min.x,
+                              std::max(inner_min.x, inner_max.x - badge_sz.x));
+        float by = std::clamp(inner_min.y + eff_ny * usable_h, inner_min.y,
+                              std::max(inner_min.y, inner_max.y - badge_sz.y));
+        ImVec2 b_min(bx, by);
+        ImVec2 b_max(bx + badge_sz.x, by + badge_sz.y);
+
+        dl->AddRectFilled(b_min, b_max, IM_COL32(28, 115, 70, 235), 3.0f * scale);
+        dl->AddRect(b_min, b_max, IM_COL32(90, 245, 150, 255), 3.0f * scale, 0, 1.2f * scale);
+        dl->AddText(ImVec2(bx + 5.0f * scale, by + 2.0f * scale), IM_COL32(255, 255, 255, 255),
+                    fps_badge);
+      }
+
+      // Manual Position (X / Y) Inputs + Reset Layout Button
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Position (X / Y)");
+      ImGui::TableSetColumnIndex(1);
+      {
+        float half_xy_w = (ImGui::GetContentRegionAvail().x - (6.0f * scale)) * 0.5f;
+        float pos_x_pct = std::clamp(eff_nx * 100.0f, 0.0f, 100.0f);
+        float pos_y_pct = std::clamp(eff_ny * 100.0f, 0.0f, 100.0f);
+
+        ImGui::SetNextItemWidth(half_xy_w);
+        if (ImGui::DragFloat("##CustomPosX", &pos_x_pct, 0.25f, 0.0f, 100.0f, "X: %.1f%%",
+                             ImGuiSliderFlags_AlwaysClamp)) {
+          cfg.custom_pos_x = std::clamp(pos_x_pct / 100.0f, 0.0f, 1.0f);
+          cfg.custom_pos_y = eff_ny;
+          cfg.layout = LayoutPosition::Custom;
+          cfg.active_preset = "custom";
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+              "Drag or Ctrl+Click / Double-Click to enter exact X position (0-100%%).");
+        }
+
+        ImGui::SameLine(0.0f, 6.0f * scale);
+        ImGui::SetNextItemWidth(half_xy_w);
+        if (ImGui::DragFloat("##CustomPosY", &pos_y_pct, 0.25f, 0.0f, 100.0f, "Y: %.1f%%",
+                             ImGuiSliderFlags_AlwaysClamp)) {
+          cfg.custom_pos_x = eff_nx;
+          cfg.custom_pos_y = std::clamp(pos_y_pct / 100.0f, 0.0f, 1.0f);
+          cfg.layout = LayoutPosition::Custom;
+          cfg.active_preset = "custom";
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+              "Drag or Ctrl+Click / Double-Click to enter exact Y position (0-100%%).");
+        }
+      }
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::Text("Layout Reset");
+      ImGui::TableSetColumnIndex(1);
+      if (ImGui::Button("Reset Layout", ImVec2(-1.0f, 0.0f))) {
+        reset_layout_to_default(cfg);
+        set_status_message("Layout reset to default (Top-Left).");
       }
 
       ImGui::TableNextRow();
@@ -383,8 +576,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Arrangement");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* arr_items[] = {"Stack (Vertikal per Grup)", "Double (Grid 2 Kolom Grup)",
-                                 "Linear (1 Baris Horizontal)"};
+      const char* arr_items[] = {"Stack (Vertical Groups)", "Double (2-Column Grid)",
+                                 "Linear (Horizontal Bar)"};
       int current_arr = static_cast<int>(cfg.arrangement);
       if (ImGui::Combo("##Arrangement", &current_arr, arr_items, IM_ARRAYSIZE(arr_items))) {
         cfg.arrangement = static_cast<ArrangementMode>(current_arr);
@@ -572,12 +765,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Label Brightness");
       ImGui::TableSetColumnIndex(1);
-      ImGui::Checkbox("Dim Unit & Sub-Labels (Redup)", &cfg.dim_labels_enabled);
+      ImGui::Checkbox("Dim Unit & Sub-Labels", &cfg.dim_labels_enabled);
 
       // Section 4: Unified Hotkeys (All 6 Shortcuts)
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      draw_section_header("Hotkeys (Pintasan)");
+      draw_section_header("Hotkeys");
       ImGui::TableSetColumnIndex(1);
       draw_section_header("");
 
@@ -793,7 +986,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(btn_lbl, sizeof(btn_lbl), "[REC] Start Record (%s)", rec_kb_str.c_str());
       if (ImGui::Button(btn_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
         RecorderController::instance().start_recording(cfg, display_width, display_height);
-        set_status_message("Perekaman gameplay dimulai!");
+        set_status_message("Gameplay recording started!");
       }
       ImGui::PopStyleColor(2);
     } else {
@@ -807,7 +1000,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
       if (ImGui::Button(stop_lbl, ImVec2(btn_row_w, 30.0f * scale))) {
         RecorderController::instance().stop_recording();
-        set_status_message("Menyimpan video di latar belakang...");
+        set_status_message("Saving video in background...");
       }
       ImGui::PopStyleColor(2);
     }
@@ -818,7 +1011,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
                   shot_kb.c_str());
     if (ImGui::Button(take_shot_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
       RecorderController::instance().request_screenshot();
-      set_status_message("Screenshot dijadwalkan pada frame berikutnya!");
+      set_status_message("Screenshot scheduled for next frame!");
     }
 
     ImGui::SameLine(0.0f, 6.0f * scale);
@@ -827,7 +1020,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     std::snprintf(save_rep_lbl, sizeof(save_rep_lbl), "[SAVE REPLAY] (%s)", rep_kb.c_str());
     if (ImGui::Button(save_rep_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
       RecorderController::instance().trigger_save_replay();
-      set_status_message("Menyimpan klip Instant Replay...");
+      set_status_message("Saving Instant Replay clip...");
     }
     ImGui::EndDisabled();
 
@@ -839,7 +1032,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       std::snprintf(b_lbl, sizeof(b_lbl), "[CSV] Start Bench (%s)", bench_kb_str.c_str());
       if (ImGui::Button(b_lbl, ImVec2(btn_half_w, 26.0f * scale))) {
         get_telemetry().start_benchmark();
-        set_status_message("Benchmark dimulai...");
+        set_status_message("Benchmark started...");
       }
       ImGui::PopStyleColor(2);
     } else {
@@ -850,7 +1043,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.92f, 0.25f, 0.25f, 1.0f));
       if (ImGui::Button(stop_label, ImVec2(btn_half_w, 26.0f * scale))) {
         get_telemetry().stop_benchmark();
-        set_status_message("Benchmark disimpan ke CSV!");
+        set_status_message("Benchmark saved to CSV!");
       }
       ImGui::PopStyleColor(2);
     }
@@ -884,7 +1077,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Capture Mode");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* shot_modes[] = {"Clean Game (Tanpa HUD)", "With HUD (Dengan HUD)"};
+      const char* shot_modes[] = {"Clean Game (No HUD)", "With HUD (Include Overlay)"};
       int shot_mode_idx = cfg.screenshot_with_hud ? 1 : 0;
       if (ImGui::Combo("##ScreenshotMode", &shot_mode_idx, shot_modes, IM_ARRAYSIZE(shot_modes))) {
         cfg.screenshot_with_hud = (shot_mode_idx == 1);
@@ -895,7 +1088,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
     if (is_rec) {
       ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.30f, 1.0f),
-                         "[Pengaturan video dikunci saat perekaman berjalan]");
+                         "[Video settings locked while recording is active]");
     }
 
     // Video Recorder & Instant Replay Settings (locked while recording is active)
@@ -967,7 +1160,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Framerate");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* fps_items[] = {"60 FPS (Rekomendasi)", "30 FPS", "120 FPS", "Match Display"};
+      const char* fps_items[] = {"60 FPS (Recommended)", "30 FPS", "120 FPS", "Match Display"};
       int current_fps_idx = (cfg.record_fps == 30)
                                 ? 1
                                 : ((cfg.record_fps == 120) ? 2 : ((cfg.record_fps == 0) ? 3 : 0));
@@ -989,7 +1182,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Video Codec");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* codec_items[] = {"H.264 (AVC Universal)", "HEVC (H.265 Hemat 50%)"};
+      const char* codec_items[] = {"H.264 (AVC Universal)", "HEVC (H.265 - 50% Smaller)"};
       ImGui::Combo("##RecordCodec", &cfg.record_codec, codec_items, IM_ARRAYSIZE(codec_items));
 
       // Container
@@ -1010,7 +1203,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Rate Control");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* qmode_items[] = {"CQP Adaptif (AQ ON)", "Fixed Bitrate (VBR)"};
+      const char* qmode_items[] = {"Adaptive CQP (AQ ON)", "Fixed Bitrate (VBR)"};
       ImGui::Combo("##RecordQMode", &cfg.record_quality_mode, qmode_items,
                    IM_ARRAYSIZE(qmode_items));
 
@@ -1052,8 +1245,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::Text("Audio Source");
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(-1.0f);
-      const char* audio_items[] = {"Game Audio Saja", "Mikrofon Saja", "Game + Mikrofon",
-                                   "Mute (Tanpa Audio)"};
+      const char* audio_items[] = {"Game Audio Only", "Microphone Only", "Game + Microphone",
+                                   "Mute (No Audio)"};
       ImGui::Combo("##RecordAudio", &cfg.record_audio_source, audio_items,
                    IM_ARRAYSIZE(audio_items));
 
@@ -1088,7 +1281,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::Separator();
     if (ImGui::Button("Save Configuration", ImVec2(195.0f * scale, 28.0f * scale))) {
       if (save_config_to_disk(cfg)) {
-        set_status_message("Tersimpan ke config.ini");
+        set_status_message("Saved to config.ini");
       }
     }
     ImGui::SameLine();
