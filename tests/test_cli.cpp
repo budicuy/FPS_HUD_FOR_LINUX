@@ -1564,20 +1564,29 @@ void run_elf_and_layer_abi_suite() {
 
       std::string readme_en = read_text_file(repo_root / "README.md");
       std::string readme_id = read_text_file(repo_root / "README.id.md");
-      bool readme_parity_ok = (readme_en.find("24 sensors") == std::string::npos &&
-                               readme_en.find("24 Live") == std::string::npos &&
-                               readme_en.find("24 Sensors") == std::string::npos &&
-                               readme_en.find("25 metrics") == std::string::npos &&
-                               readme_en.find("src/main.cpp") == std::string::npos &&
-                               readme_en.find("Instant Replay") != std::string::npos &&
-                               readme_en.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
-                               readme_en.find(".webm") != std::string::npos &&
-                               readme_id.find("24 sensor") == std::string::npos &&
-                               readme_id.find("24 Sensor") == std::string::npos &&
-                               readme_id.find("src/main.cpp") == std::string::npos &&
-                               readme_id.find("Instant Replay") != std::string::npos &&
-                               readme_id.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
-                               readme_id.find(".webm") != std::string::npos);
+      std::string cfg_hdr = read_text_file(repo_root / "src" / "core" / "config.hpp");
+      std::string gui_src = read_text_file(repo_root / "src" / "ui" / "gui_menu.cpp");
+      bool single_config_ini_only =
+          (cfg_hdr.find("save_custom_preset_to_disk") == std::string::npos &&
+           cfg_hdr.find("load_custom_preset_from_disk") == std::string::npos &&
+           gui_src.find("custom_preset.ini") == std::string::npos &&
+           readme_en.find("custom_preset.ini") == std::string::npos &&
+           readme_id.find("custom_preset.ini") == std::string::npos);
+      bool readme_parity_ok =
+          (readme_en.find("24 sensors") == std::string::npos &&
+           readme_en.find("24 Live") == std::string::npos &&
+           readme_en.find("24 Sensors") == std::string::npos &&
+           readme_en.find("25 metrics") == std::string::npos &&
+           readme_en.find("src/main.cpp") == std::string::npos &&
+           readme_en.find("Instant Replay") != std::string::npos &&
+           readme_en.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
+           readme_en.find(".webm") != std::string::npos &&
+           readme_id.find("24 sensor") == std::string::npos &&
+           readme_id.find("24 Sensor") == std::string::npos &&
+           readme_id.find("src/main.cpp") == std::string::npos &&
+           readme_id.find("Instant Replay") != std::string::npos &&
+           readme_id.find("XDG_RUNTIME_DIR/fpshud") != std::string::npos &&
+           readme_id.find(".webm") != std::string::npos && single_config_ini_only);
       setup_security_notice_ok = setup_security_notice_ok && readme_parity_ok;
     } else {
       scripts_install_ok = true;
@@ -1866,9 +1875,35 @@ void run_all_devices_and_features_suite() {
                     loaded_cfg.bind_record.mod_key == 56 && loaded_cfg.bind_record.main_key == 33 &&
                     format_keybind(loaded_cfg.bind_record) == "Alt + F";
 
-    check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok,
+    // Verify apply_preset_custom loads from single config.ini (and falls back cleanly when missing)
+    std::string tmp_xdg = "/tmp/fpshud_test_xdg_" + std::to_string(::getpid());
+    fs::remove_all(tmp_xdg);
+    ::setenv("XDG_CONFIG_HOME", tmp_xdg.c_str(), 1);
+    HudConfig custom_fresh;
+    apply_preset_minimal(custom_fresh);
+    apply_preset_custom(custom_fresh);
+    bool custom_fallback_ok =
+        (custom_fresh.active_preset == "custom" && custom_fresh.metrics.size() == 9 &&
+         std::fabs(custom_fresh.font_size_px - 21.0f) < 0.01f);
+
+    HudConfig custom_saved;
+    apply_preset_minimal(custom_saved);
+    custom_saved.font_size_px = 26.0f;
+    bool saved_single_ok = save_config_to_disk(custom_saved);
+    HudConfig custom_loaded;
+    apply_preset_advance(custom_loaded);
+    apply_preset_custom(custom_loaded);
+    bool custom_single_file_ok = (saved_single_ok && custom_loaded.active_preset == "custom" &&
+                                  custom_loaded.metrics.size() == 2 &&
+                                  std::fabs(custom_loaded.font_size_px - 26.0f) < 0.01f);
+    fs::remove_all(tmp_xdg);
+    ::unsetenv("XDG_CONFIG_HOME");
+
+    check_cond(min_ok && std_ok && adv_ok && scale_ok && new_metrics_ok && td_ok &&
+                   custom_fallback_ok && custom_single_file_ok,
                "0. GUI Presets & Scale (Minimal=2, Standard=9, Advance=31, Scale=1.35x)",
-               "All 3 built-in presets, 31 metrics, dim_labels & Keybind INI persistence verified");
+               "All 4 presets (single config.ini), 31 metrics, dim_labels & Keybind INI "
+               "persistence verified");
   }
 
   {
@@ -3494,7 +3529,8 @@ void run_all_devices_and_features_suite() {
            gui_src.find("##SensorsScrollList") != std::string::npos &&
            gui_src.find("##Col3ScrollSettings") != std::string::npos &&
            gui_src.find("##SensorsSplitGrid") == std::string::npos &&
-           gui_src.find("if (cfg.active_preset == \"custom\")") != std::string::npos);
+           gui_src.find("if (cfg.active_preset == \"custom\")") == std::string::npos &&
+           gui_src.find("save_custom_preset_to_disk") == std::string::npos);
       ui_src_ok = smart_alerts_ok && gui_controls_ok;
     }
 

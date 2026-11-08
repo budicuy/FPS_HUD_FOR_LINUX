@@ -206,10 +206,6 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg,
                    const char* header_comment = nullptr);
 bool load_ini_file(const std::string& path, HudConfig& cfg);
 
-// Save / Load user-customizable preset (~/.config/fpshud/custom_preset.ini)
-bool save_custom_preset_to_disk(const HudConfig& cfg, std::string* out_path = nullptr);
-bool load_custom_preset_from_disk(HudConfig& cfg, std::string* out_path = nullptr);
-
 // Global mutable config & mutex for live GUI editing
 HudConfig& get_mutable_config();
 const HudConfig& get_global_config();

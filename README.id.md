@@ -96,7 +96,7 @@ FPSHUD dibangun menggunakan **ISO C++26** dengan arsitektur *zero-heap inline st
 - **Dashboard In-Game GUI 3-Column Split View (`FPSHUD Configuration Tool`)**:
   - Tekan **`Insert`** atau **`F12`** di dalam game untuk membuka antarmuka widescreen 3 kolom (Kiri: Posisi, Susunan, Font, Warna, Skala GUI `50%–200%`, Shortcut 1/2 Tombol | Tengah: 31 Sensor Hardware & Tombol Filter Preset | Kanan: Perekam Layar, Instant Replay, Screenshot & Benchmark).
   - Otomatis menangkap kursor mouse saat menu dibuka, dan langsung mengembalikan kursor ke dalam game saat menu ditutup.
-  - Setiap perubahan otomatis tersimpan ke `~/.config/fpshud/config.ini` (serta `~/.config/fpshud/custom_preset.ini` saat memakai preset Custom).
+  - Setiap perubahan tersimpan ke satu file konfigurasi di `~/.config/fpshud/config.ini`.
 - **Perekam Layar Hardware (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**:
   - Companion daemon khusus (`fpshud_recorder`) yang berjalan terpisah dengan zero copy lewat triple-buffered POSIX Shared Memory IPC di dalam direktori runtime privat `0700` (`$XDG_RUNTIME_DIR/fpshud`).
   - Mendukung akselerasi hardware **HEVC (H.265 / `hvc1`)** dan **H.264** via NVIDIA NVENC dan VAAPI dalam format **`.mp4 (FastStart)`**, **`.mkv (Matroska)`**, atau **`.webm (WebM)`** dengan kualitas **Adaptive CQP (CQ 16–30)** + **VBV Max Bitrate Ceiling (`4–80 Mbps`)** atau **Fixed VBR**, serta **Experimental Pure `1:1` Adaptive VFR**.
@@ -279,7 +279,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut. Seluruh 
 - **`Minimal`**: Hanya menampilkan `FPS` dan `Frametime (ms)`.
 - **`Standard`**: Menampilkan `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, dan `RAM`.
 - **`Advance`**: Menampilkan lengkap **31 sensor** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, 8 sensor `GPU` termasuk `VRAM Clock`, 6 sensor `CPU` termasuk `All-Core Load` & `All-Core Clock`, 4 sensor `RAM/Memori`, `Disk I/O & Suhu NVMe`, `Kecepatan Jaringan`, `Render API`, `Model GPU/CPU`, `Local Clock`, dan `Battery & Power`).
-- **`Custom` / `Save Custom`**: Menyimpan pilihan sensor dan tata letak favoritmu ke `~/.config/fpshud/custom_preset.ini`.
+- **`Custom`**: Kustomisasi kombinasi sensor dan tata letak favoritmu lalu simpan langsung ke `~/.config/fpshud/config.ini`.
 
 ### Smart Color Alerts (14 Metrik) & Ambang Batas
 Saat opsi **Smart Color Alerts (Yellow/Red)** diaktifkan di GUI, FPSHUD memberikan peringatan warna dinamis pada 14 metrik performa dan perangkat keras:

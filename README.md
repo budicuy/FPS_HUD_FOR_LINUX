@@ -96,7 +96,7 @@ FPSHUD is written in **ISO C++26** featuring a zero-heap inline storage architec
 - **3-Column Split View In-Game GUI (`FPSHUD Configuration Tool`)**:
   - Press **`Insert`** or **`F12`** in-game to open a clean 3-column widescreen dashboard (Left: Position, Layout, Font, Colors, Live GUI Scale `50%–200%`, 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Quick Filters | Right: Screen Recorder, Instant Replay, Screenshot & Benchmark Hub).
   - Automatically captures your mouse cursor while the menu is open and returns control to the game the moment you close it.
-  - Automatically saves all your changes to `~/.config/fpshud/config.ini` (and `~/.config/fpshud/custom_preset.ini` when using a Custom preset).
+  - Automatically saves all your changes to `~/.config/fpshud/config.ini`.
 - **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**:
   - Dedicated background recording daemon (`fpshud_recorder`) with decoupled triple-buffered POSIX Shared Memory IPC isolated inside a private `0700` user runtime directory (`$XDG_RUNTIME_DIR/fpshud`).
   - Supports hardware-accelerated **HEVC (H.265 / `hvc1`)** and **H.264** via NVIDIA NVENC and VAAPI in **`.mp4 (FastStart)`**, **`.mkv (Matroska)`**, or **`.webm (WebM)`** containers, with **Adaptive CQP (CQ 16–30)** + **VBV Max Bitrate Ceiling (`4–80 Mbps`)** or **Fixed VBR**, plus **Experimental Pure `1:1` Adaptive VFR**.
@@ -279,7 +279,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts. All 6 shortcuts suppor
 - **`Minimal`**: Shows only `FPS` and `Frametime (ms)`.
 - **`Standard`**: Shows `FPS`, `Frametime`, `GPU (Load, Clock, Temp)`, `CPU (Load, Clock, Temp)`, and `RAM`.
 - **`Advance`**: Enables all **31 sensors** (`FPS`, `AVG`, `1% Low`, `0.1% Low`, `Frametime`, all 8 `GPU` metrics including `VRAM Clock`, all 6 `CPU` metrics including `All-Core Load` & `All-Core Clock`, all 4 `Memory/RAM` metrics, `Storage I/O & NVMe Temp`, `Network Speed`, `Render API`, `GPU/CPU Model`, `Local Clock`, and `Battery & Power`).
-- **`Custom` / `Save Custom`**: Save your favorite combination of sensors and layout to `~/.config/fpshud/custom_preset.ini`.
+- **`Custom`**: Customize any combination of sensors and layout and save directly to `~/.config/fpshud/config.ini`.
 
 ### Smart Color Alerts (14 Metrics) & Thresholds
 When **Smart Color Alerts (Yellow/Red)** is enabled in the GUI, FPSHUD highlights critical performance and hardware states across 14 metrics:

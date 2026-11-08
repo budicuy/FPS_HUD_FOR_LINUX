@@ -177,8 +177,6 @@ std::string get_config_dir() {
 
 std::string get_config_file_path() { return get_config_dir() + "/config.ini"; }
 
-std::string get_custom_preset_file_path() { return get_config_dir() + "/custom_preset.ini"; }
-
 void ensure_parent_dir(const std::string& file_path) {
   if (file_path.empty()) return;
   std::error_code ec;
@@ -536,13 +534,11 @@ void apply_preset_advance(HudConfig& cfg) {
 }
 
 void apply_preset_custom(HudConfig& cfg) {
-  if (!load_custom_preset_from_disk(cfg)) {
-    if (!load_config_from_disk(cfg)) {
-      apply_preset_standard(cfg);
-      cfg.text_color = {0, 229, 255, 255};
-      cfg.font_size_px = 21.0f;
-      cfg.font_scale = cfg.font_size_px / kAtlasBaseFontSizePx;
-    }
+  if (!load_config_from_disk(cfg)) {
+    apply_preset_standard(cfg);
+    cfg.text_color = {0, 229, 255, 255};
+    cfg.font_size_px = 21.0f;
+    cfg.font_scale = cfg.font_size_px / kAtlasBaseFontSizePx;
   }
   cfg.active_preset = "custom";
 }
@@ -577,20 +573,6 @@ bool load_config_from_disk(HudConfig& cfg, std::string* out_path) {
   std::string path = get_config_file_path();
   if (out_path) *out_path = path;
   return load_ini_file(path, cfg);
-}
-
-bool save_custom_preset_to_disk(const HudConfig& cfg, std::string* out_path) {
-  std::string path = get_custom_preset_file_path();
-  if (out_path) *out_path = path;
-  return save_ini_file(path, cfg, "FPSHUD User Custom Preset");
-}
-
-bool load_custom_preset_from_disk(HudConfig& cfg, std::string* out_path) {
-  std::string path = get_custom_preset_file_path();
-  if (out_path) *out_path = path;
-  bool ok = load_ini_file(path, cfg);
-  if (ok) cfg.active_preset = "custom";
-  return ok;
 }
 
 std::mutex& get_config_mutex() {

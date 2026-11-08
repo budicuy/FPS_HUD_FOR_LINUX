@@ -238,12 +238,6 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
             set_status_message("Tersimpan ke config.ini");
           }
         }
-        if (ImGui::MenuItem("Save as Custom Preset (custom_preset.ini)")) {
-          cfg.active_preset = "custom";
-          if (save_custom_preset_to_disk(cfg)) {
-            set_status_message("Tersimpan ke custom_preset.ini");
-          }
-        }
         if (ImGui::MenuItem("Reload Config from Disk")) {
           if (load_config_from_disk(cfg)) {
             set_status_message("Konfigurasi dimuat ulang.");
@@ -1089,18 +1083,12 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     ImGui::EndChild();
 
     // ====================================================================
-    // 4. Bottom Action Bar (Unified Save Configuration + Custom Preset)
+    // 4. Bottom Action Bar (Save Configuration to config.ini)
     // ====================================================================
     ImGui::Separator();
     if (ImGui::Button("Save Configuration", ImVec2(195.0f * scale, 28.0f * scale))) {
-      bool ok = save_config_to_disk(cfg);
-      if (cfg.active_preset == "custom") {
-        ok = save_custom_preset_to_disk(cfg) && ok;
-      }
-      if (ok) {
-        set_status_message(cfg.active_preset == "custom"
-                               ? "Tersimpan ke config.ini & custom_preset.ini"
-                               : "Tersimpan ke config.ini");
+      if (save_config_to_disk(cfg)) {
+        set_status_message("Tersimpan ke config.ini");
       }
     }
     ImGui::SameLine();
