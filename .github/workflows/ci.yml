@@ -95,8 +95,11 @@ jobs:
         run: |
           mkdir -p release_pkg
           cp scripts/uninstall.sh build/uninstall.sh
+          mkdir -p build/src/recorder build/src/core
+          cp src/recorder/recorder_main.cpp src/recorder/recorder_ipc.hpp build/src/recorder/
+          cp src/core/pack_indexing.hpp build/src/core/
           chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
-          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh
+          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh src
           (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)
 
       - name: Upload Build Artifact

@@ -105,9 +105,77 @@ if [ -f "$TMP_DIR/fpshud_recorder" ]; then
 fi
 
 if [ -f "$TMP_DIR/fpshud_recorder_bin" ]; then
-    cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
-    cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
-    chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    RECORDER_COMPATIBLE=0
+    # Test if prebuilt fpshud_recorder_bin can resolve its shared libraries on this host distro
+    REC_TEST_STATUS=0
+    "$TMP_DIR/fpshud_recorder_bin" --help >/dev/null 2>&1 || REC_TEST_STATUS=$?
+    if [ "$REC_TEST_STATUS" -ne 127 ]; then
+        RECORDER_COMPATIBLE=1
+        cp -f "$TMP_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+        cp -f "$TMP_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+        chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+    fi
+
+    if [ "$RECORDER_COMPATIBLE" -eq 0 ]; then
+        echo "[*] Notice: Prebuilt recorder daemon requires different FFmpeg versions on this system."
+        COMPILED_NATIVE=0
+        # 1. Check if a local native build already exists
+        if [ -f "./build/fpshud_recorder_bin" ]; then
+            LOC_STATUS=0
+            "./build/fpshud_recorder_bin" --help >/dev/null 2>&1 || LOC_STATUS=$?
+            if [ "$LOC_STATUS" -ne 127 ]; then
+                echo "[+] Found compatible local build of fpshud_recorder_bin; installing native binary..."
+                cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+                cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+                chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+                COMPILED_NATIVE=1
+            fi
+        fi
+
+        # 2. Check if recorder source is bundled or present in repository and can be compiled natively
+        if [ "$COMPILED_NATIVE" -eq 0 ]; then
+            REC_SRC=""
+            if [ -f "$TMP_DIR/src/recorder/recorder_main.cpp" ]; then
+                REC_SRC="$TMP_DIR/src/recorder/recorder_main.cpp"
+            elif [ -f "./src/recorder/recorder_main.cpp" ]; then
+                REC_SRC="./src/recorder/recorder_main.cpp"
+            fi
+
+            if [ -n "$REC_SRC" ]; then
+                COMPILER=""
+                for c in clang++ g++ c++; do
+                    if command -v "$c" >/dev/null 2>&1; then
+                        COMPILER="$c"
+                        break
+                    fi
+                done
+                if [ -n "$COMPILER" ] && command -v pkg-config >/dev/null 2>&1; then
+                    if pkg-config --exists libavcodec libavformat libavutil libswscale libswresample libpulse 2>/dev/null; then
+                        echo "[*] Compiling native hardware recorder daemon against host FFmpeg ($COMPILER)..."
+                        SRC_BASE="$(cd "$(dirname "$REC_SRC")/../.." && pwd)"
+                        if "$COMPILER" -std=c++26 -O3 \
+                            -I"$SRC_BASE/src" -I"$SRC_BASE/src/recorder" -I"$SRC_BASE/src/core" \
+                            $(pkg-config --cflags --libs libavcodec libavformat libavutil libswscale libswresample libpulse) \
+                            "$REC_SRC" -o "$LIB_DIR/fpshud_recorder_bin" 2>/dev/null; then
+                            cp -f "$LIB_DIR/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"
+                            chmod 755 "$BIN_DIR/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
+                            echo "[✓] Native recorder daemon compiled and installed successfully!"
+                            COMPILED_NATIVE=1
+                        fi
+                    fi
+                fi
+            fi
+        fi
+
+        if [ "$COMPILED_NATIVE" -eq 0 ]; then
+            echo "[!] Warning: Screen recording daemon could not run due to FFmpeg version mismatch."
+            echo "    (The core HUD, FPS, telemetry, and in-game menu will function 100% normally.)"
+            echo "    To enable screen recording on your Linux distribution, install development packages:"
+            echo "      - Arch Linux / CachyOS : sudo pacman -S clang ffmpeg libpulse pkgconf"
+            echo "      - Fedora / RHEL        : sudo dnf install gcc-c++ ffmpeg-free-devel pulseaudio-libs-devel pkgconf"
+            echo "      - Ubuntu / Debian      : sudo apt install g++ libavcodec-dev libavformat-dev libswscale-dev libpulse-dev"
+        fi
+    fi
 fi
 
 if [ -f "$TMP_DIR/uninstall.sh" ]; then
