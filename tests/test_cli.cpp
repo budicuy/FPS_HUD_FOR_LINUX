@@ -1808,15 +1808,45 @@ void run_elf_and_layer_abi_suite() {
     im.handle_pointer_button(BTN_LEFT, false, test_cfg, &io);
     bool fully_ungrabbed = !fpshud::is_mouse_isolation_active() && !im.is_pending_ungrab();
 
+    // 4. Test SDL_PollEvent NULL safety & thread-safe cross-thread queue draining
+    auto fnPoll = reinterpret_cast<int (*)(void*)>(dlsym(handle, "SDL_PollEvent"));
+    int null_poll_res = fnPoll ? fnPoll(nullptr) : 0;
+    bool null_poll_safe = (null_poll_res == 0);
+
+    test_cfg.gui_open = true;
+    im.sync_grab_state(io, test_cfg);
+    im.enqueue_intercepted_motion(720.0f, 480.0f, test_cfg);
+    im.enqueue_intercepted_button(BTN_LEFT, true, test_cfg);
+    im.enqueue_intercepted_wheel(0.0f, 4.0f, test_cfg);
+
+    // Draining through update_for_frame on render thread
+    im.update_for_frame(io, test_cfg, 1920.0f, 1080.0f);
+    ImGui::NewFrame();
+    bool queued_motion_ok = (io.MousePos.x == 720.0f && io.MousePos.y == 480.0f);
+    bool queued_wheel_ok = (io.MouseWheel == 4.0f);
+    bool queued_click_ok = io.MouseDown[0];
+    ImGui::EndFrame();
+
+    // Clean up test context and state
+    test_cfg.gui_open = false;
+    im.sync_grab_state(io, test_cfg);
+    im.handle_pointer_button(BTN_LEFT, false, test_cfg, &io);
+    fpshud::on_gui_state_changed(false);
+
     if (test_ctx) {
       ImGui::DestroyContext(test_ctx);
     }
     ImGui::SetCurrentContext(prev_ctx);
 
+    if (handle) {
+      dlclose(handle);
+    }
+
     check_passed = hooks_exported && !init_isolated && opened_isolated && !closed_isolated &&
                    gui_open_iso && cursor_drawn && motion_im_ok && motion_imgui_ok &&
                    wheel_imgui_ok && btn_down_im_ok && btn_imgui_ok && pending_ungrab_active &&
-                   fully_ungrabbed;
+                   fully_ungrabbed && null_poll_safe && queued_motion_ok && queued_wheel_ok &&
+                   queued_click_ok;
 
     std::string detail =
         "hooks_exported=" + std::to_string(hooks_exported) +
@@ -1824,10 +1854,11 @@ void run_elf_and_layer_abi_suite() {
         ", wait=" + std::to_string(sym_wait_ok) + ", x11=" + std::to_string(sym_x11_ok) +
         "), isolation_lifecycle=" +
         std::to_string(!init_isolated && opened_isolated && !closed_isolated) +
-        ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok) +
-        ", wheel=" + std::to_string(wheel_imgui_ok) +
-        ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok) +
-        ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed);
+        ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok && queued_motion_ok) +
+        ", wheel=" + std::to_string(wheel_imgui_ok && queued_wheel_ok) +
+        ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok && queued_click_ok) +
+        ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed) +
+        ", null_poll_safe=" + std::to_string(null_poll_safe);
 
     check_cond(check_passed, "8. In-Game Mouse Isolation & SDL Event Suppression", detail.c_str());
   }

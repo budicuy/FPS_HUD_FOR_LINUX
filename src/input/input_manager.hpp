@@ -50,6 +50,20 @@ public:
                              ImGuiIO* io) noexcept;
   void handle_pointer_wheel(float x, float y, const HudConfig& cfg, ImGuiIO* io) noexcept;
 
+  // Intercepted input queue for dynamic SDL/X11 hooks (thread-safe cross-thread dispatch)
+  struct InterceptedInputEvent {
+    enum class Type : uint8_t { Motion, Button, Wheel };
+    Type type;
+    float x{0.0f};
+    float y{0.0f};
+    uint32_t button{0};
+    bool down{false};
+  };
+
+  void enqueue_intercepted_motion(float x, float y, const HudConfig& cfg) noexcept;
+  void enqueue_intercepted_button(uint32_t button, bool down, const HudConfig& cfg) noexcept;
+  void enqueue_intercepted_wheel(float x, float y, const HudConfig& cfg) noexcept;
+
   // Wayland listener callback handlers
   void register_wayland_seat(void* seat, uint32_t id) noexcept;
   void register_wayland_keyboard(void* seat) noexcept;
@@ -124,6 +138,10 @@ private:
   void* wayland_pointer_ = nullptr;
   bool wayland_attempted_ = false;
   bool wayland_attached_ = false;
+
+  // Intercepted inputs from dynamic hooks
+  mutable std::mutex intercepted_mutex_;
+  std::vector<InterceptedInputEvent> pending_intercepted_inputs_;
 
   // Per-dispatch frame context
   ImGuiIO* current_io_ = nullptr;

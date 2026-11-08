@@ -180,6 +180,7 @@ extern "C" {
 __attribute__((visibility("default"))) int SDL_PollEvent(void* event) {
   ensure_input_hooks_initialized();
   if (!g_real_sdl_poll_event) return 0;
+  if (!event) return g_real_sdl_poll_event(nullptr);
   if (t_in_hook) return g_real_sdl_poll_event(event);
 
   t_in_hook = true;
@@ -192,15 +193,18 @@ __attribute__((visibility("default"))) int SDL_PollEvent(void* event) {
     }
 
     auto& cfg = fpshud::get_mutable_config();
-
     auto* raw = static_cast<SdlRawEvent*>(event);
     auto& im = fpshud::get_input_manager();
     ImGuiIO* io = im.current_io();
 
     if (raw->type == kSdlMouseMotion) {
-      // Absorb mouse motion: update ImGui cursor coordinates and drop event from game
-      im.handle_pointer_motion(static_cast<float>(raw->motion.x), static_cast<float>(raw->motion.y),
-                               cfg, io);
+      // Absorb mouse motion: enqueue for thread-safe render-thread dispatch and drop from game
+      im.enqueue_intercepted_motion(static_cast<float>(raw->motion.x),
+                                    static_cast<float>(raw->motion.y), cfg);
+      if (io) {
+        im.handle_pointer_motion(static_cast<float>(raw->motion.x),
+                                 static_cast<float>(raw->motion.y), cfg, io);
+      }
       continue;
     } else if (raw->type == kSdlMouseButtonDown || raw->type == kSdlMouseButtonUp) {
       // Absorb mouse buttons: route to ImGui and drop event from game
@@ -211,22 +215,35 @@ __attribute__((visibility("default"))) int SDL_PollEvent(void* event) {
       else if (raw->button.button == kSdlButtonMiddle)
         btn = BTN_MIDDLE;
 
-      im.handle_pointer_button(btn, down, cfg, io);
+      im.enqueue_intercepted_button(btn, down, cfg);
+      if (io) {
+        im.handle_pointer_button(btn, down, cfg, io);
+      }
       continue;
     } else if (raw->type == kSdlMouseWheel) {
       // Absorb mouse wheel
-      im.handle_pointer_wheel(static_cast<float>(raw->wheel.x), static_cast<float>(raw->wheel.y),
-                              cfg, io);
+      im.enqueue_intercepted_wheel(static_cast<float>(raw->wheel.x),
+                                   static_cast<float>(raw->wheel.y), cfg);
+      if (io) {
+        im.handle_pointer_wheel(static_cast<float>(raw->wheel.x), static_cast<float>(raw->wheel.y),
+                                cfg, io);
+      }
       continue;
     } else if (raw->type == kSdlKeyDown && raw->key.keysym.sym == 1073741893 /* SDLK_F12 */) {
       // F12 pressed while GUI open -> toggle GUI closed cleanly
       cfg.gui_open = false;
-      fpshud::on_gui_state_changed(false);
+      if (!im.is_mouse_button_down(0) && !im.is_mouse_button_down(1) &&
+          !im.is_mouse_button_down(2)) {
+        fpshud::on_gui_state_changed(false);
+      }
       continue;
     } else if (raw->type == kSdlKeyDown && raw->key.keysym.sym == 27 /* SDLK_ESCAPE */) {
       // ESC pressed while GUI open -> close GUI
       cfg.gui_open = false;
-      fpshud::on_gui_state_changed(false);
+      if (!im.is_mouse_button_down(0) && !im.is_mouse_button_down(1) &&
+          !im.is_mouse_button_down(2)) {
+        fpshud::on_gui_state_changed(false);
+      }
       continue;
     }
 
@@ -241,26 +258,81 @@ __attribute__((visibility("default"))) int SDL_PollEvent(void* event) {
 __attribute__((visibility("default"))) int SDL_WaitEventTimeout(void* event, int timeout) {
   ensure_input_hooks_initialized();
   if (!g_real_sdl_wait_event_timeout) return 0;
+  if (!event) return g_real_sdl_wait_event_timeout(nullptr, timeout);
   if (t_in_hook) return g_real_sdl_wait_event_timeout(event, timeout);
 
-  // When GUI is open, use non-blocking poll loop to filter mouse events
-  if (fpshud::is_mouse_isolation_active()) {
-    return SDL_PollEvent(event);
+  if (!fpshud::is_mouse_isolation_active()) {
+    return g_real_sdl_wait_event_timeout(event, timeout);
   }
-  return g_real_sdl_wait_event_timeout(event, timeout);
+
+  t_in_hook = true;
+  int res = 0;
+  int remaining = timeout;
+  const int step = (timeout < 0) ? 10 : std::max(1, std::min(timeout, 10));
+
+  while ((res = g_real_sdl_wait_event_timeout(event, step)) != 0) {
+    if (!fpshud::is_mouse_isolation_active()) break;
+
+    auto* raw = static_cast<SdlRawEvent*>(event);
+    auto& cfg = fpshud::get_mutable_config();
+    auto& im = fpshud::get_input_manager();
+    ImGuiIO* io = im.current_io();
+
+    if (raw->type == kSdlMouseMotion) {
+      im.enqueue_intercepted_motion(static_cast<float>(raw->motion.x),
+                                    static_cast<float>(raw->motion.y), cfg);
+      if (io) {
+        im.handle_pointer_motion(static_cast<float>(raw->motion.x),
+                                 static_cast<float>(raw->motion.y), cfg, io);
+      }
+    } else if (raw->type == kSdlMouseButtonDown || raw->type == kSdlMouseButtonUp) {
+      bool down = (raw->type == kSdlMouseButtonDown);
+      uint32_t btn = BTN_LEFT;
+      if (raw->button.button == kSdlButtonRight)
+        btn = BTN_RIGHT;
+      else if (raw->button.button == kSdlButtonMiddle)
+        btn = BTN_MIDDLE;
+
+      im.enqueue_intercepted_button(btn, down, cfg);
+      if (io) {
+        im.handle_pointer_button(btn, down, cfg, io);
+      }
+    } else if (raw->type == kSdlMouseWheel) {
+      im.enqueue_intercepted_wheel(static_cast<float>(raw->wheel.x),
+                                   static_cast<float>(raw->wheel.y), cfg);
+      if (io) {
+        im.handle_pointer_wheel(static_cast<float>(raw->wheel.x), static_cast<float>(raw->wheel.y),
+                                cfg, io);
+      }
+    } else if (raw->type == kSdlKeyDown &&
+               (raw->key.keysym.sym == 1073741893 || raw->key.keysym.sym == 27)) {
+      cfg.gui_open = false;
+      if (!im.is_mouse_button_down(0) && !im.is_mouse_button_down(1) &&
+          !im.is_mouse_button_down(2)) {
+        fpshud::on_gui_state_changed(false);
+      }
+    } else {
+      // Delivered non-mouse event to game
+      break;
+    }
+
+    if (timeout > 0) {
+      remaining -= step;
+      if (remaining <= 0) {
+        res = 0;
+        break;
+      }
+    }
+  }
+
+  t_in_hook = false;
+  return res;
 }
 
 __attribute__((visibility("default"))) int SDL_WaitEvent(void* event) {
   ensure_input_hooks_initialized();
-  if (t_in_hook) {
-    return g_real_sdl_wait_event ? g_real_sdl_wait_event(event) : 0;
-  }
-  if (fpshud::is_mouse_isolation_active()) {
-    return SDL_PollEvent(event);
-  }
-  if (g_real_sdl_wait_event) {
-    return g_real_sdl_wait_event(event);
-  }
+  if (!event) return 0;
+  if (t_in_hook) return g_real_sdl_wait_event ? g_real_sdl_wait_event(event) : 0;
   return SDL_WaitEventTimeout(event, -1);
 }
 
@@ -284,18 +356,29 @@ __attribute__((visibility("default"))) int SDL_PeepEvents(void* events, int nume
     for (int i = 0; i < count; ++i) {
       uint32_t t = raw_events[i].type;
       if (t == kSdlMouseMotion) {
-        im.handle_pointer_motion(static_cast<float>(raw_events[i].motion.x),
-                                 static_cast<float>(raw_events[i].motion.y), cfg, io);
+        im.enqueue_intercepted_motion(static_cast<float>(raw_events[i].motion.x),
+                                      static_cast<float>(raw_events[i].motion.y), cfg);
+        if (io) {
+          im.handle_pointer_motion(static_cast<float>(raw_events[i].motion.x),
+                                   static_cast<float>(raw_events[i].motion.y), cfg, io);
+        }
       } else if (t == kSdlMouseButtonDown || t == kSdlMouseButtonUp) {
         bool down = (t == kSdlMouseButtonDown);
         uint32_t btn =
             (raw_events[i].button.button == kSdlButtonRight)
                 ? BTN_RIGHT
                 : ((raw_events[i].button.button == kSdlButtonMiddle) ? BTN_MIDDLE : BTN_LEFT);
-        im.handle_pointer_button(btn, down, cfg, io);
+        im.enqueue_intercepted_button(btn, down, cfg);
+        if (io) {
+          im.handle_pointer_button(btn, down, cfg, io);
+        }
       } else if (t == kSdlMouseWheel) {
-        im.handle_pointer_wheel(static_cast<float>(raw_events[i].wheel.x),
-                                static_cast<float>(raw_events[i].wheel.y), cfg, io);
+        im.enqueue_intercepted_wheel(static_cast<float>(raw_events[i].wheel.x),
+                                     static_cast<float>(raw_events[i].wheel.y), cfg);
+        if (io) {
+          im.handle_pointer_wheel(static_cast<float>(raw_events[i].wheel.x),
+                                  static_cast<float>(raw_events[i].wheel.y), cfg, io);
+        }
       } else {
         if (write_idx != i) {
           raw_events[write_idx] = raw_events[i];
@@ -313,31 +396,18 @@ __attribute__((visibility("default"))) int SDL_PeepEvents(void* events, int nume
 __attribute__((visibility("default"))) int XNextEvent(void* display, void* event) {
   ensure_input_hooks_initialized();
   if (!g_real_x_next_event) return -1;
-  if (t_in_hook) return g_real_x_next_event(display, event);
+  if (!event || t_in_hook) return g_real_x_next_event(display, event);
 
   t_in_hook = true;
-  int res = 0;
-
-  while ((res = g_real_x_next_event(display, event)) == 0) {
-    if (!fpshud::is_mouse_isolation_active() || !event) {
-      break;
-    }
-
+  int res = g_real_x_next_event(display, event);
+  if (res == 0 && fpshud::is_mouse_isolation_active()) {
     int type = *reinterpret_cast<const int*>(event);
-
     // X11 Event Types: MotionNotify = 6, ButtonPress = 4, ButtonRelease = 5
-    if (type == 6) {
-      // struct XMotionEvent offset: int x, y at offset 40 (64-bit) or 32 (32-bit)
-      // On 64-bit Linux: type(4)+pad(4) + serial(8) + send_event(4)+pad(4) + display(8) +
-      // window(8) + root(8) + subwindow(8) + time(8) + x(4) + y(4) = offset 64
-      // Safer: handle via XQueryPointer or offset
-      // Absorb motion event
-      continue;
-    } else if (type == 4 || type == 5) {
-      // Absorb button event
-      continue;
+    if (type == 6 || type == 4 || type == 5) {
+      // Neutralize absorbed pointer event in-place so XNextEvent returns immediately without
+      // blocking or starving the game loop
+      *reinterpret_cast<int*>(event) = 0;
     }
-    break;
   }
 
   t_in_hook = false;
