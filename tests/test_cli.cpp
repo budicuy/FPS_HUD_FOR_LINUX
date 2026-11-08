@@ -4189,6 +4189,19 @@ void run_all_devices_and_features_suite() {
   // --------------------------------------------------------------------
   run_security_hardening_suite();
 
+  // --------------------------------------------------------------------
+  // SUITE 10 [IN-GAME VIDEO PLAYBACK & GALLERY]: Embedded Player Suite
+  // --------------------------------------------------------------------
+  {
+    std::printf("\n--- SUITE 10: In-Game Video Playback & Gallery Suite ---\n");
+    std::ifstream f("scripts/build_static_ffmpeg.sh");
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    check_cond(content.find("--enable-decoder=h264,hevc,aac") != std::string::npos,
+               "10.1 FFmpeg script enables h264, hevc, aac decoders");
+    check_cond(content.find("--enable-demuxer=mov,mp4,matroska,webm") != std::string::npos,
+               "10.2 FFmpeg script enables mov, mp4, matroska, webm demuxers");
+  }
+
   std::printf("\n====================================================================\n");
   std::printf("  VERIFICATION RESULT: %d / %d CHECKS PASSED (ALL PLATFORMS + MEMORY SAFETY)!\n",
               g_passed_checks, g_total_checks);

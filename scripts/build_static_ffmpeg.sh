@@ -78,7 +78,9 @@ echo "[*] Configuring ultra-minimal static FFmpeg (Hardware NVENC + VAAPI + MP4 
     --enable-ffnvcodec \
     --enable-nvenc \
     --enable-vaapi \
+    --enable-decoder=h264,hevc,aac \
     --enable-encoder=h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi,aac \
+    --enable-demuxer=mov,mp4,matroska,webm \
     --enable-muxer=mp4,matroska,webm \
     --enable-protocol=file \
     --enable-hwaccel=h264_vaapi,hevc_vaapi \
