@@ -33,11 +33,6 @@ if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     STRIP_TARGETS+=("$BUILD_DIR/fpshud_recorder_bin")
     PORTABLE_GATE_TARGETS+=("$BUILD_DIR/fpshud_recorder_bin")
     TAR_FILES+=("fpshud_recorder_bin")
-    # Bundle lightweight recorder sources (~60 KB) for universal cross-distro FFmpeg auto-compilation
-    mkdir -p "$BUILD_DIR/src/recorder" "$BUILD_DIR/src/core"
-    cp "$PROJECT_DIR/src/recorder/recorder_main.cpp" "$PROJECT_DIR/src/recorder/recorder_ipc.hpp" "$BUILD_DIR/src/recorder/"
-    cp "$PROJECT_DIR/src/core/pack_indexing.hpp" "$BUILD_DIR/src/core/"
-    TAR_FILES+=("src")
 fi
 
 if [ -n "$STRIP_BIN" ]; then
