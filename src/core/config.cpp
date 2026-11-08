@@ -220,6 +220,17 @@ float safe_strtof(std::string_view str, float fallback) noexcept {
   return fallback;
 }
 
+std::string sanitize_ini_value(const std::string& val) {
+  std::string out;
+  out.reserve(val.size());
+  for (char c : val) {
+    if (c != '\r' && c != '\n') {
+      out += c;
+    }
+  }
+  return out;
+}
+
 bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* header_comment) {
   if (path.empty()) return false;
   ensure_parent_dir(path);
@@ -232,8 +243,8 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
     tmp_path.clear();
   }
 
-  std::fprintf(fp, "# %s\n", header_comment ? header_comment : "FPSHUD Config");
-  std::fprintf(fp, "preset=%s\n", cfg.active_preset.c_str());
+  std::fprintf(fp, "# %s\n", sanitize_ini_value(header_comment ? header_comment : "FPSHUD Config").c_str());
+  std::fprintf(fp, "preset=%s\n", sanitize_ini_value(cfg.active_preset).c_str());
   std::fprintf(fp, "gui_scale=%.2f\n", cfg.gui_scale);
   std::fprintf(fp, "hud_visible=%d\n", cfg.hud_visible ? 1 : 0);
   std::fprintf(fp, "layout=%d\n", static_cast<int>(cfg.layout));
@@ -282,7 +293,7 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fprintf(fp, "record_codec=%d\n", cfg.record_codec);
   std::fprintf(fp, "record_quality_mode=%d\n", cfg.record_quality_mode);
   std::fprintf(fp, "record_cq_level=%d\n", cfg.record_cq_level);
-  std::fprintf(fp, "record_directory=%s\n", cfg.record_directory.c_str());
+  std::fprintf(fp, "record_directory=%s\n", sanitize_ini_value(cfg.record_directory).c_str());
 
   std::fprintf(fp, "metrics=");
   for (size_t i = 0; i < cfg.metrics.size(); ++i) {

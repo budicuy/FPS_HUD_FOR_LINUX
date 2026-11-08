@@ -1881,6 +1881,27 @@ void run_security_hardening_suite() {
   check_cond(symlink_rejected,
              "4. Benchmark CSV Symlink Following Neutralization (O_NOFOLLOW)",
              "Verified CSV open operation with O_NOFOLLOW strictly rejects symlink targets with ELOOP");
+
+  // 5. INI newline injection sanitization
+  std::string tainted_val = "custom\ninjected_key=1\r\n[InjectedSection]\nmalicious=true";
+  std::string sanitized_val = fpshud::sanitize_ini_value(tainted_val);
+  bool no_crlf = (sanitized_val.find('\r') == std::string::npos && sanitized_val.find('\n') == std::string::npos);
+
+  fpshud::HudConfig test_inj_cfg;
+  test_inj_cfg.active_preset = "custom\ninjected_key=1";
+  test_inj_cfg.record_directory = "/tmp/rec\nrogue_key=pwned";
+  std::string test_ini_path = "/tmp/fpshud_test_inj_" + std::to_string(::getpid()) + ".ini";
+  bool saved_ini = fpshud::save_ini_file(test_ini_path, test_inj_cfg, "Test\nInjection");
+  std::string ini_content = read_text_file(test_ini_path);
+  std::remove(test_ini_path.c_str());
+
+  bool injection_neutralized = no_crlf && saved_ini &&
+                               (ini_content.find("\ninjected_key=1\n") == std::string::npos) &&
+                               (ini_content.find("\nrogue_key=pwned\n") == std::string::npos);
+
+  check_cond(injection_neutralized,
+             "5. INI Newline Injection Sanitization",
+             "Verified sanitize_ini_value and save_ini_file strip \\r and \\n from string fields");
 }
 
 void run_all_devices_and_features_suite() {

@@ -223,5 +223,6 @@ const char* linux_keycode_name(uint32_t code) noexcept;
 std::string format_keybind(const Keybind& kb);
 std::string get_default_record_dir();
 std::string get_effective_record_dir(const HudConfig& cfg);
+std::string sanitize_ini_value(const std::string& val);
 
 }  // namespace fpshud
