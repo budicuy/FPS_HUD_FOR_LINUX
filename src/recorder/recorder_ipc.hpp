@@ -3,8 +3,10 @@
 #include "pack_indexing.hpp"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -117,8 +119,20 @@ bool build_container_host_env_paths(const std::string& root_prefix, std::string&
 std::string get_secure_runtime_dir();
 
 // Sanitizes IPC filename prefixes to prevent path traversal and arbitrary file placement
-std::string sanitize_filename_prefix(const std::string& input,
-                                     const std::string& fallback = "FPSHUD");
+inline std::string sanitize_filename_prefix(const std::string& input,
+                                            const std::string& fallback = "FPSHUD") {
+  std::string leaf = std::filesystem::path(input).filename().string();
+  std::string sanitized;
+  for (char c : leaf) {
+    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') {
+      sanitized += c;
+    }
+  }
+  if (sanitized.empty()) {
+    return fallback;
+  }
+  return sanitized;
+}
 
 // Finds the trusted fpshud_recorder helper binary path (dladdr, user prefix, or PATH)
 std::string get_helper_binary_path();

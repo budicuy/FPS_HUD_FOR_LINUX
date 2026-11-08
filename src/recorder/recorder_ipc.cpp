@@ -107,20 +107,6 @@ std::string get_secure_runtime_dir() {
   return fallback;
 }
 
-std::string sanitize_filename_prefix(const std::string& input, const std::string& fallback) {
-  std::string leaf = fs::path(input).filename().string();
-  std::string sanitized;
-  for (char c : leaf) {
-    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') {
-      sanitized += c;
-    }
-  }
-  if (sanitized.empty()) {
-    return fallback;
-  }
-  return sanitized;
-}
-
 RecorderController& RecorderController::instance() {
   static RecorderController s_inst;
   return s_inst;
