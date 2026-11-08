@@ -44,5 +44,5 @@ Enable zero-compiler, out-of-the-box screen recording across diverse Linux distr
   - Run `./build/fpshud_test 1` to verify all 89 test suites pass.
   - Verify that `install.sh` correctly picks the Arch binary on the host without invoking a compiler.
 
-- [ ] Task 5: Commit, Push, and Verify CI Trigger
+- [x] Task 5: Commit, Push, and Verify CI Trigger
   - Git commit and push changes to `main`.

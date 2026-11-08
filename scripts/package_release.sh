@@ -18,14 +18,17 @@ chmod 755 "$BUILD_DIR/uninstall.sh"
 
 STRIP_BIN="$(command -v llvm-strip || command -v strip || true)"
 STRIP_TARGETS=("$BUILD_DIR/libfpshud.so" "$BUILD_DIR/fpshud_test")
+PORTABLE_GATE_TARGETS=("$BUILD_DIR/libfpshud.so" "$BUILD_DIR/fpshud_test")
 TAR_FILES=("libfpshud.so" "fpshud" "fpshud_test" "uninstall.sh")
 
 if [ -f "$BUILD_DIR/fpshud_recorder" ]; then
     STRIP_TARGETS+=("$BUILD_DIR/fpshud_recorder")
+    PORTABLE_GATE_TARGETS+=("$BUILD_DIR/fpshud_recorder")
     TAR_FILES+=("fpshud_recorder")
 fi
 if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     STRIP_TARGETS+=("$BUILD_DIR/fpshud_recorder_bin")
+    PORTABLE_GATE_TARGETS+=("$BUILD_DIR/fpshud_recorder_bin")
     TAR_FILES+=("fpshud_recorder_bin")
     # Bundle lightweight recorder sources (~60 KB) for universal cross-distro FFmpeg auto-compilation
     mkdir -p "$BUILD_DIR/src/recorder" "$BUILD_DIR/src/core"
@@ -46,8 +49,8 @@ if [ -n "$STRIP_BIN" ]; then
     "$STRIP_BIN" --strip-unneeded "${STRIP_TARGETS[@]}"
 fi
 
-echo "[*] Verifying GLIBC symbol version floor (must be <= GLIBC_2.35)..."
-if objdump -T "${STRIP_TARGETS[@]}" | grep -E "GLIBC_2\.(3[6-9]|4[0-9])"; then
+echo "[*] Verifying GLIBC symbol version floor on baseline portable binaries (must be <= GLIBC_2.35)..."
+if objdump -T "${PORTABLE_GATE_TARGETS[@]}" | grep -E "GLIBC_2\.(3[6-9]|4[0-9])"; then
     echo "[!] ERROR: Release binary imports GLIBC >= 2.36 symbols! Aborting packaging." >&2
     exit 1
 fi

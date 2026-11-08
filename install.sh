@@ -123,8 +123,8 @@ if [ -f "$TMP_DIR/fpshud_recorder_bin" ] || [ -f "$TMP_DIR/fpshud_recorder_bin-a
     MATCHED_BIN=""
     for cand in "${CANDIDATES[@]}"; do
         STATUS=0
-        "$cand" --help >/dev/null 2>&1 || STATUS=$?
-        if [ "$STATUS" -ne 127 ]; then
+        "$cand" --probe-encoders >/dev/null 2>&1 || STATUS=$?
+        if [ "$STATUS" -eq 0 ]; then
             MATCHED_BIN="$cand"
             break
         fi
@@ -147,8 +147,8 @@ if [ -f "$TMP_DIR/fpshud_recorder_bin" ] || [ -f "$TMP_DIR/fpshud_recorder_bin-a
         # 1. Check if a local native build already exists
         if [ -f "./build/fpshud_recorder_bin" ]; then
             LOC_STATUS=0
-            "./build/fpshud_recorder_bin" --help >/dev/null 2>&1 || LOC_STATUS=$?
-            if [ "$LOC_STATUS" -ne 127 ]; then
+            "./build/fpshud_recorder_bin" --probe-encoders >/dev/null 2>&1 || LOC_STATUS=$?
+            if [ "$LOC_STATUS" -eq 0 ]; then
                 echo "[+] Found compatible local build of fpshud_recorder_bin; installing native binary..."
                 cp -f "./build/fpshud_recorder_bin" "$LIB_DIR/fpshud_recorder_bin"
                 cp -f "./build/fpshud_recorder_bin" "$BIN_DIR/fpshud_recorder_bin"

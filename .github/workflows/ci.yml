@@ -113,7 +113,7 @@ jobs:
           fi
           chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
           tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build $TAR_ITEMS
-          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > release_pkg/fpshud-linux-x86_64.tar.gz.sha256)
+          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
