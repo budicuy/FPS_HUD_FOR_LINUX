@@ -419,7 +419,7 @@ __attribute__((visibility("default"))) int XQueryPointer(void* dpy, unsigned lon
                 ? g_real_x_query_pointer(dpy, w, root_return, child_return, root_x_return,
                                          root_y_return, win_x_return, win_y_return, mask_return)
                 : 0;
-  if (res && fpshud::is_mouse_isolation_active() && mask_return) {
+  if (fpshud::is_mouse_isolation_active() && mask_return) {
     // Strip Button1Mask (0x100) through Button5Mask (0x1000)
     *mask_return &= ~(0x100 | 0x200 | 0x400 | 0x800 | 0x1000);
   }

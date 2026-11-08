@@ -52,6 +52,16 @@ extern "C" const char* __lsan_default_suppressions() {
 }
 #endif
 
+extern "C" {
+uint32_t SDL_GetRelativeMouseState(int* x, int* y);
+uint32_t SDL_GetMouseState(int* x, int* y);
+int SDL_SetRelativeMouseMode(int enabled);
+int SDL_GetRelativeMouseMode();
+int XQueryPointer(void* dpy, unsigned long w, unsigned long* root_return,
+                  unsigned long* child_return, int* root_x_return, int* root_y_return,
+                  int* win_x_return, int* win_y_return, unsigned int* mask_return);
+}
+
 namespace {
 
 int g_total_checks = 0;
@@ -1743,7 +1753,12 @@ void run_elf_and_layer_abi_suite() {
     bool sym_wait_ok = (handle && dlsym(handle, "SDL_WaitEvent") != nullptr);
     bool sym_wait_to_ok = (handle && dlsym(handle, "SDL_WaitEventTimeout") != nullptr);
     bool sym_x11_ok = (handle && dlsym(handle, "XNextEvent") != nullptr);
-    bool hooks_exported = sym_poll_ok && sym_peep_ok && sym_wait_ok && sym_wait_to_ok && sym_x11_ok;
+    bool sym_rel_ok = (handle && dlsym(handle, "SDL_GetRelativeMouseState") != nullptr);
+    bool sym_mouse_ok = (handle && dlsym(handle, "SDL_GetMouseState") != nullptr);
+    bool sym_warp_ok = (handle && dlsym(handle, "SDL_WarpMouseInWindow") != nullptr);
+    bool sym_qptr_ok = (handle && dlsym(handle, "XQueryPointer") != nullptr);
+    bool hooks_exported = sym_poll_ok && sym_peep_ok && sym_wait_ok && sym_wait_to_ok &&
+                          sym_x11_ok && sym_rel_ok && sym_mouse_ok && sym_warp_ok && sym_qptr_ok;
 
     // 2. State machine test for mouse isolation and relative mouse mode unlock/restore
     fpshud::on_gui_state_changed(false);
@@ -1751,6 +1766,23 @@ void run_elf_and_layer_abi_suite() {
 
     fpshud::on_gui_state_changed(true);
     bool opened_isolated = fpshud::is_mouse_isolation_active();
+
+    // 2.1 Behavioral verification of hooked state queries during active GUI
+    int rel_x = 999, rel_y = 888;
+    uint32_t rel_btn = SDL_GetRelativeMouseState(&rel_x, &rel_y);
+    bool rel_state_zeroed = (rel_x == 0 && rel_y == 0 && rel_btn == 0);
+
+    int mx = 50, my = 60;
+    uint32_t mouse_btn = SDL_GetMouseState(&mx, &my);
+    bool mouse_btn_zeroed = (mouse_btn == 0);
+
+    SDL_SetRelativeMouseMode(1);
+    int active_rel_mode = SDL_GetRelativeMouseMode();
+    bool rel_mode_recorded = (active_rel_mode == 1);
+
+    unsigned int xmask = 0x100 | 0x200;  // Button1Mask | Button2Mask
+    XQueryPointer(nullptr, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &xmask);
+    bool xquery_stripped = ((xmask & (0x100 | 0x200)) == 0);
 
     fpshud::on_gui_state_changed(false);
     bool closed_isolated = fpshud::is_mouse_isolation_active();
@@ -1846,15 +1878,21 @@ void run_elf_and_layer_abi_suite() {
                    gui_open_iso && cursor_drawn && motion_im_ok && motion_imgui_ok &&
                    wheel_imgui_ok && btn_down_im_ok && btn_imgui_ok && pending_ungrab_active &&
                    fully_ungrabbed && null_poll_safe && direct_motion_ok && direct_wheel_ok &&
-                   direct_click_ok;
+                   direct_click_ok && rel_state_zeroed && mouse_btn_zeroed && rel_mode_recorded &&
+                   xquery_stripped;
 
     std::string detail =
         "hooks_exported=" + std::to_string(hooks_exported) +
         " (poll=" + std::to_string(sym_poll_ok) + ", peep=" + std::to_string(sym_peep_ok) +
         ", wait=" + std::to_string(sym_wait_ok) + ", x11=" + std::to_string(sym_x11_ok) +
-        "), isolation_lifecycle=" +
+        ", rel=" + std::to_string(sym_rel_ok) + ", btn=" + std::to_string(sym_mouse_ok) +
+        ", qptr=" + std::to_string(sym_qptr_ok) + "), isolation_lifecycle=" +
         std::to_string(!init_isolated && opened_isolated && !closed_isolated) +
         ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok && direct_motion_ok) +
+        ", rel_state_zeroed=" + std::to_string(rel_state_zeroed) +
+        ", mouse_btn_zeroed=" + std::to_string(mouse_btn_zeroed) +
+        ", rel_mode_recorded=" + std::to_string(rel_mode_recorded) +
+        ", xquery_stripped=" + std::to_string(xquery_stripped) +
         ", wheel=" + std::to_string(wheel_imgui_ok && direct_wheel_ok) +
         ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok && direct_click_ok) +
         ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed) +
