@@ -4237,6 +4237,29 @@ void run_all_devices_and_features_suite() {
 
     check_cond(fpshud::get_or_update_player_texture(nullptr, 0, 0, 0) == 0,
                "10.11 Null texture returns 0 safely");
+
+    std::string test_dir = "/tmp/fpshud_test_gallery_" + std::to_string(getpid());
+    fs::create_directories(test_dir);
+    {
+      std::ofstream f1(test_dir + "/FPSHUD_20261109_010000.mp4");
+      f1 << "dummy";
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    {
+      std::ofstream f2(test_dir + "/FPSHUD_20261109_020000.mp4");
+      f2 << "dummy2";
+    }
+    {
+      std::ofstream f3(test_dir + "/not_a_video.txt");
+      f3 << "ignore";
+    }
+
+    auto clips = fpshud::scan_recorded_clips(test_dir);
+    check_cond(clips.size() == 2, "10.12 Scanner finds exactly 2 video clips");
+    check_cond(!clips.empty() && clips[0].filename.find("020000") != std::string::npos,
+               "10.13 Clips sorted newest first");
+
+    fs::remove_all(test_dir);
   }
 
   std::printf("\n====================================================================\n");

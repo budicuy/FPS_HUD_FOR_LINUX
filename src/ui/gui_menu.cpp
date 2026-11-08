@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <vector>
@@ -47,7 +48,220 @@ void release_player_texture() {
   }
 }
 
+std::vector<RecordedClipInfo> scan_recorded_clips(const std::string& dir_path) {
+  std::vector<RecordedClipInfo> clips;
+  std::error_code ec;
+  if (!std::filesystem::exists(dir_path, ec) || !std::filesystem::is_directory(dir_path, ec)) {
+    return clips;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(dir_path, ec)) {
+    if (ec) break;
+    if (!entry.is_regular_file(ec)) continue;
+
+    std::string ext = entry.path().extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".mp4" && ext != ".mkv" && ext != ".webm") continue;
+
+    RecordedClipInfo info{};
+    info.filename = entry.path().filename().string();
+    info.filepath = entry.path().string();
+
+    uintmax_t sz = entry.file_size(ec);
+    info.file_size_bytes = (ec) ? 0 : sz;
+
+    auto ftime = entry.last_write_time(ec);
+    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    std::time_t tt = std::chrono::system_clock::to_time_t(sctp);
+    info.mtime_epoch = static_cast<uint64_t>(tt);
+
+    struct tm tm_buf{};
+    localtime_r(&tt, &tm_buf);
+    char date_buf[64] = {0};
+    std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%d %H:%M", &tm_buf);
+    info.date_str = date_buf;
+
+    char sz_buf[32] = {0};
+    if (info.file_size_bytes >= 1024 * 1024 * 1024) {
+      std::snprintf(sz_buf, sizeof(sz_buf), "%.2f GB",
+                    static_cast<double>(info.file_size_bytes) / (1024.0 * 1024.0 * 1024.0));
+    } else if (info.file_size_bytes >= 1024 * 1024) {
+      std::snprintf(sz_buf, sizeof(sz_buf), "%.1f MB",
+                    static_cast<double>(info.file_size_bytes) / (1024.0 * 1024.0));
+    } else {
+      std::snprintf(sz_buf, sizeof(sz_buf), "%.1f KB",
+                    static_cast<double>(info.file_size_bytes) / 1024.0);
+    }
+    info.size_str = sz_buf;
+
+    clips.push_back(std::move(info));
+  }
+
+  std::sort(clips.begin(), clips.end(), [](const RecordedClipInfo& a, const RecordedClipInfo& b) {
+    if (a.mtime_epoch != b.mtime_epoch) {
+      return a.mtime_epoch > b.mtime_epoch;
+    }
+    return a.filename > b.filename;
+  });
+
+  return clips;
+}
+
 namespace {
+
+void open_system_folder(const std::string& path);
+
+static VideoPlayerController g_player_controller;
+static std::string g_player_active_file;
+static std::string g_player_active_filename;
+static bool g_player_modal_open_requested = false;
+static float g_player_volume = 1.0f;
+static bool g_player_muted = false;
+static float g_player_speed = 1.0f;
+
+static void open_modal_player(const std::string& filepath, const std::string& filename) {
+  g_player_active_file = filepath;
+  g_player_active_filename = filename;
+  std::string helper_bin = get_helper_binary_path();
+  g_player_controller.open(filepath, helper_bin);
+  g_player_modal_open_requested = true;
+}
+
+static void render_video_player_modal(float scale, float display_width, float display_height) {
+  if (g_player_modal_open_requested) {
+    ImGui::OpenPopup("In-Game Video Player##Modal");
+    g_player_modal_open_requested = false;
+  }
+
+  ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  float max_w = std::min(display_width * 0.85f, 1024.0f);
+  float max_h = std::min(display_height * 0.85f, 700.0f);
+  ImGui::SetNextWindowSize(ImVec2(max_w, max_h), ImGuiCond_Appearing);
+
+  bool modal_open = true;
+  if (ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open,
+                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    const auto* hdr = g_player_controller.header();
+    if (!hdr || !g_player_controller.is_active()) {
+      ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
+      if (ImGui::Button("Close Player")) {
+        g_player_controller.close();
+        release_player_texture();
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+      return;
+    }
+
+    uint32_t vw = hdr->width > 0 ? hdr->width : 1280;
+    uint32_t vh = hdr->height > 0 ? hdr->height : 720;
+    float duration = hdr->duration_sec;
+    float cur_time = hdr->current_time_sec.load(std::memory_order_relaxed);
+    bool is_playing = hdr->is_playing.load(std::memory_order_relaxed);
+
+    ImGui::TextColored(ImVec4(0.38f, 0.84f, 1.0f, 1.0f), "%s", g_player_active_filename.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("| %ux%u | %.1fs", vw, vh, duration);
+
+    float canvas_w = std::min(max_w - 30.0f, 854.0f);
+    float aspect = static_cast<float>(vw) / static_cast<float>(vh > 0 ? vh : 1);
+    float canvas_h = canvas_w / (aspect > 0.1f ? aspect : (16.0f / 9.0f));
+    if (canvas_h > max_h - 180.0f) {
+      canvas_h = max_h - 180.0f;
+      canvas_w = canvas_h * aspect;
+    }
+
+    const uint8_t* pixels = g_player_controller.frame_pixels();
+    uint64_t seq = hdr->frame_seq.load(std::memory_order_relaxed);
+    ImTextureID tex = get_or_update_player_texture(pixels, vw, vh, seq);
+    if (tex != 0) {
+      ImGui::Image(tex, ImVec2(canvas_w, canvas_h));
+    } else {
+      ImGui::Dummy(ImVec2(canvas_w, canvas_h));
+    }
+
+    ImGui::PushItemWidth(canvas_w);
+    float slider_time = cur_time;
+    char time_buf[64];
+    int cur_m = static_cast<int>(cur_time) / 60;
+    int cur_s = static_cast<int>(cur_time) % 60;
+    int tot_m = static_cast<int>(duration) / 60;
+    int tot_s = static_cast<int>(duration) % 60;
+    std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d / %02d:%02d", cur_m, cur_s, tot_m,
+                  tot_s);
+
+    if (ImGui::SliderFloat("##SeekSlider", &slider_time, 0.0f, duration > 0 ? duration : 1.0f,
+                           time_buf)) {
+      g_player_controller.seek(slider_time);
+    }
+    ImGui::PopItemWidth();
+
+    if (ImGui::Button(is_playing ? "[Pause]" : "[Play]", ImVec2(80.0f * scale, 28.0f * scale))) {
+      if (is_playing) {
+        g_player_controller.pause();
+      } else {
+        g_player_controller.play();
+      }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("[-5s]", ImVec2(65.0f * scale, 28.0f * scale))) {
+      g_player_controller.seek(std::max(0.0f, cur_time - 5.0f));
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("[+5s]", ImVec2(65.0f * scale, 28.0f * scale))) {
+      g_player_controller.seek(std::min(duration, cur_time + 5.0f));
+    }
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f * scale);
+    const char* speed_items[] = {"0.5x", "1.0x", "1.5x", "2.0x"};
+    int speed_idx = (g_player_speed == 0.5f)
+                        ? 0
+                        : ((g_player_speed == 1.5f) ? 2 : ((g_player_speed == 2.0f) ? 3 : 1));
+    if (ImGui::Combo("##SpeedCombo", &speed_idx, speed_items, IM_ARRAYSIZE(speed_items))) {
+      g_player_speed = (speed_idx == 0)
+                           ? 0.5f
+                           : ((speed_idx == 2) ? 1.5f : ((speed_idx == 3) ? 2.0f : 1.0f));
+      g_player_controller.set_speed(g_player_speed);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button(g_player_muted ? "[Mute]" : "[Vol]", ImVec2(55.0f * scale, 28.0f * scale))) {
+      g_player_muted = !g_player_muted;
+      g_player_controller.set_volume(g_player_muted ? 0.0f : g_player_volume);
+    }
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(85.0f * scale);
+    if (ImGui::SliderFloat("##VolumeSlider", &g_player_volume, 0.0f, 1.0f, "%.0f%%")) {
+      if (!g_player_muted) {
+        g_player_controller.set_volume(g_player_volume);
+      }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("[Desktop]", ImVec2(80.0f * scale, 28.0f * scale))) {
+      open_system_folder(g_player_active_file);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("[Close]", ImVec2(70.0f * scale, 28.0f * scale))) {
+      modal_open = false;
+    }
+
+    if (!modal_open) {
+      g_player_controller.close();
+      release_player_texture();
+      ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+  }
+}
 
 std::string g_status_msg;
 std::chrono::steady_clock::time_point g_status_time{};
@@ -1288,6 +1502,45 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     }
     ImGui::EndDisabled();
 
+    // Recorded Clips Gallery
+    ImGui::Spacing();
+    ImGui::Separator();
+    draw_section_header("Recorded Clips Gallery", ImVec4(0.38f, 0.84f, 1.0f, 1.0f));
+
+    auto clips = scan_recorded_clips(cur_dir);
+    if (clips.empty()) {
+      ImGui::TextDisabled("No recorded video clips found.");
+    } else {
+      ImGui::BeginChild("##ClipsList", ImVec2(0.0f, 160.0f * scale), true);
+      for (size_t i = 0; i < clips.size(); ++i) {
+        const auto& clip = clips[i];
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.95f, 1.0f), "%s", clip.filename.c_str());
+        ImGui::TextDisabled("%s | %s", clip.date_str.c_str(), clip.size_str.c_str());
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.58f, 0.32f, 1.0f));
+        if (ImGui::Button("[Play]")) {
+          open_modal_player(clip.filepath, clip.filename);
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
+        if (ImGui::Button("[Delete]")) {
+          std::error_code ec;
+          std::filesystem::remove(clip.filepath, ec);
+          set_status_message("Deleted: " + clip.filename);
+        }
+        ImGui::PopStyleColor();
+
+        if (i + 1 < clips.size()) {
+          ImGui::Separator();
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndChild();
+    }
+
     if (data.last_benchmark.has_result) {
       ImGui::Spacing();
       ImGui::Separator();
@@ -1323,6 +1576,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     }
   }
   ImGui::End();
+
+  // Render embedded Modal Video Player if active or requested
+  render_video_player_modal(scale, display_width, display_height);
 
   ImGui::PopStyleColor(8);
   ImGui::PopStyleVar(7);
