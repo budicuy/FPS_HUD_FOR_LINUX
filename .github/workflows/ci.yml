@@ -228,13 +228,13 @@ jobs:
           make_latest: true
           name: "FPSHUD Latest Portable Release (Linux x86_64)"
           body: |
-            ### Cara Installasi (1-Command Install)
+            ### Installation (1-Command Install)
 
             ```bash
             curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
             ```
 
-            ### Cara Hapus (Local Uninstall)
+            ### Uninstallation (Local Uninstall)
 
             ```bash
             ~/.local/bin/fpshud --uninstall
