@@ -1,4 +1,5 @@
 #include "input_manager.hpp"
+#include "gui_menu.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
@@ -549,7 +550,9 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
                 cfg.key_record >= 0 && is_record_toggle_key(code, cfg.key_record, alt_pressed_))) {
       RecorderController::instance().toggle_recording(cfg, display_width, display_height);
     } else if (code == KEY_ESC && cfg.gui_open) {
-      cfg.gui_open = false;
+      if (!is_player_modal_active()) {
+        cfg.gui_open = false;
+      }
     }
   }
 
@@ -580,6 +583,12 @@ void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, fl
         break;
       case KEY_BACKSPACE:
         io->AddKeyEvent(ImGuiKey_Backspace, down);
+        break;
+      case KEY_ESC:
+        io->AddKeyEvent(ImGuiKey_Escape, down);
+        break;
+      case KEY_F:
+        io->AddKeyEvent(ImGuiKey_F, down);
         break;
       default:
         break;

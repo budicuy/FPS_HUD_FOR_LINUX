@@ -1072,6 +1072,7 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
     pid_t wp = ::waitpid(worker_pid_, &status, WNOHANG);
     if (wp > 0) {
       worker_pid_ = -1;
+      close();
       return false;
     }
 

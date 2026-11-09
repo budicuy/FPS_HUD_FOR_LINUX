@@ -18,6 +18,7 @@ using TextureReleaseFn = void (*)();
 void register_player_texture_backend(TextureProviderFn provider, TextureReleaseFn releaser);
 ImTextureID get_or_update_player_texture(const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t seq);
 void release_player_texture();
+bool is_player_modal_active() noexcept;
 
 struct RecordedClipInfo {
   std::string filename;

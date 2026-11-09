@@ -4410,6 +4410,22 @@ void run_all_devices_and_features_suite() {
                "10.27 Safe deferred texture release guarantees zero VRAM overhead and zero "
                "mid-frame stall");
 
+    // 10.28 Escape and F key event routing, fullscreen demotion, and modal lifecycle
+    bool esc_f_handling_ok = false;
+    {
+      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+      std::string im_src = read_text_file("src/input/input_manager.cpp");
+      esc_f_handling_ok =
+          (gui_src.find("was_fullscreen") != std::string::npos &&
+           gui_src.find("!was_fullscreen && esc_pressed") != std::string::npos &&
+           !is_player_modal_active() &&
+           im_src.find("!is_player_modal_active()") != std::string::npos &&
+           im_src.find("io->AddKeyEvent(ImGuiKey_Escape, down)") != std::string::npos &&
+           im_src.find("io->AddKeyEvent(ImGuiKey_F, down)") != std::string::npos);
+    }
+    check_cond(esc_f_handling_ok,
+               "10.28 Escape and F key routing, fullscreen demotion, and modal lifecycle verified");
+
     // --- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---
     std::printf("\n--- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---\n");
     bool im_queue_cleaned = false;

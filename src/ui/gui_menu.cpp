@@ -145,7 +145,8 @@ static void render_video_player_modal(float scale, float display_width, float di
   }
 
   bool esc_pressed = ImGui::IsKeyPressed(ImGuiKey_Escape);
-  if (g_player_fullscreen && esc_pressed) {
+  bool was_fullscreen = g_player_fullscreen;
+  if (was_fullscreen && esc_pressed) {
     g_player_fullscreen = false;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_F)) {
@@ -168,7 +169,7 @@ static void render_video_player_modal(float scale, float display_width, float di
   }
 
   bool modal_open = true;
-  if (!g_player_fullscreen && esc_pressed) {
+  if (!was_fullscreen && esc_pressed) {
     modal_open = false;
   }
 
@@ -446,6 +447,8 @@ void draw_keybind_row(const char* label, KeybindTarget target, const Keybind& kb
 }
 
 }  // namespace
+
+bool is_player_modal_active() noexcept { return g_player_modal_active; }
 
 void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_width,
                      float display_height) {
