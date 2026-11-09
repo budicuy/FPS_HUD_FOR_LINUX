@@ -4174,8 +4174,8 @@ void run_all_devices_and_features_suite() {
     std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     check_cond(content.find("--enable-decoder=h264,hevc,aac") != std::string::npos,
                "10.1 FFmpeg script enables h264, hevc, aac decoders");
-    check_cond(content.find("--enable-demuxer=mov,mp4,matroska,webm") != std::string::npos,
-               "10.2 FFmpeg script enables mov, mp4, matroska, webm demuxers");
+    check_cond(content.find("--enable-demuxer=mov,matroska") != std::string::npos,
+               "10.2 FFmpeg script enables mov, matroska demuxers");
 
     PlaybackShmHeader header{};
     header.magic = kPlaybackShmMagic;

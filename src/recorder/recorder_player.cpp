@@ -53,9 +53,12 @@ int run_player_worker(int argc, char** argv) {
 
   // 1. Open video container
   AVFormatContext* fmt_ctx = nullptr;
-  if (avformat_open_input(&fmt_ctx, video_file.c_str(), nullptr, nullptr) < 0) {
-    std::fprintf(stderr, "[FPSHUD Player] ERROR: Could not open input file: %s\n",
-                 video_file.c_str());
+  int open_res = avformat_open_input(&fmt_ctx, video_file.c_str(), nullptr, nullptr);
+  if (open_res < 0) {
+    char errbuf[256] = {0};
+    av_strerror(open_res, errbuf, sizeof(errbuf));
+    std::fprintf(stderr, "[FPSHUD Player] ERROR: Could not open input file: %s (err %d: %s)\n",
+                 video_file.c_str(), open_res, errbuf);
     return 2;
   }
 

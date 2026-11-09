@@ -11,7 +11,8 @@ BUILD_CACHE="${FFMPEG_BUILD_CACHE:-/tmp/fpshud_ffmpeg_src_$(id -u)}"
 
 if [ -f "$OUT_DIR/lib/libavformat.a" ] && [ -f "$OUT_DIR/lib/libavcodec.a" ] && \
    [ -f "$OUT_DIR/lib/libswscale.a" ] && [ -f "$OUT_DIR/lib/libswresample.a" ] && \
-   [ -f "$OUT_DIR/lib/libavutil.a" ]; then
+   [ -f "$OUT_DIR/lib/libavutil.a" ] && \
+   nm "$OUT_DIR/lib/libavformat.a" 2>/dev/null | grep -q "ff_mov_demuxer"; then
     echo "[✓] Minimal static FFmpeg already built at: $OUT_DIR"
     exit 0
 fi
@@ -79,11 +80,14 @@ echo "[*] Configuring ultra-minimal static FFmpeg (Hardware NVENC + VAAPI + MP4 
     --enable-nvenc \
     --enable-vaapi \
     --enable-decoder=h264,hevc,aac \
+    --enable-parser=h264,hevc,aac \
     --enable-encoder=h264_nvenc,hevc_nvenc,h264_vaapi,hevc_vaapi,aac \
-    --enable-demuxer=mov,mp4,matroska,webm \
+    --enable-demuxer=mov,matroska \
     --enable-muxer=mp4,matroska,webm \
     --enable-protocol=file \
     --enable-hwaccel=h264_vaapi,hevc_vaapi \
+    --disable-bzlib \
+    --disable-lzma \
     --disable-x86asm \
     --disable-programs \
     --disable-doc \
