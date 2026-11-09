@@ -4387,6 +4387,17 @@ void run_all_devices_and_features_suite() {
         e2e_playback_ok,
         "10.25 End-to-end player controller lifecycle with real audio/video clip verification");
 
+    // 10.26 Unified modal lifecycle guard closes player controller on X, Close, or ESC
+    bool unified_modal_guard_present = false;
+    {
+      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+      unified_modal_guard_present =
+          (gui_src.find("g_player_modal_active") != std::string::npos &&
+           gui_src.find("!modal_open || !is_inside") != std::string::npos);
+    }
+    check_cond(unified_modal_guard_present,
+               "10.26 Unified modal lifecycle guard closes player controller on X, Close, or ESC");
+
     // --- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---
     std::printf("\n--- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---\n");
     bool im_queue_cleaned = false;

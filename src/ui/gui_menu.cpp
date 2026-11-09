@@ -117,6 +117,7 @@ static VideoPlayerController g_player_controller;
 static std::string g_player_active_file;
 static std::string g_player_active_filename;
 static bool g_player_modal_open_requested = false;
+static bool g_player_modal_active = false;
 static bool g_player_fullscreen = false;
 
 static void open_modal_player(const std::string& filepath, const std::string& filename) {
@@ -129,16 +130,22 @@ static void open_modal_player(const std::string& filepath, const std::string& fi
     return;
   }
   g_player_fullscreen = false;
+  g_player_modal_active = true;
   g_player_modal_open_requested = true;
 }
 
 static void render_video_player_modal(float scale, float display_width, float display_height) {
+  if (!g_player_modal_active && !g_player_modal_open_requested) {
+    return;
+  }
+
   if (g_player_modal_open_requested) {
     ImGui::OpenPopup("In-Game Video Player##Modal");
     g_player_modal_open_requested = false;
   }
 
-  if (g_player_fullscreen && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+  bool esc_pressed = ImGui::IsKeyPressed(ImGuiKey_Escape);
+  if (g_player_fullscreen && esc_pressed) {
     g_player_fullscreen = false;
   }
   if (ImGui::IsKeyPressed(ImGuiKey_F)) {
@@ -161,9 +168,15 @@ static void render_video_player_modal(float scale, float display_width, float di
   }
 
   bool modal_open = true;
-  if (ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open, flags)) {
+  if (!g_player_fullscreen && esc_pressed) {
+    modal_open = false;
+  }
+
+  bool is_inside = ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open, flags);
+  if (is_inside) {
     if (!g_player_controller.is_active()) {
       set_status_message("[!] Video playback failed.");
+      g_player_modal_active = false;
       g_player_fullscreen = false;
       g_player_controller.close();
       release_player_texture();
@@ -176,6 +189,7 @@ static void render_video_player_modal(float scale, float display_width, float di
     if (!hdr) {
       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
       if (ImGui::Button("Close Player")) {
+        g_player_modal_active = false;
         g_player_fullscreen = false;
         g_player_controller.close();
         release_player_texture();
@@ -296,14 +310,19 @@ static void render_video_player_modal(float scale, float display_width, float di
       modal_open = false;
     }
 
-    if (!modal_open) {
-      g_player_fullscreen = false;
+    ImGui::EndPopup();
+  }
+
+  if (!modal_open || !is_inside) {
+    g_player_modal_active = false;
+    g_player_fullscreen = false;
+    if (g_player_controller.is_active()) {
       g_player_controller.close();
-      release_player_texture();
+    }
+    release_player_texture();
+    if (is_inside) {
       ImGui::CloseCurrentPopup();
     }
-
-    ImGui::EndPopup();
   }
 }
 
@@ -467,7 +486,8 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
   }
 
   if (!cfg.gui_open) {
-    if (g_player_controller.is_active()) {
+    if (g_player_modal_active || g_player_controller.is_active()) {
+      g_player_modal_active = false;
       g_player_fullscreen = false;
       g_player_controller.close();
       release_player_texture();
