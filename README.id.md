@@ -60,7 +60,7 @@ FPSHUD ditulis dalam ISO C++26 menggunakan penyimpanan inline tetap (`std::inpla
 ### Fitur Utama
 - **Dashboard 3-Column Split View In-Game (`Insert` / `F12`)**: Menu pengaturan widescreen modular 3 kolom (Kiri: Posisi, Tata Letak, Font, Warna, Skala Render GUI `50%–200%` & Shortcut 1/2 Tombol | Tengah: 31 Sensor Hardware & Filter Preset Cepat | Kanan: Perekam Layar Hardware, Instant Replay, Lossless Screenshot & Benchmark).
 - **Perekam Layar Hardware Ringan (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**: Daemon perekaman terpisah dengan triple-buffering POSIX Shared Memory yang berjalan di luar proses game, mendukung codec HEVC (H.265) dan H.264 (`.mp4`, `.mkv`, `.webm`) dengan Adaptive CQP (`16–30`), VBV Max Bitrate Ceiling (`4–80 Mbps`), Experimental Pure `1:1` Adaptive VFR, In-RAM Instant Replay bebas aus disk (`15s–120s`), Lossless PNG Screenshot bebas dependensi (Clean Game atau With HUD, 8-bit & 10-bit HDR), dan perekaman audio (Game, Mic, atau Campuran).
-- **Pemutar Video In-Game & Galeri Klip Rekaman**: Tonton dan tinjau klip video rekaman langsung di dalam game tanpa alt-tab. Dilengkapi audio 48 kHz stereo via PulseAudio / PipeWire yang mengikuti volume sistem, kontrol seek, konfirmasi hapus dua langkah, dan mode fullscreen yang dapat diaktifkan lewat tombol `F`, klik ganda, atau tombol `[Fullscreen]`.
+- **Pemutar Video In-Game & Galeri Klip Rekaman**: Tonton dan tinjau klip video rekaman langsung di dalam game tanpa alt-tab. Menggunakan decoding multi-thread untuk memutar rekaman 60 dan 120 FPS tanpa lag, audio 48 kHz stereo via PulseAudio / PipeWire yang mengikuti volume sistem operasi, kontrol seek, konfirmasi hapus dua langkah, mode fullscreen lewat tombol `F` atau klik ganda, serta pelepasan memori tertunda di batas frame yang menjamin 0 byte VRAM dan 0% CPU tertinggal saat ditutup.
 - **4 Preset Siap Pakai (1-Klik)**: Bebas berganti tampilan antara **Minimal** (hanya FPS & Frametime), **Standard** (FPS, GPU, CPU, RAM utama), **Advance** (lengkap 31 sensor), atau menyimpan racikanmu sendiri ke tombol **Custom**.
 - **Mendukung Semua Merek Perangkat Keras (NVIDIA, AMD, Intel)**: Otomatis mendeteksi dan membaca sensor pada **GPU NVIDIA** (dengan proteksi sleep Optimus `D3cold`), **GPU & APU AMD Radeon**, **GPU Intel Arc & Iris**, serta **CPU Intel Core & AMD Ryzen**—termasuk laptop gaming *dual-GPU* (otomatis memilih kartu grafis gaming diskrit) dan handheld seperti Steam Deck.
 - **Tampilan *Two-Tone* yang Mudah Dibaca & Smart Color Alerts (14 Metrik)**: Angka ditampilkan dengan warna putih terang sedangkan satuan (`MHz`, `GB`, `°C`, `W`) dibuat sedikit redup dengan pemisah titik (`·`) agar tidak membingungkan mata, ditambah warna peringatan otomatis (Kuning/Merah) pada 14 metrik (FPS, 1%/0.1% Low, Frametime, Beban & Suhu GPU/CPU, VRAM, Kipas, RAM, Swap, Memory PSI, Suhu & I/O Disk, serta Baterai).
@@ -106,9 +106,11 @@ FPSHUD ditulis dalam ISO C++26 menggunakan penyimpanan inline tetap (`std::inpla
   - Perekaman audio multi-sumber (Game Audio Saja, Mikrofon Saja, Game + Mikrofon stereo mixed, atau Mute) via PulseAudio/PipeWire yang langsung tersimpan rapi ke folder `$XDG_VIDEOS_DIR/FPSHUD` (`~/Videos/FPSHUD` atau `~/Video/FPSHUD`).
 - **Pemutar Video In-Game & Galeri Klip Rekaman**:
   - Tonton dan kelola video rekaman langsung di Kolom 3 menu konfigurasi (`Insert` / `F12`) tanpa perlu keluar dari game.
+  - **Decoding Multi-Thread 60/120 FPS**: Pemutar video memanfaatkan thread decoding multi-core dengan sinkronisasi jam dan frame dropping adaptif saat beban sistem tinggi, menjaga audio dan video tetap sinkron tanpa stutter pada rekaman 60 maupun 120 FPS.
   - **Audio Passthrough Bawaan Sistem**: Audio didekode via FFmpeg AAC statis dan dialirkan langsung ke PulseAudio / PipeWire pada format 48 kHz stereo mengikuti volume sistem operasi.
   - **Kontrol Pemutaran**: Play/Pause, lompat waktu -5s dan +5s, serta seek bar timeline interaktif.
-  - **Mode Layar Penuh (Fullscreen)**: Tekan tombol **`F`**, klik ganda pada kanvas video, atau klik tombol **`[Fullscreen]`** untuk memperbesar tampilan video ke layar penuh dengan rasio aspek terjaga. Tekan **`ESC`** atau klik **`[Windowed]`** untuk kembali ke ukuran modal.
+  - **Mode Layar Penuh (Fullscreen) & Navigasi ESC Bertingkat**: Tekan tombol **`F`**, klik ganda pada kanvas video, atau klik tombol **`[Fullscreen]`** untuk memperbesar tampilan video ke layar penuh dengan rasio aspek terjaga. Menekan **`ESC`** di mode fullscreen akan kembali ke mode windowed, sedangkan menekan **`ESC`** di mode windowed akan menutup pemutar video.
+  - **Zero Overhead & Pembersihan Memori GPU Bersih**: Menutup pemutar lewat tombol `[Close]`, tombol `X` di sudut jendela, tombol `ESC`, atau tombol `F12` langsung mematikan proses helper worker dan audio latar belakang. Tekstur dan buffer GPU dilepas di batas frame (`deferred release`) untuk mencegah crash driver, menjamin 0 byte VRAM dan 0% CPU tersisa saat kembali bermain game.
   - **Konfirmasi Hapus Aman**: Tombol **`[Delete]`** memerlukan konfirmasi kedua **`[Confirm?]`** untuk menghapus file dari disk tanpa risiko salah klik.
 - **Dukungan Universal Multi-Vendor & Pengerasan Sensor (NVIDIA, AMD, Intel & APU)**:
   - **NVIDIA (`NVML` + Proteksi Optimus `D3cold` + Prioritas dGPU)**: Membaca sensor melalui `libnvidia-ml.so.1` secara dinamis, memeriksa `/sys/bus/pci/devices/*/power/runtime_status` sebelum memanggil NVML agar dGPU laptop yang sedang tidur (`suspended` / `D3cold`) tidak terbangun saat hemat baterai, dan memindai seluruh adapter NVIDIA (`nvmlDeviceGetCount_v2`) untuk memprioritaskan GPU gaming diskrit (`dGPU`) melalui pencocokan PCI Device ID aktif atau kapasitas VRAM terbesar.
@@ -279,7 +281,7 @@ Saat game berjalan dengan `FPS_HUD=1`, gunakan tombol shortcut berikut. Seluruh 
 | **`ESC`** | Menutup menu GUI (atau membatalkan perekaman tombol pintas) dan mengembalikan kursor ke game |
 | **`F`** *(Di Pemutar Video)* | Berganti antara mode Windowed dan Fullscreen |
 | **`Klik Ganda`** *(Pada Video)* | Berganti antara mode Windowed dan Fullscreen |
-| **`ESC`** *(Di Fullscreen Player)* | Keluar dari mode fullscreen dan kembali ke ukuran windowed |
+| **`ESC`** *(Di Pemutar Video)* | Keluar dari mode fullscreen ke windowed; jika ditekan di windowed, menutup pemutar video |
 
 > [!TIP]
 > **Steam Deck dan Perangkat Handheld**
@@ -349,8 +351,9 @@ Untuk memastikan performa framerate game tetap mulus selama proses perekaman akt
    - Klik tombol **`[DIR] Open Save Folder`** di Kolom 3 menu GUI untuk membuka direktori rekaman langsung di file manager desktop Anda.
 5. **Tonton Video di Pemutar In-Game**:
    - Di Kolom 3 menu GUI (`Insert` / `F12`), pilih klip video pada bagian **Recorded Clips Gallery**.
-   - Klik **`[Play]`** pada klip rekaman untuk membuka pemutar video in-game.
+   - Klik **`[Play]`** pada klip rekaman untuk membuka pemutar video in-game (mendukung pemutaran halus hingga 120 FPS).
    - Tekan **`F`** atau klik ganda pada kanvas video untuk beralih ke mode layar penuh (fullscreen). Suara video langsung dialirkan melalui PulseAudio / PipeWire mengikuti volume sistem operasi.
+   - Tekan **`ESC`** untuk kembali dari mode layar penuh ke jendela modal, lalu tekan **`ESC`** lagi (atau klik **`[Close]`** / **`X`**) untuk menutup pemutar. Seluruh alokasi VRAM dan CPU langsung dibersihkan menjadi 0%.
    - Klik **`[Delete]`** lalu klik konfirmasi **`[Confirm?]`** untuk menghapus klip video dari disk secara permanen.
 
 ---

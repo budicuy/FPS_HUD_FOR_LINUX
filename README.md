@@ -60,7 +60,7 @@ FPSHUD is written in ISO C++26 using fixed inline storage (`std::inplace_vector`
 ### Core Features
 - **3-Column Split View In-Game Dashboard (`Insert` / `F12`)**: A clean, widescreen control panel divided into 3 modular sections (Left: HUD Style, Colors, GUI Render Scale `50%–200%` & 1-or-2-Key Shortcuts | Center: 31 Live Hardware Sensors & Presets | Right: Screen Recorder, Instant Replay, Lossless Screenshot & Benchmark Hub).
 - **Hardware-Accelerated Screen Recording (`F7`), Instant Replay (`F8`) & Lossless Screenshot (`F10`)**: Dedicated background video capture daemon supporting HEVC (H.265) and H.264 (`.mp4`, `.mkv`, `.webm`) with Adaptive CQP (`16–30`), VBV Max Bitrate Ceiling (`4–80 Mbps`), Experimental Pure `1:1` Adaptive VFR, zero-disk-wear In-RAM Instant Replay (`15s–120s`), dependency-free Lossless PNG Screenshots (Clean Game or With HUD, 8-bit & 10-bit HDR), and PulseAudio/PipeWire audio mixing (Game, Mic, or Both).
-- **In-Game Video Player & Recorded Clips Gallery**: Review and play recorded gameplay clips directly inside the game overlay. Includes 48 kHz stereo audio output via PulseAudio / PipeWire that follows your OS volume, seek controls, safe two-step clip deletion, and a responsive fullscreen mode toggled via `F`, double-click, or `[Fullscreen]`.
+- **In-Game Video Player & Recorded Clips Gallery**: Review and play recorded gameplay clips directly inside the game overlay. Uses multi-threaded decoding to play 60 and 120 FPS clips without lag, 48 kHz stereo audio via PulseAudio / PipeWire matching OS volume, seek controls, two-step clip deletion, responsive fullscreen mode via `F` or double-click, and frame-boundary deferred GPU release leaving 0 bytes VRAM and 0% CPU overhead when closed.
 - **4 Ready-to-Use Presets**: Switch with one click between **Minimal** (FPS + Frametime only), **Standard** (FPS, GPU, CPU, RAM essentials), **Advance** (all 31 sensors), or save your own **Custom** preset.
 - **Works Across All Hardware (NVIDIA, AMD, Intel)**: Automatically detects and reads sensors from **NVIDIA GPUs** (with Optimus `D3cold` sleep protection), **AMD Radeon GPUs & APUs**, **Intel Arc & Iris GPUs**, and **Intel Core & AMD Ryzen CPUs**—including dual-GPU gaming laptops and handhelds like the Steam Deck.
 - **Easy-to-Read Two-Tone Design & 14-Metric Smart Color Alerts**: Numbers are displayed in bright white while units (`MHz`, `GB`, `°C`, `W`) are softly dimmed so values never blend together, with automatic yellow/red color warnings across 14 metrics (FPS, 1%/0.1% Low, Frametime, GPU/CPU Load & Temp, VRAM, Fan, RAM, Swap, Memory PSI, Disk Temp & I/O, and Battery).
@@ -106,9 +106,11 @@ FPSHUD is written in ISO C++26 using fixed inline storage (`std::inplace_vector`
   - Multi-source audio recording (Game Audio, Microphone Only, Game + Microphone mixed in stereo, or Mute) via PulseAudio/PipeWire saved directly to `$XDG_VIDEOS_DIR/FPSHUD` (`~/Videos/FPSHUD` or `~/Video/FPSHUD`).
 - **In-Game Video Player & Recorded Clips Gallery**:
   - Review saved clips directly in Column 3 of the configuration menu (`Insert` / `F12`) without leaving your game.
+  - **Multi-Threaded 60/120 FPS Decoding**: Video decoding uses multi-core decoding threads with clock resync and adaptive frame dropping under high system load, keeping audio and video tightly synchronized on 60 FPS and 120 FPS clips without stutter.
   - **Native System Audio Playback**: Audio decodes via minimal FFmpeg AAC and streams to PulseAudio / PipeWire at 48 kHz stereo, matching your desktop system volume without extra software sliders.
   - **Playback Controls**: Play/Pause, -5s and +5s jumps, and a draggable timeline seek bar.
-  - **Responsive Fullscreen Mode**: Press **`F`**, double-click the video, or click **`[Fullscreen]`** to expand the video across your full game viewport with aspect-ratio letterboxing. Press **`ESC`** or click **`[Windowed]`** to return to windowed view.
+  - **Responsive Fullscreen Mode & Stepped ESC Navigation**: Press **`F`**, double-click the video, or click **`[Fullscreen]`** to expand the video across your full game viewport with aspect-ratio letterboxing. Pressing **`ESC`** in fullscreen drops back to windowed mode; pressing **`ESC`** in windowed mode closes the video player.
+  - **Zero Overhead & Clean GPU Memory Reclamation**: Closing the player via `[Close]`, the title-bar `X`, `ESC`, or `F12` instantly shuts down the background helper process and audio stream. Textures and GPU staging buffers are freed at the frame boundary (`deferred release`) to prevent driver crashes, ensuring 0 bytes VRAM and 0% CPU remain when you return to gaming.
   - **Two-Step Clip Deletion**: Click **`[Delete]`** and confirm with **`[Confirm?]`** to permanently remove unwanted clips from disk.
 - **Universal Multi-Vendor Hardware Support & Sensor Hardening**:
   - **NVIDIA (`NVML` + Optimus `D3cold` Protection + dGPU Priority)**: Uses `libnvidia-ml.so.1` dynamically, checks `/sys/bus/pci/devices/*/power/runtime_status` before initializing NVML so sleeping laptop dGPUs (`suspended` / `D3cold`) are never woken up on battery, and iterates all NVIDIA adapters (`nvmlDeviceGetCount_v2`) to prioritize the dedicated discrete GPU (`dGPU`) via active DRM PCI Device ID matching or highest VRAM capacity.
@@ -279,7 +281,7 @@ Once inside a game with `FPS_HUD=1`, use these shortcuts. All 6 shortcuts suppor
 | **`ESC`** | Close the GUI menu (or cancel active keybind capture) and return mouse control to the game |
 | **`F`** *(In Video Player)* | Toggle between Windowed and Fullscreen player view |
 | **`Double-Click`** *(On Video)* | Toggle between Windowed and Fullscreen player view |
-| **`ESC`** *(In Fullscreen Player)* | Exit fullscreen and return to windowed player modal |
+| **`ESC`** *(In Video Player)* | Exit fullscreen to windowed mode; if pressed in windowed mode, close the video player |
 
 > [!TIP]
 > **Steam Deck and Handheld Devices**
@@ -349,8 +351,9 @@ To ensure high-framerate gameplay is never penalized during active recording:
    - Click the **`[DIR] Open Save Folder`** button in Column 3 of the GUI to open your recordings directory directly in your desktop file manager.
 5. **Review Clips in the In-Game Video Player**:
    - In Column 3 of the in-game menu (`Insert` / `F12`), browse saved clips in the **Recorded Clips Gallery**.
-   - Click **`[Play]`** on any clip to launch the embedded video player.
+   - Click **`[Play]`** on any clip to launch the embedded video player (supports smooth playback up to 120 FPS).
    - Press **`F`** or double-click the video canvas to toggle fullscreen mode. Audio plays directly through PulseAudio / PipeWire at your system volume.
+   - Press **`ESC`** to return from fullscreen to the windowed modal, then press **`ESC`** again (or click **`[Close]`** / **`X`**) to close the player. All VRAM and CPU usage immediately drops to 0%.
    - Click **`[Delete]`** and confirm with **`[Confirm?]`** to permanently delete a clip from disk.
 
 ---
