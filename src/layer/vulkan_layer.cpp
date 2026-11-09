@@ -115,8 +115,17 @@ struct DeviceData {
   PFN_vkMapMemory MapMemory = nullptr;
   PFN_vkUnmapMemory UnmapMemory = nullptr;
   PFN_vkCmdCopyImageToBuffer CmdCopyImageToBuffer = nullptr;
+  PFN_vkCmdCopyBufferToImage CmdCopyBufferToImage = nullptr;
   PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
   PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges = nullptr;
+
+  PFN_vkCreateImage CreateImage = nullptr;
+  PFN_vkDestroyImage DestroyImage = nullptr;
+  PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements = nullptr;
+  PFN_vkBindImageMemory BindImageMemory = nullptr;
+  PFN_vkCreateSampler CreateSampler = nullptr;
+  PFN_vkDestroySampler DestroySampler = nullptr;
+  PFN_vkFlushMappedMemoryRanges FlushMappedMemoryRanges = nullptr;
 
   // VRAM memory budget extension support (VK_EXT_memory_budget) & throttling
   bool has_memory_budget_ext = false;
@@ -215,6 +224,270 @@ PFN_vkVoidFunction imgui_vk_loader(const char* function_name, void* user_data) {
   return nullptr;
 }
 
+struct VulkanPlayerState {
+  VkDevice device = VK_NULL_HANDLE;
+  DeviceData* dd = nullptr;
+  VkImage image = VK_NULL_HANDLE;
+  VkDeviceMemory image_memory = VK_NULL_HANDLE;
+  VkImageView image_view = VK_NULL_HANDLE;
+  VkSampler sampler = VK_NULL_HANDLE;
+  VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+
+  static constexpr size_t kStagingRingCount = 2;
+  struct StagingBuffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    VkDeviceSize size = 0;
+  };
+  StagingBuffer staging[kStagingRingCount];
+  size_t current_staging_idx = 0;
+
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint64_t last_seq = 0;
+  bool needs_copy = false;
+  bool image_initialized = false;
+  size_t copy_staging_idx = 0;
+};
+
+static VulkanPlayerState g_player_vk_state;
+static SwapchainData* g_current_rendering_sd = nullptr;
+
+static uint32_t find_memory_type_index(DeviceData* dd, uint32_t type_filter,
+                                       VkMemoryPropertyFlags properties) {
+  if (!dd || !dd->instance_data || !dd->instance_data->GetPhysicalDeviceMemoryProperties) {
+    return 0xFFFFFFFF;
+  }
+  VkPhysicalDeviceMemoryProperties mem_props{};
+  dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
+  for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+    if ((type_filter & (1u << i)) &&
+        (mem_props.memoryTypes[i].propertyFlags & properties) == properties) {
+      return i;
+    }
+  }
+  return 0xFFFFFFFF;
+}
+
+static void vulkan_player_release(DeviceData* dd, VulkanPlayerState& state) {
+  if (!state.device || !dd) return;
+
+  if (dd->DeviceWaitIdle) {
+    dd->DeviceWaitIdle(state.device);
+  }
+
+  if (state.descriptor_set != VK_NULL_HANDLE) {
+    ImGui_ImplVulkan_RemoveTexture(state.descriptor_set);
+    state.descriptor_set = VK_NULL_HANDLE;
+  }
+  if (state.image_view != VK_NULL_HANDLE && dd->DestroyImageView) {
+    dd->DestroyImageView(state.device, state.image_view, nullptr);
+    state.image_view = VK_NULL_HANDLE;
+  }
+  if (state.image != VK_NULL_HANDLE && dd->DestroyImage) {
+    dd->DestroyImage(state.device, state.image, nullptr);
+    state.image = VK_NULL_HANDLE;
+  }
+  if (state.image_memory != VK_NULL_HANDLE && dd->FreeMemory) {
+    dd->FreeMemory(state.device, state.image_memory, nullptr);
+    state.image_memory = VK_NULL_HANDLE;
+  }
+  if (state.sampler != VK_NULL_HANDLE && dd->DestroySampler) {
+    dd->DestroySampler(state.device, state.sampler, nullptr);
+    state.sampler = VK_NULL_HANDLE;
+  }
+  for (size_t i = 0; i < VulkanPlayerState::kStagingRingCount; ++i) {
+    if (state.staging[i].mapped && dd->UnmapMemory) {
+      dd->UnmapMemory(state.device, state.staging[i].memory);
+      state.staging[i].mapped = nullptr;
+    }
+    if (state.staging[i].buffer && dd->DestroyBuffer) {
+      dd->DestroyBuffer(state.device, state.staging[i].buffer, nullptr);
+      state.staging[i].buffer = VK_NULL_HANDLE;
+    }
+    if (state.staging[i].memory && dd->FreeMemory) {
+      dd->FreeMemory(state.device, state.staging[i].memory, nullptr);
+      state.staging[i].memory = VK_NULL_HANDLE;
+    }
+    state.staging[i].size = 0;
+  }
+  state.width = 0;
+  state.height = 0;
+  state.last_seq = 0;
+  state.needs_copy = false;
+  state.image_initialized = false;
+  state.device = VK_NULL_HANDLE;
+  state.dd = nullptr;
+}
+
+static ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                  uint64_t seq) {
+  if (!rgba || w == 0 || h == 0) return 0;
+  if (!g_current_rendering_sd || !g_current_rendering_sd->device_data) return 0;
+
+  DeviceData* dd = g_current_rendering_sd->device_data;
+  VulkanPlayerState& state = g_player_vk_state;
+
+  if (!dd->CreateImage || !dd->DestroyImage || !dd->GetImageMemoryRequirements ||
+      !dd->BindImageMemory || !dd->CreateSampler || !dd->DestroySampler ||
+      !dd->CmdCopyBufferToImage) {
+    return 0;
+  }
+
+  if (state.device != dd->device || state.width != w || state.height != h ||
+      state.image == VK_NULL_HANDLE) {
+    vulkan_player_release(dd, state);
+
+    state.device = dd->device;
+    state.dd = dd;
+    state.width = w;
+    state.height = h;
+
+    size_t required_bytes = static_cast<size_t>(w) * h * 4;
+
+    for (size_t i = 0; i < VulkanPlayerState::kStagingRingCount; ++i) {
+      VkBufferCreateInfo binfo{};
+      binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      binfo.size = required_bytes;
+      binfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      binfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+      if (dd->CreateBuffer(dd->device, &binfo, nullptr, &state.staging[i].buffer) != VK_SUCCESS) {
+        vulkan_player_release(dd, state);
+        return 0;
+      }
+
+      VkMemoryRequirements breq{};
+      dd->GetBufferMemoryRequirements(dd->device, state.staging[i].buffer, &breq);
+      uint32_t host_mem_type = find_memory_type_index(
+          dd, breq.memoryTypeBits,
+          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      if (host_mem_type == 0xFFFFFFFF) {
+        host_mem_type =
+            find_memory_type_index(dd, breq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+      }
+      if (host_mem_type == 0xFFFFFFFF) {
+        vulkan_player_release(dd, state);
+        return 0;
+      }
+
+      VkMemoryAllocateInfo alloc_info{};
+      alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      alloc_info.allocationSize = breq.size;
+      alloc_info.memoryTypeIndex = host_mem_type;
+      if (dd->AllocateMemory(dd->device, &alloc_info, nullptr, &state.staging[i].memory) !=
+          VK_SUCCESS) {
+        vulkan_player_release(dd, state);
+        return 0;
+      }
+      dd->BindBufferMemory(dd->device, state.staging[i].buffer, state.staging[i].memory, 0);
+      dd->MapMemory(dd->device, state.staging[i].memory, 0, VK_WHOLE_SIZE, 0,
+                    &state.staging[i].mapped);
+      state.staging[i].size = required_bytes;
+    }
+
+    VkImageCreateInfo img_info{};
+    img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img_info.imageType = VK_IMAGE_TYPE_2D;
+    img_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    img_info.extent = {w, h, 1};
+    img_info.mipLevels = 1;
+    img_info.arrayLayers = 1;
+    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (dd->CreateImage(dd->device, &img_info, nullptr, &state.image) != VK_SUCCESS) {
+      vulkan_player_release(dd, state);
+      return 0;
+    }
+
+    VkMemoryRequirements img_req{};
+    dd->GetImageMemoryRequirements(dd->device, state.image, &img_req);
+    uint32_t dev_mem_type =
+        find_memory_type_index(dd, img_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (dev_mem_type == 0xFFFFFFFF) {
+      dev_mem_type = find_memory_type_index(dd, img_req.memoryTypeBits, 0);
+    }
+    if (dev_mem_type == 0xFFFFFFFF) {
+      vulkan_player_release(dd, state);
+      return 0;
+    }
+
+    VkMemoryAllocateInfo img_alloc{};
+    img_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    img_alloc.allocationSize = img_req.size;
+    img_alloc.memoryTypeIndex = dev_mem_type;
+    if (dd->AllocateMemory(dd->device, &img_alloc, nullptr, &state.image_memory) != VK_SUCCESS) {
+      vulkan_player_release(dd, state);
+      return 0;
+    }
+    dd->BindImageMemory(dd->device, state.image, state.image_memory, 0);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = state.image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    if (dd->CreateImageView(dd->device, &view_info, nullptr, &state.image_view) != VK_SUCCESS) {
+      vulkan_player_release(dd, state);
+      return 0;
+    }
+
+    VkSamplerCreateInfo samp_info{};
+    samp_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samp_info.magFilter = VK_FILTER_LINEAR;
+    samp_info.minFilter = VK_FILTER_LINEAR;
+    samp_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samp_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp_info.minLod = -1000.0f;
+    samp_info.maxLod = 1000.0f;
+    samp_info.maxAnisotropy = 1.0f;
+    if (dd->CreateSampler(dd->device, &samp_info, nullptr, &state.sampler) != VK_SUCCESS) {
+      vulkan_player_release(dd, state);
+      return 0;
+    }
+
+    state.descriptor_set = ImGui_ImplVulkan_AddTexture(state.sampler, state.image_view,
+                                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    state.image_initialized = false;
+  }
+
+  if (seq != state.last_seq || !state.image_initialized) {
+    state.current_staging_idx =
+        (state.current_staging_idx + 1) % VulkanPlayerState::kStagingRingCount;
+    auto& st = state.staging[state.current_staging_idx];
+    if (st.mapped) {
+      std::memcpy(st.mapped, rgba, static_cast<size_t>(w) * h * 4);
+      if (dd->FlushMappedMemoryRanges) {
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = st.memory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        dd->FlushMappedMemoryRanges(dd->device, 1, &range);
+      }
+    }
+    state.needs_copy = true;
+    state.copy_staging_idx = state.current_staging_idx;
+    state.last_seq = seq;
+  }
+
+  return (ImTextureID)state.descriptor_set;
+}
+
+static void vulkan_player_texture_releaser() {
+  if (g_player_vk_state.dd) {
+    vulkan_player_release(g_player_vk_state.dd, g_player_vk_state);
+  }
+}
+
 void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
   if (!sd) return;
   std::lock_guard<std::mutex> lock(sd->mutex);
@@ -227,6 +500,7 @@ void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
 
   if (sd->imgui_context) {
     ImGui::SetCurrentContext(sd->imgui_context);
+    vulkan_player_release(dd, g_player_vk_state);
     if (sd->imgui_initialized) {
       ImGui_ImplVulkan_Shutdown();
       sd->imgui_initialized = false;
@@ -436,12 +710,8 @@ bool init_swapchain_overlay(SwapchainData* sd) {
 
   sd->imgui_initialized = ImGui_ImplVulkan_Init(&init_info);
   if (sd->imgui_initialized) {
-    fpshud::register_player_texture_backend(
-        [](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t /*seq*/) -> ImTextureID {
-          if (!rgba || w == 0 || h == 0) return 0;
-          return 0;
-        },
-        []() {});
+    fpshud::register_player_texture_backend(vulkan_player_texture_provider,
+                                            vulkan_player_texture_releaser);
   }
   return sd->imgui_initialized;
 }
@@ -864,6 +1134,13 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     LOAD_DEV_FN(CmdCopyImageToBuffer);
     LOAD_DEV_FN(CmdPipelineBarrier);
     LOAD_DEV_FN(InvalidateMappedMemoryRanges);
+    LOAD_DEV_FN(CreateImage);
+    LOAD_DEV_FN(DestroyImage);
+    LOAD_DEV_FN(GetImageMemoryRequirements);
+    LOAD_DEV_FN(BindImageMemory);
+    LOAD_DEV_FN(CreateSampler);
+    LOAD_DEV_FN(DestroySampler);
+    LOAD_DEV_FN(FlushMappedMemoryRanges);
 #undef LOAD_DEV_FN
 
     // Check VK_EXT_memory_budget extension presence
@@ -1381,6 +1658,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
 
     {
       std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);
+      g_current_rendering_sd = sd.get();
       ImGui::SetCurrentContext(sd->imgui_context);
       ImGuiIO& io = ImGui::GetIO();
       io.DisplaySize = ImVec2(w, h);
@@ -1396,6 +1674,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
 
         ImGui::Render();
       }
+      g_current_rendering_sd = nullptr;
     }
 
     bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request() &&
@@ -1466,6 +1745,71 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       record_image_copy();
       frame.has_valid_screenshot = true;
       clean_shot_recorded = true;
+    }
+
+    // Copy pending video playback frame from staging buffer to optimal VkImage
+    if (g_player_vk_state.needs_copy && g_player_vk_state.image != VK_NULL_HANDLE &&
+        dd->CmdPipelineBarrier && dd->CmdCopyBufferToImage) {
+      size_t sidx = g_player_vk_state.copy_staging_idx;
+      VkBuffer src_buf = g_player_vk_state.staging[sidx].buffer;
+
+      VkImageMemoryBarrier b1{};
+      b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      b1.oldLayout = g_player_vk_state.image_initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                         : VK_IMAGE_LAYOUT_UNDEFINED;
+      b1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b1.image = g_player_vk_state.image;
+      b1.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      b1.subresourceRange.baseMipLevel = 0;
+      b1.subresourceRange.levelCount = 1;
+      b1.subresourceRange.baseArrayLayer = 0;
+      b1.subresourceRange.layerCount = 1;
+      b1.srcAccessMask = g_player_vk_state.image_initialized ? VK_ACCESS_SHADER_READ_BIT : 0;
+      b1.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+      dd->CmdPipelineBarrier(frame.command_buffer,
+                             g_player_vk_state.image_initialized
+                                 ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                 : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b1);
+
+      VkBufferImageCopy region{};
+      region.bufferOffset = 0;
+      region.bufferRowLength = 0;
+      region.bufferImageHeight = 0;
+      region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      region.imageSubresource.mipLevel = 0;
+      region.imageSubresource.baseArrayLayer = 0;
+      region.imageSubresource.layerCount = 1;
+      region.imageOffset = {0, 0, 0};
+      region.imageExtent = {g_player_vk_state.width, g_player_vk_state.height, 1};
+
+      dd->CmdCopyBufferToImage(frame.command_buffer, src_buf, g_player_vk_state.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+      VkImageMemoryBarrier b2{};
+      b2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      b2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      b2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      b2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b2.image = g_player_vk_state.image;
+      b2.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      b2.subresourceRange.baseMipLevel = 0;
+      b2.subresourceRange.levelCount = 1;
+      b2.subresourceRange.baseArrayLayer = 0;
+      b2.subresourceRange.layerCount = 1;
+      b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      b2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+      dd->CmdPipelineBarrier(frame.command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &b2);
+
+      g_player_vk_state.image_initialized = true;
+      g_player_vk_state.needs_copy = false;
     }
 
     VkRenderPassBeginInfo rp_begin{};
