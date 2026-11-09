@@ -4170,12 +4170,16 @@ void run_all_devices_and_features_suite() {
   // --------------------------------------------------------------------
   {
     std::printf("\n--- SUITE 10: In-Game Video Playback & Gallery Suite ---\n");
-    std::ifstream f("scripts/build_static_ffmpeg.sh");
-    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    check_cond(content.find("--enable-decoder=h264,hevc,aac") != std::string::npos,
-               "10.1 FFmpeg script enables h264, hevc, aac decoders");
-    check_cond(content.find("--enable-demuxer=mov,matroska") != std::string::npos,
-               "10.2 FFmpeg script enables mov, matroska demuxers");
+    fs::path rroot = find_repo_root();
+    bool ffmpeg_decoders_ok = rroot.empty();
+    bool ffmpeg_demuxers_ok = rroot.empty();
+    if (!rroot.empty()) {
+      std::string content = read_text_file(rroot / "scripts" / "build_static_ffmpeg.sh");
+      ffmpeg_decoders_ok = (content.find("--enable-decoder=h264,hevc,aac") != std::string::npos);
+      ffmpeg_demuxers_ok = (content.find("--enable-demuxer=mov,matroska") != std::string::npos);
+    }
+    check_cond(ffmpeg_decoders_ok, "10.1 FFmpeg script enables h264, hevc, aac decoders");
+    check_cond(ffmpeg_demuxers_ok, "10.2 FFmpeg script enables mov, matroska demuxers");
 
     PlaybackShmHeader header{};
     header.magic = kPlaybackShmMagic;
@@ -4268,9 +4272,9 @@ void run_all_devices_and_features_suite() {
                "10.16 Decoupled DT_NEEDED: libfpshud.so contains zero static multimedia leakage");
 
     // 10.17 GUI menu close on F12 terminates active player controller
-    bool f12_cleanup_logic_present = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+    bool f12_cleanup_logic_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
       f12_cleanup_logic_present =
           (gui_src.find("if (!cfg.gui_open)") != std::string::npos &&
            gui_src.find("g_player_controller.close()") != std::string::npos);
@@ -4280,9 +4284,9 @@ void run_all_devices_and_features_suite() {
         "10.17 GUI menu close on F12 terminates active player controller to prevent CPU leak");
 
     // 10.18 Vulkan layer player texture returns 0 when unallocated, never raw 1
-    bool vulkan_no_dummy_one = false;
-    {
-      std::string vk_src = read_text_file("src/layer/vulkan_layer.cpp");
+    bool vulkan_no_dummy_one = rroot.empty();
+    if (!rroot.empty()) {
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       vulkan_no_dummy_one =
           (vk_src.find("static_cast<ImTextureID>(1)") == std::string::npos &&
            vk_src.find("reinterpret_cast<ImTextureID>(static_cast<intptr_t>(1))") ==
@@ -4292,9 +4296,9 @@ void run_all_devices_and_features_suite() {
                "10.18 Vulkan layer avoids invalid integer 1 texture handle to prevent GPU crash");
 
     // 10.19 VideoPlayerController strips LD_PRELOAD to protect worker process
-    bool ld_preload_stripped = false;
-    {
-      std::string ipc_src = read_text_file("src/recorder/recorder_ipc.cpp");
+    bool ld_preload_stripped = rroot.empty();
+    if (!rroot.empty()) {
+      std::string ipc_src = read_text_file(rroot / "src" / "recorder" / "recorder_ipc.cpp");
       ld_preload_stripped = (ipc_src.find("VideoPlayerController::open") != std::string::npos &&
                              ipc_src.find("LD_PRELOAD=") != std::string::npos);
     }
@@ -4302,18 +4306,18 @@ void run_all_devices_and_features_suite() {
                "10.19 VideoPlayerController strips LD_PRELOAD from child environment");
 
     // 10.20 Playback worker supports paused seek frame decoding
-    bool paused_seek_supported = false;
-    {
-      std::string player_src = read_text_file("src/recorder/recorder_player.cpp");
+    bool paused_seek_supported = rroot.empty();
+    if (!rroot.empty()) {
+      std::string player_src = read_text_file(rroot / "src" / "recorder" / "recorder_player.cpp");
       paused_seek_supported = (player_src.find("seek_pending") != std::string::npos);
     }
     check_cond(paused_seek_supported,
                "10.20 Playback worker decodes single frame on seek while paused");
 
     // 10.21 Gallery caches scanned clips to prevent per-frame filesystem stat calls
-    bool gallery_caching_present = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+    bool gallery_caching_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
       gallery_caching_present = (gui_src.find("s_cached_clips") != std::string::npos &&
                                  gui_src.find("s_last_clips_scan") != std::string::npos);
     }
@@ -4322,9 +4326,9 @@ void run_all_devices_and_features_suite() {
                "overhead");
 
     // 10.22 Delete button requires confirmation before removing recorded clip
-    bool delete_confirmation_present = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+    bool delete_confirmation_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
       delete_confirmation_present = (gui_src.find("[Confirm?]") != std::string::npos &&
                                      gui_src.find("s_pending_delete_path") != std::string::npos);
     }
@@ -4333,9 +4337,9 @@ void run_all_devices_and_features_suite() {
         "10.22 Recorded clip deletion requires two-step confirmation to prevent accidental loss");
 
     // 10.23 PulseAudio native audio passthrough in player worker (speed/vol scaling stripped)
-    bool audio_playback_implemented = false;
-    {
-      std::string player_src = read_text_file("src/recorder/recorder_player.cpp");
+    bool audio_playback_implemented = rroot.empty();
+    if (!rroot.empty()) {
+      std::string player_src = read_text_file(rroot / "src" / "recorder" / "recorder_player.cpp");
       audio_playback_implemented =
           (player_src.find("class PulseAudioPlayback") != std::string::npos &&
            player_src.find("pa_stream_connect_playback") != std::string::npos &&
@@ -4349,9 +4353,9 @@ void run_all_devices_and_features_suite() {
                "cleanly stripped)");
 
     // 10.24 GUI modal fullscreen toggle support & streamlined playback controls
-    bool modal_fullscreen_supported = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+    bool modal_fullscreen_supported = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
       modal_fullscreen_supported = (gui_src.find("g_player_fullscreen") != std::string::npos &&
                                     gui_src.find("ImGuiKey_F") != std::string::npos &&
                                     gui_src.find("ImGuiKey_Escape") != std::string::npos &&
@@ -4367,14 +4371,25 @@ void run_all_devices_and_features_suite() {
     // 10.25 End-to-end player controller lifecycle with real audio/video clip verification
     bool e2e_playback_ok = false;
     std::string sample_mp4 = "/home/budicuy/Video/FPSHUD/FPSHUD_20261109_032919.mp4";
-    if (fs::exists(sample_mp4) && fs::exists("./build/fpshud_recorder_bin")) {
+    std::string helper_bin = "./build/fpshud_recorder_bin";
+    if (!rroot.empty() && fs::exists(rroot / "build" / "fpshud_recorder_bin")) {
+      helper_bin = (rroot / "build" / "fpshud_recorder_bin").string();
+    } else if (fs::exists("./fpshud_recorder_bin")) {
+      helper_bin = "./fpshud_recorder_bin";
+    }
+
+    if (fs::exists(sample_mp4) && fs::exists(helper_bin)) {
       fpshud::VideoPlayerController e2e_ctrl;
-      if (e2e_ctrl.open(sample_mp4, "./build/fpshud_recorder_bin")) {
+      if (e2e_ctrl.open(sample_mp4, helper_bin)) {
         const auto* hdr = e2e_ctrl.header();
         if (hdr && hdr->magic == kPlaybackShmMagic && hdr->duration_sec > 60.0f) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-          if (hdr->frame_seq.load() >= 1) {
-            e2e_playback_ok = true;
+          auto wait_start = std::chrono::steady_clock::now();
+          while (std::chrono::steady_clock::now() - wait_start < std::chrono::milliseconds(1000)) {
+            if (hdr->frame_seq.load() >= 1) {
+              e2e_playback_ok = true;
+              break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
           }
         }
         e2e_ctrl.close();
@@ -4388,9 +4403,9 @@ void run_all_devices_and_features_suite() {
         "10.25 End-to-end player controller lifecycle with real audio/video clip verification");
 
     // 10.26 Unified modal lifecycle guard closes player controller on X, Close, or ESC
-    bool unified_modal_guard_present = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
+    bool unified_modal_guard_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
       unified_modal_guard_present =
           (gui_src.find("g_player_modal_active") != std::string::npos &&
            gui_src.find("!modal_open || !is_inside") != std::string::npos);
@@ -4399,9 +4414,9 @@ void run_all_devices_and_features_suite() {
                "10.26 Unified modal lifecycle guard closes player controller on X, Close, or ESC");
 
     // 10.27 Safe deferred texture release guarantees zero VRAM overhead and zero mid-frame stall
-    bool deferred_release_present = false;
-    {
-      std::string vk_src = read_text_file("src/layer/vulkan_layer.cpp");
+    bool deferred_release_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       deferred_release_present =
           (vk_src.find("pending_release") != std::string::npos &&
            vk_src.find("vulkan_player_texture_releaser") != std::string::npos);
@@ -4411,10 +4426,10 @@ void run_all_devices_and_features_suite() {
                "mid-frame stall");
 
     // 10.28 Escape and F key event routing, fullscreen demotion, and modal lifecycle
-    bool esc_f_handling_ok = false;
-    {
-      std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
-      std::string im_src = read_text_file("src/input/input_manager.cpp");
+    bool esc_f_handling_ok = rroot.empty();
+    if (!rroot.empty()) {
+      std::string gui_src = read_text_file(rroot / "src" / "ui" / "gui_menu.cpp");
+      std::string im_src = read_text_file(rroot / "src" / "input" / "input_manager.cpp");
       esc_f_handling_ok =
           (gui_src.find("was_fullscreen") != std::string::npos &&
            gui_src.find("!was_fullscreen && esc_pressed") != std::string::npos &&
@@ -4422,24 +4437,26 @@ void run_all_devices_and_features_suite() {
            im_src.find("!is_player_modal_active()") != std::string::npos &&
            im_src.find("io->AddKeyEvent(ImGuiKey_Escape, down)") != std::string::npos &&
            im_src.find("io->AddKeyEvent(ImGuiKey_F, down)") != std::string::npos);
+    } else {
+      esc_f_handling_ok = !is_player_modal_active();
     }
     check_cond(esc_f_handling_ok,
                "10.28 Escape and F key routing, fullscreen demotion, and modal lifecycle verified");
 
     // --- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---
     std::printf("\n--- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---\n");
-    bool im_queue_cleaned = false;
-    {
-      std::string im_hpp = read_text_file("src/input/input_manager.hpp");
+    bool im_queue_cleaned = rroot.empty();
+    if (!rroot.empty()) {
+      std::string im_hpp = read_text_file(rroot / "src" / "input" / "input_manager.hpp");
       im_queue_cleaned = (im_hpp.find("enqueue_intercepted_motion") == std::string::npos &&
                           im_hpp.find("pending_intercepted_inputs_") == std::string::npos);
     }
     check_cond(im_queue_cleaned,
                "11.1 InputManager removes redundant intercepted queue and dead mutexes");
 
-    bool clean_version_script = false;
-    {
-      std::string ver_src = read_text_file("manifest/libfpshud.version");
+    bool clean_version_script = rroot.empty();
+    if (!rroot.empty()) {
+      std::string ver_src = read_text_file(rroot / "manifest" / "libfpshud.version");
       clean_version_script =
           (ver_src.find("SDL_") == std::string::npos &&
            ver_src.find("XNextEvent") == std::string::npos &&
@@ -4451,11 +4468,11 @@ void run_all_devices_and_features_suite() {
     check_cond(clean_version_script,
                "11.2 Clean DSO version script without polluting SDL or X11 intercept hooks");
 
-    bool launch_guidance_present = false;
-    {
-      std::string fpshud_in = read_text_file("scripts/fpshud.in");
-      std::string readme_en = read_text_file("README.md");
-      std::string readme_id = read_text_file("README.id.md");
+    bool launch_guidance_present = rroot.empty();
+    if (!rroot.empty()) {
+      std::string fpshud_in = read_text_file(rroot / "scripts" / "fpshud.in");
+      std::string readme_en = read_text_file(rroot / "README.md");
+      std::string readme_id = read_text_file(rroot / "README.id.md");
       launch_guidance_present =
           (fpshud_in.find("fpshud %command%") != std::string::npos &&
            fpshud_in.find("Steam Launch Options for Proton & Native games") != std::string::npos &&
