@@ -548,10 +548,13 @@ FPS_HUD_FOR_LINUX/
 
 ## 9. Troubleshooting & Tanya Jawab (FAQ)
 
-1. **Menu GUI tidak terbuka atau klik mouse tembus ke dalam game:**
-   - Pada Wayland dan X11, penanganan input keyboard dan mouse berjalan langsung secara in-process. Pastikan jendela game sedang aktif dan terfokus, lalu tekan `Insert` atau `F12`.
-2. **Pembacaan daya CPU tanpa `sudo` vs dengan `fpshud --setup`:**
-   - Tanpa `sudo`, FPSHUD menggunakan Lapis 2 (estimasi dinamis TDP berdasarkan `constraint_0_max_power_uw` dan frekuensi kerja). Untuk membaca counter energi hardware RAPL langsung (Lapis 1/3), jalankan `~/.local/bin/fpshud --setup` guna memasang aturan udev `0440` (`GROUP="render"`, lihat [Bagian 2](#2-instalasi--izin-akses-sensor)).
+1. **Penanganan input, isolasi kursor mouse, dan tombol shortcut:**
+   - **Mencegah klik mouse tembus ke game (Steam Proton & Native)**: Pada game Steam Proton, gunakan launch options `~/.local/bin/fpshud %command%`. FPSHUD menangkap kursor mouse secara in-process dengan `EVIOCGRAB` non-blocking sehingga klik mouse saat menavigasi menu GUI tidak akan bocor ke game, kamera tidak berputar sendiri, dan tidak ada kursor ganda (*double cursor*).
+   - **Navigasi tombol `ESC` & `F` di pemutar video**: Jika pemutar video sedang dibuka, `InputManager` memprioritaskan pemutar: menekan `ESC` pertama kali keluar dari mode fullscreen ke windowed, dan menekan `ESC` kedua kali menutup pemutar video tanpa menutup menu utama HUD. Tombol `F` dapat ditekan kapan saja di dalam pemutar untuk beralih layar penuh. Menekan `ESC` saat pemutar video sudah tertutup akan menutup menu konfigurasi GUI dan mengembalikan kendali mouse ke game.
+2. **Mekanisme `sudo` dan pembacaan daya CPU:**
+   - **100% Bebas Sudo secara Default**: FPSHUD diinstal dan dijalankan sepenuhnya di ruang pengguna (`~/.local/`). Seluruh metrik (FPS, frametime, sensor GPU NVIDIA/AMD/Intel, RAM, Swap, PSI, Disk I/O, NVMe, Jaringan, dan shortcut input) beroperasi tanpa memerlukan hak root maupun grup khusus.
+   - **Daya CPU Tanpa Sudo**: Jika counter RAPL dikunci root (`0400`), FPSHUD secara otomatis menggunakan Lapis 2 (estimasi dinamis Watt berbasis batas daya PL1 `constraint_0_max_power_uw` dan rasio frekuensi boost)—angka Watt tetap akurat dan tidak pernah bernilai `0 W`.
+   - **Kapan Sudo Dibutuhkan?**: Akses `sudo` hanya opsional saat Anda menjalankan `~/.local/bin/fpshud --setup` jika Anda secara spesifik ingin membaca counter energi hardware RAPL langsung. Perintah ini membuat aturan udev berizin terbatas `GROUP="render", MODE="0440"` untuk memitigasi serangan side-channel Platypus (`CVE-2020-8694`).
 3. **Mengembalikan pengaturan ke default:**
    - Pada menu in-game GUI (`Insert` / `F12`), pilih **File -> Reset to Standard Default** di bilah menu atas, atau hapus berkas `~/.config/fpshud/config.ini`.
 4. **Kompatibilitas anti-cheat di game online:**

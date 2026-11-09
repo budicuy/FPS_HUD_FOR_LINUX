@@ -548,10 +548,13 @@ FPS_HUD_FOR_LINUX/
 
 ## 9. Troubleshooting & FAQ
 
-1. **GUI does not open or mouse clicks pass through to the game:**
-   - On Wayland and X11, FPSHUD handles keyboard events and mouse capture in-process. Verify the game window has active focus, then press `Insert` or `F12`.
-2. **CPU power readings without `sudo` vs with `fpshud --setup`:**
-   - Without `sudo`, FPSHUD uses Tier 2 dynamic estimation (`constraint_0_max_power_uw` scaled by CPU load and boost frequency). To read hardware RAPL energy counters directly (Tier 1/3), run `~/.local/bin/fpshud --setup` to install the scoped `0440` (`GROUP="render"`) udev rule (see [Section 2](#2-installation--sensor-permissions)).
+1. **Input handling, mouse cursor isolation, and shortcut keys:**
+   - **Preventing mouse click-through and camera spinning (Steam Proton & Native)**: For Steam Proton games, launch with `~/.local/bin/fpshud %command%`. FPSHUD isolates the cursor in-process via non-blocking `EVIOCGRAB` so clicks inside the GUI menu never bleed into the game, camera rotation stays locked, and no double cursor appears.
+   - **`ESC` & `F` key navigation in the video player**: When the video player modal is open, `InputManager` routes keys directly to the player: pressing `ESC` while fullscreen returns to windowed mode, and pressing `ESC` in windowed mode closes the video player without closing the main HUD overlay. Pressing `F` toggles fullscreen. Pressing `ESC` when the video player is closed dismisses the GUI menu and returns mouse control to the game.
+2. **The `sudo` mechanism and CPU wattage telemetry:**
+   - **100% Sudo-Free by Default**: FPSHUD installs and executes entirely in user space (`~/.local/`). All metrics (FPS, frametimes, NVIDIA/AMD/Intel GPU sensors, RAM, Swap, PSI, Disk I/O, NVMe, Network, and input shortcuts) function out of the box without root access or custom groups.
+   - **CPU Wattage Without Sudo**: If kernel RAPL counters are root-only (`0400`), FPSHUD automatically uses Layer 2 (real-time dynamic estimation using PL1 power ceiling `constraint_0_max_power_uw` and CPU boost frequency)—wattage remains accurate and never gets stuck at `0 W`.
+   - **When is Sudo Used?**: Root access is strictly optional. Running `~/.local/bin/fpshud --setup` asks for `sudo` only if you explicitly choose to configure the udev rule (`GROUP="render", MODE="0440"`) to read direct RAPL hardware energy counters while mitigating Platypus (`CVE-2020-8694`).
 3. **Resetting settings to default:**
    - In the in-game GUI (`Insert` / `F12`), select **File -> Reset to Standard Default** in the menu bar, or delete `~/.config/fpshud/config.ini`.
 4. **Anti-cheat compatibility in online games:**
