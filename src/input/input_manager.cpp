@@ -1,5 +1,4 @@
 #include "input_manager.hpp"
-#include "input/input_hooks.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
@@ -615,7 +614,6 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
     }
     if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
       set_mouse_grab(false);
-      fpshud::on_gui_state_changed(false);
       set_x11_grab(false);
       pending_ungrab_ = false;
     }
@@ -856,6 +854,15 @@ void InputManager::set_mouse_grab(bool grab) {
   }
 }
 
+bool InputManager::is_mouse_grabbed() const noexcept {
+  for (const auto& dev : evdev_devices_) {
+    if (dev.is_mouse && dev.is_grabbed) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void InputManager::set_x11_grab(bool grab) {
   init_x11_fallback();
   if (!x11_display_ || !x11_lib_) return;
@@ -920,7 +927,6 @@ void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width,
   // If ungrab was deferred until mouse button release, complete it now
   if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
     set_mouse_grab(false);
-    fpshud::on_gui_state_changed(false);
     set_x11_grab(false);
     pending_ungrab_ = false;
   }
@@ -1002,11 +1008,13 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     }
     io.AddMousePosEvent(cursor_x_, cursor_y_);
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.MouseDrawCursor = true;
     pending_ungrab_ = false;
     set_mouse_grab(true);
-    fpshud::on_gui_state_changed(true);
     set_x11_grab(true);
+    // Draw software cursor ONLY when physical mouse is grabbed by kernel.
+    // In fallback mode, the OS hardware cursor is already visible so drawing
+    // a second cursor causes double cursor.
+    io.MouseDrawCursor = is_mouse_grabbed();
   } else if (!cfg.gui_open && prev_gui_open_) {
     // GUI just closed: auto-save current config, release ImGui cursor/inputs, and ungrab mouse back
     // to game
@@ -1014,7 +1022,6 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     release_imgui_inputs(io);
     if (!mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
       set_mouse_grab(false);
-      fpshud::on_gui_state_changed(false);
       set_x11_grab(false);
       pending_ungrab_ = false;
     } else {
@@ -1024,7 +1031,6 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     }
   } else if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
     set_mouse_grab(false);
-    fpshud::on_gui_state_changed(false);
     set_x11_grab(false);
     pending_ungrab_ = false;
   }
@@ -1037,7 +1043,6 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
     if (prev_gui_open_) {
       release_imgui_inputs(io);
       set_mouse_grab(false);
-      fpshud::on_gui_state_changed(false);
       set_x11_grab(false);
       prev_gui_open_ = false;
       pending_ungrab_ = false;

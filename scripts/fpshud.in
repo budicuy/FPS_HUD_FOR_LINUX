@@ -60,11 +60,20 @@ check_status() {
     echo "===================================================================="
 
     local rapl_ok=0
+    local input_ok=0
 
     # 1. RAPL CPU Wattage
     for r in /sys/class/powercap/*rapl*/*/energy_uj /sys/class/powercap/*rapl*/energy_uj; do
         if [ -r "$r" ] 2>/dev/null; then
             rapl_ok=1
+            break
+        fi
+    done
+
+    # 2. Evdev input devices
+    for ev in /dev/input/event*; do
+        if [ -r "$ev" ] 2>/dev/null; then
+            input_ok=1
             break
         fi
     done
@@ -77,13 +86,18 @@ check_status() {
     fi
 
     echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAVAILABLE (Sudo-Free)\033[0m"
-    echo -e "  [+] Hotkey & Input Toggle (Wayland/X) : \033[32mAVAILABLE (In-Process Hook, Sudo-Free)\033[0m"
+    echo -n "  [+] Kernel Mouse Grab (Zero Bleed)    : "
+    if [ "$input_ok" -eq 1 ]; then
+        echo -e "\033[32mAVAILABLE (Direct Evdev Hardware Grab)\033[0m"
+    else
+        echo -e "\033[33mLIMITED (Fallback Mode - Run 'fpshud --setup' to enable Kernel Grab)\033[0m"
+    fi
 
     echo "--------------------------------------------------------------------"
-    if [ "$rapl_ok" -eq 1 ]; then
-        echo -e "\033[32mAll hardware sensor permissions are complete and ready to use!\033[0m"
+    if [ "$rapl_ok" -eq 1 ] && [ "$input_ok" -eq 1 ]; then
+        echo -e "\033[32mAll hardware sensor and input grab permissions are complete and ready to use!\033[0m"
     else
-        echo -e "\033[33mInput & RAM are 100% active without sudo. To enable direct CPU Wattage (RAPL), run:\033[0m"
+        echo -e "\033[33mTo enable direct CPU Wattage (RAPL) and Kernel Mouse Grab, run:\033[0m"
         echo "    fpshud --setup"
     fi
     echo "===================================================================="
@@ -102,7 +116,8 @@ run_setup() {
     echo "  2. What sudo does: writes /etc/udev/rules.d/99-fpshud-rapl.rules (mode 0440)"
     echo "     and executes 'udevadm control --reload-rules'. Without sudo, FPSHUD automatically"
     echo "     uses safe TDP + CPU frequency estimation (never stuck at 0W)."
-    echo "  3. Input hotkeys & RAM are already sudo-free and require no additional permissions."
+    echo "  3. Granting input group access (MODE=\"0664\", GROUP=\"input\") enables exclusive"
+    echo "     kernel-level hardware mouse grab (EVIOCGRAB), eliminating double cursor and click bleed."
     echo "--------------------------------------------------------------------"
 
     local user_consent=0
@@ -148,10 +163,21 @@ SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!
 EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
-    # 2. Reload udev rules
+    # 2. Kernel Evdev Mouse Input Grab rule (grants access to group 'input' and adds user)
+    TARGET_USER="${SUDO_USER:-$USER}"
+    echo "[*] Installing udev rule for kernel mouse grab (/etc/udev/rules.d/99-fpshud-input.rules)..."
+    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "EOF"
+KERNEL=="event*", SUBSYSTEM=="input", MODE="0664", GROUP="input"
+EOF'
+    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
+    $SUDO_CMD usermod -aG input "$TARGET_USER" 2>/dev/null || true
+    $SUDO_CMD chmod a+r /dev/input/event* 2>/dev/null || true
+
+    # 3. Reload udev rules
     echo "[*] Reloading system udev rules..."
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
     $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
 
     # 3. Flatpak Steam configuration
     TARGET_HOME="${HOME}"

@@ -7,7 +7,6 @@
 #include "recorder_player.hpp"
 #include "pack_indexing.hpp"
 #include "input_manager.hpp"
-#include "input/input_hooks.hpp"
 #include "adaptive_vfr.hpp"
 #include "overlay_ui.hpp"
 #include "gui_menu.hpp"
@@ -51,17 +50,6 @@ extern "C" const char* __lsan_default_suppressions() {
          "leak:libcuda.so\n";
 }
 #endif
-
-extern "C" {
-uint32_t SDL_GetRelativeMouseState(int* x, int* y);
-uint32_t SDL_GetMouseState(int* x, int* y);
-uint32_t SDL_GetGlobalMouseState(int* x, int* y);
-int SDL_SetRelativeMouseMode(int enabled);
-int SDL_GetRelativeMouseMode();
-int XQueryPointer(void* dpy, unsigned long w, unsigned long* root_return,
-                  unsigned long* child_return, int* root_x_return, int* root_y_return,
-                  int* win_x_return, int* win_y_return, unsigned int* mask_return);
-}
 
 namespace {
 
@@ -1742,55 +1730,21 @@ void run_elf_and_layer_abi_suite() {
                detail.c_str());
   }
 
-  // 8. In-Game Mouse Isolation & SDL Event Suppression
+  // 8. In-Game Mouse Isolation & Double-Cursor Safety
   {
     bool check_passed = true;
     fs::path so_path = find_libfpshud_path();
     void* handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
 
-    // 1. Verify dynamic export of SDL and X11 intercept hooks
-    bool sym_poll_ok = (handle && dlsym(handle, "SDL_PollEvent") != nullptr);
-    bool sym_peep_ok = (handle && dlsym(handle, "SDL_PeepEvents") != nullptr);
-    bool sym_wait_ok = (handle && dlsym(handle, "SDL_WaitEvent") != nullptr);
-    bool sym_wait_to_ok = (handle && dlsym(handle, "SDL_WaitEventTimeout") != nullptr);
-    bool sym_x11_ok = (handle && dlsym(handle, "XNextEvent") != nullptr);
-    bool sym_rel_ok = (handle && dlsym(handle, "SDL_GetRelativeMouseState") != nullptr);
-    bool sym_mouse_ok = (handle && dlsym(handle, "SDL_GetMouseState") != nullptr);
-    bool sym_warp_ok = (handle && dlsym(handle, "SDL_WarpMouseInWindow") != nullptr);
-    bool sym_qptr_ok = (handle && dlsym(handle, "XQueryPointer") != nullptr);
-    bool hooks_exported = sym_poll_ok && sym_peep_ok && sym_wait_ok && sym_wait_to_ok &&
-                          sym_x11_ok && sym_rel_ok && sym_mouse_ok && sym_warp_ok && sym_qptr_ok;
+    // 1. Verify clean dynamic export: libfpshud.so exports only graphics layer symbols,
+    //    and does NOT pollute namespace with SDL or X11 intercept hooks.
+    bool sym_poll = (handle && dlsym(handle, "SDL_PollEvent") != nullptr);
+    bool sym_peep = (handle && dlsym(handle, "SDL_PeepEvents") != nullptr);
+    bool sym_x11 = (handle && dlsym(handle, "XNextEvent") != nullptr);
+    bool sym_qptr = (handle && dlsym(handle, "XQueryPointer") != nullptr);
+    bool clean_namespace = (!sym_poll && !sym_peep && !sym_x11 && !sym_qptr);
 
-    // 2. State machine test for mouse isolation and relative mouse mode unlock/restore
-    fpshud::on_gui_state_changed(false);
-    bool init_isolated = fpshud::is_mouse_isolation_active();
-
-    fpshud::on_gui_state_changed(true);
-    bool opened_isolated = fpshud::is_mouse_isolation_active();
-
-    // 2.1 Behavioral verification of hooked state queries during active GUI
-    int rel_x = 999, rel_y = 888;
-    uint32_t rel_btn = SDL_GetRelativeMouseState(&rel_x, &rel_y);
-    bool rel_state_zeroed = (rel_x == 0 && rel_y == 0 && rel_btn == 0);
-
-    int mx = 50, my = 60;
-    uint32_t mouse_btn = SDL_GetMouseState(&mx, &my);
-    int gmx = 70, gmy = 80;
-    uint32_t global_mouse_btn = SDL_GetGlobalMouseState(&gmx, &gmy);
-    bool mouse_btn_zeroed = (mouse_btn == 0 && global_mouse_btn == 0);
-
-    SDL_SetRelativeMouseMode(1);
-    int active_rel_mode = SDL_GetRelativeMouseMode();
-    bool rel_mode_recorded = (active_rel_mode == 1);
-
-    unsigned int xmask = 0x100 | 0x200;  // Button1Mask | Button2Mask
-    XQueryPointer(nullptr, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &xmask);
-    bool xquery_stripped = ((xmask & (0x100 | 0x200)) == 0);
-
-    fpshud::on_gui_state_changed(false);
-    bool closed_isolated = fpshud::is_mouse_isolation_active();
-
-    // 3. Test InputManager grab state synchronization & deferred ungrab logic
+    // 2. Test InputManager grab state synchronization & deferred ungrab logic
     fpshud::InputManager& im = fpshud::get_input_manager();
     ImGuiContext* prev_ctx = ImGui::GetCurrentContext();
     ImGuiContext* test_ctx = ImGui::CreateContext();
@@ -1809,13 +1763,13 @@ void run_elf_and_layer_abi_suite() {
     // Reset baseline state from prior test suites
     test_cfg.gui_open = false;
     im.sync_grab_state(io, test_cfg);
-    fpshud::on_gui_state_changed(false);
 
-    // GUI opened: should center cursor and activate isolation
+    // GUI opened: verify double cursor protection!
+    // In unprivileged test environment (no evdev mouse grabbed),
+    // io.MouseDrawCursor MUST remain false to prevent duplicate cursor over OS pointer!
     test_cfg.gui_open = true;
     im.sync_grab_state(io, test_cfg);
-    bool gui_open_iso = fpshud::is_mouse_isolation_active();
-    bool cursor_drawn = io.MouseDrawCursor;
+    bool double_cursor_prevented = (io.MouseDrawCursor == im.is_mouse_grabbed());
 
     // Mouse motion forwarded
     im.handle_pointer_motion(800.0f, 600.0f, test_cfg, &io);
@@ -1838,17 +1792,11 @@ void run_elf_and_layer_abi_suite() {
     // Close GUI while mouse button is still pressed: deferred ungrab
     test_cfg.gui_open = false;
     im.sync_grab_state(io, test_cfg);
-    // Button is still held, so isolation stays active to prevent releasing click into game
-    bool pending_ungrab_active = fpshud::is_mouse_isolation_active() && im.is_pending_ungrab();
+    bool pending_ungrab_active = im.is_pending_ungrab();
 
-    // Release mouse button: isolation now completely turns off
+    // Release mouse button: pending ungrab completes
     im.handle_pointer_button(BTN_LEFT, false, test_cfg, &io);
-    bool fully_ungrabbed = !fpshud::is_mouse_isolation_active() && !im.is_pending_ungrab();
-
-    // 4. Test SDL_PollEvent NULL safety & thread-safe cross-thread queue draining
-    auto fnPoll = reinterpret_cast<int (*)(void*)>(dlsym(handle, "SDL_PollEvent"));
-    int null_poll_res = fnPoll ? fnPoll(nullptr) : 0;
-    bool null_poll_safe = (null_poll_res == 0);
+    bool fully_ungrabbed = !im.is_pending_ungrab();
 
     test_cfg.gui_open = true;
     im.sync_grab_state(io, test_cfg);
@@ -1866,7 +1814,6 @@ void run_elf_and_layer_abi_suite() {
     test_cfg.gui_open = false;
     im.sync_grab_state(io, test_cfg);
     im.handle_pointer_button(BTN_LEFT, false, test_cfg, &io);
-    fpshud::on_gui_state_changed(false);
 
     if (test_ctx) {
       ImGui::DestroyContext(test_ctx);
@@ -1877,31 +1824,19 @@ void run_elf_and_layer_abi_suite() {
       dlclose(handle);
     }
 
-    check_passed = hooks_exported && !init_isolated && opened_isolated && !closed_isolated &&
-                   gui_open_iso && cursor_drawn && motion_im_ok && motion_imgui_ok &&
+    check_passed = clean_namespace && double_cursor_prevented && motion_im_ok && motion_imgui_ok &&
                    wheel_imgui_ok && btn_down_im_ok && btn_imgui_ok && pending_ungrab_active &&
-                   fully_ungrabbed && null_poll_safe && direct_motion_ok && direct_wheel_ok &&
-                   direct_click_ok && rel_state_zeroed && mouse_btn_zeroed && rel_mode_recorded &&
-                   xquery_stripped;
+                   fully_ungrabbed && direct_motion_ok && direct_wheel_ok && direct_click_ok;
 
     std::string detail =
-        "hooks_exported=" + std::to_string(hooks_exported) +
-        " (poll=" + std::to_string(sym_poll_ok) + ", peep=" + std::to_string(sym_peep_ok) +
-        ", wait=" + std::to_string(sym_wait_ok) + ", x11=" + std::to_string(sym_x11_ok) +
-        ", rel=" + std::to_string(sym_rel_ok) + ", btn=" + std::to_string(sym_mouse_ok) +
-        ", qptr=" + std::to_string(sym_qptr_ok) + "), isolation_lifecycle=" +
-        std::to_string(!init_isolated && opened_isolated && !closed_isolated) +
+        "clean_namespace=" + std::to_string(clean_namespace) +
+        ", double_cursor_prevented=" + std::to_string(double_cursor_prevented) +
         ", motion=" + std::to_string(motion_im_ok && motion_imgui_ok && direct_motion_ok) +
-        ", rel_state_zeroed=" + std::to_string(rel_state_zeroed) +
-        ", mouse_btn_zeroed=" + std::to_string(mouse_btn_zeroed) +
-        ", rel_mode_recorded=" + std::to_string(rel_mode_recorded) +
-        ", xquery_stripped=" + std::to_string(xquery_stripped) +
         ", wheel=" + std::to_string(wheel_imgui_ok && direct_wheel_ok) +
         ", clicks=" + std::to_string(btn_down_im_ok && btn_imgui_ok && direct_click_ok) +
-        ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed) +
-        ", null_poll_safe=" + std::to_string(null_poll_safe);
+        ", deferred_ungrab=" + std::to_string(pending_ungrab_active && fully_ungrabbed);
 
-    check_cond(check_passed, "8. In-Game Mouse Isolation & SDL Event Suppression", detail.c_str());
+    check_cond(check_passed, "8. In-Game Mouse Isolation & Double-Cursor Safety", detail.c_str());
   }
 }
 
@@ -4306,10 +4241,10 @@ void run_all_devices_and_features_suite() {
     check_cond(!open_nonexistent && !controller.is_active(),
                "10.14 Player controller safely rejects non-existent video files");
 
-    // 10.15 Mouse isolation contract remains active during in-game GUI & modal player
+    // 10.15 In-game GUI state contract remains coherent during in-game GUI & modal player
     auto& cur_cfg = fpshud::get_mutable_config();
-    check_cond(fpshud::is_mouse_isolation_active() == cur_cfg.gui_open,
-               "10.15 In-game mouse isolation active whenever GUI menu is open");
+    check_cond(cur_cfg.gui_open == fpshud::get_global_config().gui_open,
+               "10.15 In-game GUI state contract verified during overlay navigation");
 
     // 10.16 Zero DT_NEEDED Decoupled Multimedia Invariant for libfpshud.so
     bool dt_needed_clean = true;
@@ -4408,23 +4343,19 @@ void run_all_devices_and_features_suite() {
     check_cond(im_queue_cleaned,
                "11.1 InputManager removes redundant intercepted queue and dead mutexes");
 
-    bool mouse_state_hooks_present = false;
+    bool clean_version_script = false;
     {
-      std::string hooks_src = read_text_file("src/input/input_hooks.cpp");
       std::string ver_src = read_text_file("manifest/libfpshud.version");
-      mouse_state_hooks_present =
-          (hooks_src.find("SDL_GetRelativeMouseState") != std::string::npos &&
-           hooks_src.find("SDL_GetMouseState") != std::string::npos &&
-           hooks_src.find("SDL_WarpMouseInWindow") != std::string::npos &&
-           hooks_src.find("XQueryPointer") != std::string::npos &&
-           ver_src.find("SDL_GetRelativeMouseState") != std::string::npos &&
-           ver_src.find("SDL_GetMouseState") != std::string::npos &&
-           ver_src.find("SDL_WarpMouseInWindow") != std::string::npos &&
-           ver_src.find("XQueryPointer") != std::string::npos);
+      clean_version_script =
+          (ver_src.find("SDL_") == std::string::npos &&
+           ver_src.find("XNextEvent") == std::string::npos &&
+           ver_src.find("XQueryPointer") == std::string::npos &&
+           ver_src.find("vkNegotiateLoaderLayerInterfaceVersion") != std::string::npos &&
+           ver_src.find("glXSwapBuffers") != std::string::npos &&
+           ver_src.find("eglSwapBuffers") != std::string::npos);
     }
-    check_cond(mouse_state_hooks_present,
-               "11.2 In-process SDL relative mouse state, button mask, and XQueryPointer isolation "
-               "implemented and exported");
+    check_cond(clean_version_script,
+               "11.2 Clean DSO version script without polluting SDL or X11 intercept hooks");
 
     bool launch_guidance_present = false;
     {

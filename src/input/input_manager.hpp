@@ -72,6 +72,7 @@ public:
     return (btn >= 0 && btn < 3) ? mouse_buttons_[btn] : false;
   }
   bool is_pending_ungrab() const noexcept { return pending_ungrab_; }
+  bool is_mouse_grabbed() const noexcept;
 
 private:
   void scan_evdev_devices();
