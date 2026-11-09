@@ -4406,9 +4406,9 @@ void run_all_devices_and_features_suite() {
           (vk_src.find("pending_release") != std::string::npos &&
            vk_src.find("vulkan_player_texture_releaser") != std::string::npos);
     }
-    check_cond(
-        deferred_release_present,
-        "10.27 Safe deferred texture release guarantees zero VRAM overhead and zero mid-frame stall");
+    check_cond(deferred_release_present,
+               "10.27 Safe deferred texture release guarantees zero VRAM overhead and zero "
+               "mid-frame stall");
 
     // --- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---
     std::printf("\n--- SUITE 11: In-Process Mouse Isolation & Clean Architecture ---\n");

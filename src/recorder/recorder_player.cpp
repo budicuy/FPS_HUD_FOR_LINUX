@@ -13,8 +13,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,9 +96,9 @@ public:
 
     pa_buffer_attr attr{};
     attr.maxlength = static_cast<uint32_t>(-1);
-    attr.tlength = static_cast<uint32_t>(pa_usec_to_bytes(200000, &ss));  // 200ms
-    attr.prebuf = 0;  // Start playing immediately without prebuffering block
-    attr.minreq = static_cast<uint32_t>(pa_usec_to_bytes(20000, &ss));  // 20ms chunks
+    attr.tlength = static_cast<uint32_t>(pa_usec_to_bytes(250000, &ss));  // 250ms buffer
+    attr.prebuf = static_cast<uint32_t>(pa_usec_to_bytes(100000, &ss));   // 100ms prebuffer
+    attr.minreq = static_cast<uint32_t>(pa_usec_to_bytes(20000, &ss));    // 20ms chunks
     attr.fragsize = static_cast<uint32_t>(-1);
 
     pa_stream_flags_t flags = static_cast<pa_stream_flags_t>(
@@ -301,10 +304,17 @@ int run_player_worker(int argc, char** argv) {
   }
 
   AVCodecContext* codec_ctx = avcodec_alloc_context3(decoder);
-  if (!codec_ctx || avcodec_parameters_to_context(codec_ctx, codec_par) < 0 ||
-      avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
-    std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to initialize video decoder.\n");
+  if (!codec_ctx || avcodec_parameters_to_context(codec_ctx, codec_par) < 0) {
+    std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to initialize video decoder context.\n");
     if (codec_ctx) avcodec_free_context(&codec_ctx);
+    avformat_close_input(&fmt_ctx);
+    return 6;
+  }
+  codec_ctx->thread_count = 0;  // Auto multi-threaded decode across all CPU cores
+  codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+  if (avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
+    std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to open video decoder.\n");
+    avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
     return 6;
   }
@@ -472,8 +482,6 @@ int run_player_worker(int argc, char** argv) {
 
   AVFrame* raw_frame = av_frame_alloc();
   AVFrame* raw_audio_frame = av_frame_alloc();
-  AVFrame* rgba_frame = av_frame_alloc();
-  AVPacket* packet = av_packet_alloc();
 
   uint8_t* rgba_buffers[4] = {pixel_dest, nullptr, nullptr, nullptr};
   int rgba_linesizes[4] = {static_cast<int>(width * 4), 0, 0, 0};
@@ -487,11 +495,118 @@ int run_player_worker(int argc, char** argv) {
       width, height, (avg_fps.num > 0 ? av_q2d(avg_fps) : 60.0), duration_sec, socket_path.c_str());
 
   int client_sock = -1;
-  bool running = true;
-  bool seek_pending = true;  // Prime initial video frame & audio chunk immediately
-  auto last_frame_time = std::chrono::steady_clock::now();
+  std::atomic<bool> running{true};
+  std::atomic<bool> is_paused{false};
+  std::atomic<bool> seek_pending{true};  // Prime initial video frame & audio immediately
+  std::atomic<bool> flush_video_codec{false};
+  std::atomic<float> seek_request{-1.0f};
+  std::atomic<bool> eof_reached{false};
 
-  while (running) {
+  std::deque<AVPacket*> video_packet_queue;
+  std::mutex queue_mutex;
+  std::condition_variable queue_cv;
+
+  AVRational vid_tb = vid_stream->time_base;
+  float vid_time_base = static_cast<float>(av_q2d(vid_tb));
+
+  // Background Demuxer and PulseAudio Playback Thread
+  std::thread demux_thread([&]() {
+    AVPacket* pkt = av_packet_alloc();
+    while (running.load(std::memory_order_relaxed)) {
+      // Handle pending seek requests
+      float s_req = seek_request.exchange(-1.0f, std::memory_order_relaxed);
+      if (s_req >= 0.0f) {
+        int64_t target_ts = static_cast<int64_t>(s_req / vid_time_base);
+        av_seek_frame(fmt_ctx, video_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD);
+        if (aud_codec_ctx) {
+          avcodec_flush_buffers(aud_codec_ctx);
+        }
+        audio_pending.clear();
+        pulse_out.flush();
+        {
+          std::lock_guard<std::mutex> lock(queue_mutex);
+          for (AVPacket* p : video_packet_queue) {
+            av_packet_free(&p);
+          }
+          video_packet_queue.clear();
+        }
+        header->current_time_sec.store(s_req, std::memory_order_relaxed);
+        header->is_ended.store(false, std::memory_order_relaxed);
+        eof_reached.store(false, std::memory_order_relaxed);
+        flush_video_codec.store(true, std::memory_order_relaxed);
+        seek_pending.store(true, std::memory_order_relaxed);
+        queue_cv.notify_one();
+      }
+
+      if (is_paused.load(std::memory_order_relaxed)) {
+        pulse_out.iterate();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+
+      // Continuously feed audio to PulseAudio
+      drain_audio(pulse_out, audio_pending);
+
+      // Keep reading packets into queue if not full
+      bool should_read = false;
+      {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        if (video_packet_queue.size() < 40 && !eof_reached.load(std::memory_order_relaxed)) {
+          should_read = true;
+        } else {
+          queue_cv.wait_for(lock, std::chrono::milliseconds(4));
+        }
+      }
+
+      if (should_read) {
+        int res = av_read_frame(fmt_ctx, pkt);
+        if (res < 0) {
+          eof_reached.store(true, std::memory_order_relaxed);
+        } else if (audio_stream_idx >= 0 && pkt->stream_index == audio_stream_idx &&
+                   aud_codec_ctx && swr_audio) {
+          if (avcodec_send_packet(aud_codec_ctx, pkt) == 0) {
+            while (avcodec_receive_frame(aud_codec_ctx, raw_audio_frame) == 0) {
+              int in_rate = aud_codec_ctx->sample_rate > 0 ? aud_codec_ctx->sample_rate : 48000;
+              int max_out =
+                  av_rescale_rnd(swr_get_delay(swr_audio, in_rate) + raw_audio_frame->nb_samples,
+                                 48000, in_rate, AV_ROUND_UP);
+              if (max_out < 256) max_out = 256;
+
+              std::vector<int16_t> pcm_out(max_out * 2);
+              uint8_t* out_ptrs[1] = {reinterpret_cast<uint8_t*>(pcm_out.data())};
+              int converted = swr_convert(swr_audio, out_ptrs, max_out,
+                                          const_cast<const uint8_t**>(raw_audio_frame->data),
+                                          raw_audio_frame->nb_samples);
+              if (converted > 0) {
+                size_t sample_count = static_cast<size_t>(converted) * 2;
+                const uint8_t* bytes_ptr = reinterpret_cast<const uint8_t*>(pcm_out.data());
+                audio_pending.insert(audio_pending.end(), bytes_ptr,
+                                     bytes_ptr + (sample_count * sizeof(int16_t)));
+              }
+            }
+          }
+          av_packet_unref(pkt);
+          drain_audio(pulse_out, audio_pending);
+        } else if (pkt->stream_index == video_stream_idx) {
+          AVPacket* vp = av_packet_clone(pkt);
+          av_packet_unref(pkt);
+          {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            video_packet_queue.push_back(vp);
+          }
+          queue_cv.notify_one();
+        } else {
+          av_packet_unref(pkt);
+        }
+      }
+    }
+    av_packet_free(&pkt);
+  });
+
+  auto clock_anchor_time = std::chrono::steady_clock::now();
+  float clock_anchor_pts = 0.0f;
+
+  while (running.load(std::memory_order_relaxed)) {
     // 5. Handle incoming IPC commands without blocking
     if (client_sock < 0) {
       struct pollfd pfd{};
@@ -516,121 +631,143 @@ int run_player_worker(int argc, char** argv) {
         }
         if (n == sizeof(req)) {
           if (req.action == IpcPlaybackAction::Play) {
+            is_paused.store(false, std::memory_order_relaxed);
             header->is_playing.store(true, std::memory_order_relaxed);
+            clock_anchor_pts = header->current_time_sec.load(std::memory_order_relaxed);
+            clock_anchor_time = std::chrono::steady_clock::now();
             pulse_out.cork(false);
           } else if (req.action == IpcPlaybackAction::Pause) {
+            is_paused.store(true, std::memory_order_relaxed);
             header->is_playing.store(false, std::memory_order_relaxed);
             pulse_out.cork(true);
           } else if (req.action == IpcPlaybackAction::Seek) {
             float target_sec = std::max(0.0f, std::min(req.value, header->duration_sec));
-            int64_t target_ts = static_cast<int64_t>(target_sec / av_q2d(vid_stream->time_base));
-            av_seek_frame(fmt_ctx, video_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD);
-            avcodec_flush_buffers(codec_ctx);
-            if (aud_codec_ctx) {
-              avcodec_flush_buffers(aud_codec_ctx);
-            }
-            audio_pending.clear();
-            pulse_out.flush();
-            header->current_time_sec.store(target_sec, std::memory_order_relaxed);
-            header->is_ended.store(false, std::memory_order_relaxed);
-            seek_pending = true;
+            seek_request.store(target_sec, std::memory_order_relaxed);
+            clock_anchor_pts = target_sec;
+            clock_anchor_time = std::chrono::steady_clock::now();
           } else if (req.action == IpcPlaybackAction::Close) {
-            running = false;
+            running.store(false, std::memory_order_relaxed);
             break;
           }
         }
       }
     }
 
-    if (!running) break;
+    if (!running.load(std::memory_order_relaxed)) break;
 
-    // 6. Decode and display next video frame if playing or seek pending
-    if (header->is_playing.load(std::memory_order_relaxed) || seek_pending) {
-      auto now = std::chrono::steady_clock::now();
-      double elapsed = std::chrono::duration<double>(now - last_frame_time).count();
-      double target_delay = frame_interval;
+    // Check if video codec buffers need flushing after seek
+    if (flush_video_codec.exchange(false, std::memory_order_relaxed)) {
+      avcodec_flush_buffers(codec_ctx);
+    }
 
-      if (seek_pending || elapsed >= target_delay) {
-        last_frame_time = now;
-        bool is_seeking_only = seek_pending && !header->is_playing.load(std::memory_order_relaxed);
-        seek_pending = false;
+    // 6. Decode and display next video frame if playing or priming initial seek frame
+    bool playing = header->is_playing.load(std::memory_order_relaxed) &&
+                   !is_paused.load(std::memory_order_relaxed);
+    bool priming_seek = seek_pending.load(std::memory_order_relaxed);
 
-        int read_res = 0;
-        bool frame_decoded = false;
+    if (playing || priming_seek) {
+      AVPacket* vp = nullptr;
+      bool has_more_in_queue = false;
+      {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        if (!video_packet_queue.empty()) {
+          vp = video_packet_queue.front();
+          video_packet_queue.pop_front();
+          has_more_in_queue = !video_packet_queue.empty();
+          queue_cv.notify_one();
+        } else if (priming_seek) {
+          queue_cv.wait_for(lock, std::chrono::milliseconds(5));
+          if (!video_packet_queue.empty()) {
+            vp = video_packet_queue.front();
+            video_packet_queue.pop_front();
+            has_more_in_queue = !video_packet_queue.empty();
+            queue_cv.notify_one();
+          }
+        }
+      }
 
-        while ((read_res = av_read_frame(fmt_ctx, packet)) >= 0) {
-          if (packet->stream_index == video_stream_idx) {
-            if (avcodec_send_packet(codec_ctx, packet) == 0) {
-              if (avcodec_receive_frame(codec_ctx, raw_frame) == 0) {
-                // Scale YUV -> RGBA directly into SHM pixel buffer
+      if (vp) {
+        if (avcodec_send_packet(codec_ctx, vp) == 0) {
+          while (avcodec_receive_frame(codec_ctx, raw_frame) == 0) {
+            float frame_pts = (raw_frame->pts != AV_NOPTS_VALUE)
+                                  ? static_cast<float>(raw_frame->pts) * vid_time_base
+                                  : header->current_time_sec.load(std::memory_order_relaxed) +
+                                        static_cast<float>(frame_interval);
+
+            if (seek_pending.load(std::memory_order_relaxed)) {
+              // Immediately render initial frame or seek preview
+              sws_scale(sws, raw_frame->data, raw_frame->linesize, 0, codec_ctx->height,
+                        rgba_buffers, rgba_linesizes);
+              header->current_time_sec.store(frame_pts, std::memory_order_relaxed);
+              header->frame_seq.fetch_add(1, std::memory_order_release);
+              clock_anchor_pts = frame_pts;
+              clock_anchor_time = std::chrono::steady_clock::now();
+              seek_pending.store(false, std::memory_order_relaxed);
+            } else if (playing) {
+              auto now = std::chrono::steady_clock::now();
+              float cur_clock =
+                  clock_anchor_pts + std::chrono::duration<float>(now - clock_anchor_time).count();
+
+              // If frame is early, wait until presentation time
+              if (frame_pts > cur_clock + 0.003f) {
+                float wait_sec = std::min(0.04f, frame_pts - cur_clock);
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(static_cast<int64_t>(wait_sec * 1000000.0f)));
+                now = std::chrono::steady_clock::now();
+                cur_clock = clock_anchor_pts +
+                            std::chrono::duration<float>(now - clock_anchor_time).count();
+              }
+
+              // Resynchronize clock if video fell drastically behind (> 250ms hitch)
+              if (cur_clock > frame_pts + 0.250f) {
+                clock_anchor_pts = frame_pts;
+                clock_anchor_time = now;
+                cur_clock = frame_pts;
+              }
+
+              // Skip sws_scale only if moderately behind AND fresher frames are queued
+              bool is_late = (cur_clock > frame_pts + 0.050f);
+              if (is_late && has_more_in_queue) {
+                // Drop obsolete frame to let decoder rapidly catch up
+              } else {
                 sws_scale(sws, raw_frame->data, raw_frame->linesize, 0, codec_ctx->height,
                           rgba_buffers, rgba_linesizes);
-
-                float cur_sec =
-                    (raw_frame->pts != AV_NOPTS_VALUE)
-                        ? static_cast<float>(raw_frame->pts * av_q2d(vid_stream->time_base))
-                        : header->current_time_sec.load(std::memory_order_relaxed) +
-                              static_cast<float>(frame_interval);
-
-                header->current_time_sec.store(cur_sec, std::memory_order_relaxed);
+                header->current_time_sec.store(frame_pts, std::memory_order_relaxed);
                 header->frame_seq.fetch_add(1, std::memory_order_release);
-                frame_decoded = true;
-                av_packet_unref(packet);
-                break;
-              }
-            }
-          } else if (audio_stream_idx >= 0 && packet->stream_index == audio_stream_idx &&
-                     aud_codec_ctx && swr_audio && !is_seeking_only) {
-            if (avcodec_send_packet(aud_codec_ctx, packet) == 0) {
-              while (avcodec_receive_frame(aud_codec_ctx, raw_audio_frame) == 0) {
-                int in_rate = aud_codec_ctx->sample_rate > 0 ? aud_codec_ctx->sample_rate : 48000;
-                int max_out =
-                    av_rescale_rnd(swr_get_delay(swr_audio, in_rate) + raw_audio_frame->nb_samples,
-                                   48000, in_rate, AV_ROUND_UP);
-                if (max_out < 256) max_out = 256;
-
-                std::vector<int16_t> pcm_out(max_out * 2);
-                uint8_t* out_ptrs[1] = {reinterpret_cast<uint8_t*>(pcm_out.data())};
-                int converted = swr_convert(swr_audio, out_ptrs, max_out,
-                                            const_cast<const uint8_t**>(raw_audio_frame->data),
-                                            raw_audio_frame->nb_samples);
-                if (converted > 0) {
-                  size_t sample_count = static_cast<size_t>(converted) * 2;
-                  const uint8_t* bytes_ptr = reinterpret_cast<const uint8_t*>(pcm_out.data());
-                  audio_pending.insert(audio_pending.end(), bytes_ptr,
-                                       bytes_ptr + (sample_count * sizeof(int16_t)));
-                }
               }
             }
           }
-          av_packet_unref(packet);
         }
-
-        if (header->is_playing.load(std::memory_order_relaxed)) {
-          drain_audio(pulse_out, audio_pending);
-        } else {
-          audio_pending.clear();
-        }
-
-        if (read_res < 0 && !frame_decoded) {
-          // Reached end of file
+        av_packet_free(&vp);
+      } else {
+        if (eof_reached.load(std::memory_order_relaxed) && !priming_seek) {
           header->is_ended.store(true, std::memory_order_relaxed);
           header->is_playing.store(false, std::memory_order_relaxed);
+          is_paused.store(true, std::memory_order_relaxed);
           pulse_out.cork(true);
-        }
-      } else {
-        if (header->is_playing.load(std::memory_order_relaxed)) {
-          drain_audio(pulse_out, audio_pending);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
     } else {
-      pulse_out.iterate();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
   // 7. Cleanup
+  running.store(false, std::memory_order_relaxed);
+  queue_cv.notify_all();
+  if (demux_thread.joinable()) {
+    demux_thread.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex);
+    for (AVPacket* p : video_packet_queue) {
+      av_packet_free(&p);
+    }
+    video_packet_queue.clear();
+  }
+
   if (client_sock >= 0) close(client_sock);
   close(server_sock);
   unlink(socket_path.c_str());
@@ -645,10 +782,8 @@ int run_player_worker(int argc, char** argv) {
     avcodec_free_context(&aud_codec_ctx);
   }
 
-  av_packet_free(&packet);
   av_frame_free(&raw_frame);
   av_frame_free(&raw_audio_frame);
-  av_frame_free(&rgba_frame);
   sws_freeContext(sws);
   avcodec_free_context(&codec_ctx);
   avformat_close_input(&fmt_ctx);

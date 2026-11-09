@@ -484,9 +484,7 @@ static ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t 
   return (ImTextureID)state.descriptor_set;
 }
 
-static void vulkan_player_texture_releaser() {
-  g_player_vk_state.pending_release = true;
-}
+static void vulkan_player_texture_releaser() { g_player_vk_state.pending_release = true; }
 
 void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
   if (!sd) return;

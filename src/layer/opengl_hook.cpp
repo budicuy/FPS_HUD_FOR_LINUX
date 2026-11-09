@@ -601,9 +601,7 @@ static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t 
 
 static bool g_player_gl_pending_release = false;
 
-static void opengl_player_texture_releaser() {
-  g_player_gl_pending_release = true;
-}
+static void opengl_player_texture_releaser() { g_player_gl_pending_release = true; }
 
 void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fallback_h) {
   auto& cfg = fpshud::get_mutable_config();
