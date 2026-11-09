@@ -599,14 +599,10 @@ static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t 
   return static_cast<ImTextureID>(g_player_gl_tex);
 }
 
+static bool g_player_gl_pending_release = false;
+
 static void opengl_player_texture_releaser() {
-  if (g_player_gl_tex != 0 && g_gl.glDeleteTextures) {
-    g_gl.glDeleteTextures(1, &g_player_gl_tex);
-    g_player_gl_tex = 0;
-  }
-  g_player_tex_w = 0;
-  g_player_tex_h = 0;
-  g_player_last_seq = 0;
+  g_player_gl_pending_release = true;
 }
 
 void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fallback_h) {
@@ -679,6 +675,17 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   {
     std::lock_guard<std::mutex> cfg_lock(fpshud::get_config_mutex());
     fpshud::get_input_manager().update_for_frame(io, cfg, width, height);
+
+    if (g_player_gl_pending_release) {
+      if (g_player_gl_tex != 0 && g_gl.glDeleteTextures) {
+        g_gl.glDeleteTextures(1, &g_player_gl_tex);
+        g_player_gl_tex = 0;
+      }
+      g_player_tex_w = 0;
+      g_player_tex_h = 0;
+      g_player_last_seq = 0;
+      g_player_gl_pending_release = false;
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();

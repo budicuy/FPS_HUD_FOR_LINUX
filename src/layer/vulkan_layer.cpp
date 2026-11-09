@@ -248,6 +248,7 @@ struct VulkanPlayerState {
   uint64_t last_seq = 0;
   bool needs_copy = false;
   bool image_initialized = false;
+  bool pending_release = false;
   size_t copy_staging_idx = 0;
 };
 
@@ -271,6 +272,7 @@ static uint32_t find_memory_type_index(DeviceData* dd, uint32_t type_filter,
 }
 
 static void vulkan_player_release(DeviceData* dd, VulkanPlayerState& state) {
+  state.pending_release = false;
   if (!state.device || !dd) return;
 
   if (dd->DeviceWaitIdle) {
@@ -483,9 +485,7 @@ static ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t 
 }
 
 static void vulkan_player_texture_releaser() {
-  if (g_player_vk_state.dd) {
-    vulkan_player_release(g_player_vk_state.dd, g_player_vk_state);
-  }
+  g_player_vk_state.pending_release = true;
 }
 
 void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
@@ -1663,6 +1663,10 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       ImGui::SetCurrentContext(sd->imgui_context);
       ImGuiIO& io = ImGui::GetIO();
       io.DisplaySize = ImVec2(w, h);
+
+      if (g_player_vk_state.pending_release && dd) {
+        vulkan_player_release(dd, g_player_vk_state);
+      }
 
       {
         std::lock_guard<std::mutex> cfg_lock(fpshud::get_config_mutex());
