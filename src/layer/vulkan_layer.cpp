@@ -1132,6 +1132,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     LOAD_DEV_FN(MapMemory);
     LOAD_DEV_FN(UnmapMemory);
     LOAD_DEV_FN(CmdCopyImageToBuffer);
+    LOAD_DEV_FN(CmdCopyBufferToImage);
     LOAD_DEV_FN(CmdPipelineBarrier);
     LOAD_DEV_FN(InvalidateMappedMemoryRanges);
     LOAD_DEV_FN(CreateImage);
