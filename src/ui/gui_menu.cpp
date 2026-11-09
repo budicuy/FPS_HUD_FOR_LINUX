@@ -117,9 +117,7 @@ static VideoPlayerController g_player_controller;
 static std::string g_player_active_file;
 static std::string g_player_active_filename;
 static bool g_player_modal_open_requested = false;
-static float g_player_volume = 1.0f;
-static bool g_player_muted = false;
-static float g_player_speed = 1.0f;
+static bool g_player_fullscreen = false;
 
 static void open_modal_player(const std::string& filepath, const std::string& filename) {
   g_player_active_file = filepath;
@@ -130,8 +128,7 @@ static void open_modal_player(const std::string& filepath, const std::string& fi
     g_player_controller.close();
     return;
   }
-  g_player_controller.set_volume(g_player_muted ? 0.0f : g_player_volume);
-  g_player_controller.set_speed(g_player_speed);
+  g_player_fullscreen = false;
   g_player_modal_open_requested = true;
 }
 
@@ -141,18 +138,33 @@ static void render_video_player_modal(float scale, float display_width, float di
     g_player_modal_open_requested = false;
   }
 
-  ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  float max_w = std::min(display_width * 0.85f, 1024.0f);
-  float max_h = std::min(display_height * 0.85f, 700.0f);
-  ImGui::SetNextWindowSize(ImVec2(max_w, max_h), ImGuiCond_Appearing);
+  if (g_player_fullscreen && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    g_player_fullscreen = false;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_F)) {
+    g_player_fullscreen = !g_player_fullscreen;
+  }
+
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
+  if (g_player_fullscreen) {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(display_width, display_height));
+    flags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+  } else {
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    float max_w = std::min(display_width * 0.85f, 1024.0f);
+    float max_h = std::min(display_height * 0.85f, 700.0f);
+    ImGui::SetNextWindowSize(ImVec2(max_w, max_h), ImGuiCond_Appearing);
+    flags |= ImGuiWindowFlags_AlwaysAutoResize;
+  }
 
   bool modal_open = true;
-  if (ImGui::BeginPopupModal(
-          "In-Game Video Player##Modal", &modal_open,
-          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+  if (ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open, flags)) {
     if (!g_player_controller.is_active()) {
       set_status_message("[!] Video playback failed.");
+      g_player_fullscreen = false;
       g_player_controller.close();
       release_player_texture();
       ImGui::CloseCurrentPopup();
@@ -164,6 +176,7 @@ static void render_video_player_modal(float scale, float display_width, float di
     if (!hdr) {
       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
       if (ImGui::Button("Close Player")) {
+        g_player_fullscreen = false;
         g_player_controller.close();
         release_player_texture();
         ImGui::CloseCurrentPopup();
@@ -182,12 +195,34 @@ static void render_video_player_modal(float scale, float display_width, float di
     ImGui::SameLine();
     ImGui::TextDisabled("| %ux%u | %.1fs", vw, vh, duration);
 
-    float canvas_w = std::min(max_w - 30.0f, 854.0f);
     float aspect = static_cast<float>(vw) / static_cast<float>(vh > 0 ? vh : 1);
-    float canvas_h = canvas_w / (aspect > 0.1f ? aspect : (16.0f / 9.0f));
-    if (canvas_h > max_h - 180.0f) {
-      canvas_h = max_h - 180.0f;
-      canvas_w = canvas_h * aspect;
+    if (aspect <= 0.1f) aspect = 16.0f / 9.0f;
+
+    float canvas_w = 0.0f;
+    float canvas_h = 0.0f;
+
+    if (g_player_fullscreen) {
+      float avail_w = display_width - 32.0f * scale;
+      float avail_h = display_height - 120.0f * scale;
+      canvas_w = avail_w;
+      canvas_h = canvas_w / aspect;
+      if (canvas_h > avail_h) {
+        canvas_h = avail_h;
+        canvas_w = canvas_h * aspect;
+      }
+      float offset_x = (display_width - canvas_w) * 0.5f;
+      if (offset_x > 16.0f * scale) {
+        ImGui::SetCursorPosX(offset_x);
+      }
+    } else {
+      float max_w = std::min(display_width * 0.85f, 1024.0f);
+      float max_h = std::min(display_height * 0.85f, 700.0f);
+      canvas_w = std::min(max_w - 30.0f, 854.0f);
+      canvas_h = canvas_w / aspect;
+      if (canvas_h > max_h - 180.0f) {
+        canvas_h = max_h - 180.0f;
+        canvas_w = canvas_h * aspect;
+      }
     }
 
     const uint8_t* pixels = g_player_controller.frame_pixels();
@@ -197,6 +232,17 @@ static void render_video_player_modal(float scale, float display_width, float di
       ImGui::Image(tex, ImVec2(canvas_w, canvas_h));
     } else {
       ImGui::Dummy(ImVec2(canvas_w, canvas_h));
+    }
+
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+      g_player_fullscreen = !g_player_fullscreen;
+    }
+
+    if (g_player_fullscreen) {
+      float offset_x = (display_width - canvas_w) * 0.5f;
+      if (offset_x > 16.0f * scale) {
+        ImGui::SetCursorPosX(offset_x);
+      }
     }
 
     ImGui::PushItemWidth(canvas_w);
@@ -213,6 +259,13 @@ static void render_video_player_modal(float scale, float display_width, float di
       g_player_controller.seek(slider_time);
     }
     ImGui::PopItemWidth();
+
+    if (g_player_fullscreen) {
+      float offset_x = (display_width - canvas_w) * 0.5f;
+      if (offset_x > 16.0f * scale) {
+        ImGui::SetCursorPosX(offset_x);
+      }
+    }
 
     if (ImGui::Button(is_playing ? "[Pause]" : "[Play]", ImVec2(80.0f * scale, 28.0f * scale))) {
       if (is_playing) {
@@ -233,42 +286,18 @@ static void render_video_player_modal(float scale, float display_width, float di
     }
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(80.0f * scale);
-    const char* speed_items[] = {"0.5x", "1.0x", "1.5x", "2.0x"};
-    int speed_idx = (g_player_speed == 0.5f)
-                        ? 0
-                        : ((g_player_speed == 1.5f) ? 2 : ((g_player_speed == 2.0f) ? 3 : 1));
-    if (ImGui::Combo("##SpeedCombo", &speed_idx, speed_items, IM_ARRAYSIZE(speed_items))) {
-      g_player_speed =
-          (speed_idx == 0) ? 0.5f : ((speed_idx == 2) ? 1.5f : ((speed_idx == 3) ? 2.0f : 1.0f));
-      g_player_controller.set_speed(g_player_speed);
+    if (ImGui::Button(g_player_fullscreen ? "[Windowed]" : "[Fullscreen]",
+                      ImVec2(100.0f * scale, 28.0f * scale))) {
+      g_player_fullscreen = !g_player_fullscreen;
     }
 
     ImGui::SameLine();
-    if (ImGui::Button(g_player_muted ? "[Mute]" : "[Vol]", ImVec2(55.0f * scale, 28.0f * scale))) {
-      g_player_muted = !g_player_muted;
-      g_player_controller.set_volume(g_player_muted ? 0.0f : g_player_volume);
-    }
-
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(85.0f * scale);
-    if (ImGui::SliderFloat("##VolumeSlider", &g_player_volume, 0.0f, 1.0f, "%.0f%%")) {
-      if (!g_player_muted) {
-        g_player_controller.set_volume(g_player_volume);
-      }
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("[Desktop]", ImVec2(80.0f * scale, 28.0f * scale))) {
-      open_system_folder(g_player_active_file);
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("[Close]", ImVec2(70.0f * scale, 28.0f * scale))) {
+    if (ImGui::Button("[Close]", ImVec2(75.0f * scale, 28.0f * scale))) {
       modal_open = false;
     }
 
     if (!modal_open) {
+      g_player_fullscreen = false;
       g_player_controller.close();
       release_player_texture();
       ImGui::CloseCurrentPopup();
@@ -439,6 +468,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
   if (!cfg.gui_open) {
     if (g_player_controller.is_active()) {
+      g_player_fullscreen = false;
       g_player_controller.close();
       release_player_texture();
     }

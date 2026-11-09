@@ -1187,14 +1187,6 @@ void VideoPlayerController::pause() { send_action(IpcPlaybackAction::Pause, 0.0f
 
 void VideoPlayerController::seek(float sec) { send_action(IpcPlaybackAction::Seek, sec); }
 
-void VideoPlayerController::set_speed(float speed) {
-  send_action(IpcPlaybackAction::SetSpeed, speed);
-}
-
-void VideoPlayerController::set_volume(float volume) {
-  send_action(IpcPlaybackAction::SetVolume, volume);
-}
-
 bool VideoPlayerController::is_active() const noexcept {
   return worker_pid_ > 0 && shm_header_ != nullptr && shm_header_->magic == kPlaybackShmMagic;
 }

@@ -98,9 +98,8 @@ public:
     attr.minreq = static_cast<uint32_t>(pa_usec_to_bytes(20000, &ss));  // 20ms chunks
     attr.fragsize = static_cast<uint32_t>(-1);
 
-    pa_stream_flags_t flags =
-        static_cast<pa_stream_flags_t>(PA_STREAM_ADJUST_LATENCY | PA_STREAM_AUTO_TIMING_UPDATE |
-                                       PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_VARIABLE_RATE);
+    pa_stream_flags_t flags = static_cast<pa_stream_flags_t>(
+        PA_STREAM_ADJUST_LATENCY | PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_INTERPOLATE_TIMING);
 
     if (pa_stream_connect_playback(stream_, nullptr, &attr, flags, nullptr, nullptr) < 0) {
       cleanup();
@@ -174,25 +173,6 @@ public:
   void flush() {
     if (!is_ready()) return;
     pa_operation* op = pa_stream_flush(stream_, nullptr, nullptr);
-    if (op) {
-      auto start = std::chrono::steady_clock::now();
-      while (pa_operation_get_state(op) == PA_OPERATION_RUNNING) {
-        pa_mainloop_iterate(ml_, 0, nullptr);
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                  start)
-                .count() > 100) {
-          break;
-        }
-      }
-      pa_operation_unref(op);
-    }
-  }
-
-  void update_speed(float speed) {
-    if (!is_ready() || sample_rate_ == 0) return;
-    float clamped_speed = std::max(0.25f, std::min(speed, 4.0f));
-    uint32_t target_rate = static_cast<uint32_t>(sample_rate_ * clamped_speed);
-    pa_operation* op = pa_stream_update_sample_rate(stream_, target_rate, nullptr, nullptr);
     if (op) {
       auto start = std::chrono::steady_clock::now();
       while (pa_operation_get_state(op) == PA_OPERATION_RUNNING) {
@@ -501,8 +481,6 @@ int run_player_worker(int argc, char** argv) {
   AVRational avg_fps = av_guess_frame_rate(fmt_ctx, vid_stream, nullptr);
   double frame_interval =
       (avg_fps.num > 0 && avg_fps.den > 0) ? (1.0 / av_q2d(avg_fps)) : (1.0 / 60.0);
-  float playback_speed = 1.0f;
-  float playback_volume = 1.0f;
 
   std::fprintf(
       stdout, "[FPSHUD Player] Ready: %ux%u @ %.2f fps (duration: %.1f s). Listening on %s\n",
@@ -556,13 +534,6 @@ int run_player_worker(int argc, char** argv) {
             header->current_time_sec.store(target_sec, std::memory_order_relaxed);
             header->is_ended.store(false, std::memory_order_relaxed);
             seek_pending = true;
-          } else if (req.action == IpcPlaybackAction::SetSpeed) {
-            if (req.value >= 0.25f && req.value <= 4.0f) {
-              playback_speed = req.value;
-              pulse_out.update_speed(playback_speed);
-            }
-          } else if (req.action == IpcPlaybackAction::SetVolume) {
-            playback_volume = std::max(0.0f, std::min(req.value, 1.0f));
           } else if (req.action == IpcPlaybackAction::Close) {
             running = false;
             break;
@@ -577,7 +548,7 @@ int run_player_worker(int argc, char** argv) {
     if (header->is_playing.load(std::memory_order_relaxed) || seek_pending) {
       auto now = std::chrono::steady_clock::now();
       double elapsed = std::chrono::duration<double>(now - last_frame_time).count();
-      double target_delay = frame_interval / static_cast<double>(playback_speed);
+      double target_delay = frame_interval;
 
       if (seek_pending || elapsed >= target_delay) {
         last_frame_time = now;
@@ -625,13 +596,6 @@ int run_player_worker(int argc, char** argv) {
                                             raw_audio_frame->nb_samples);
                 if (converted > 0) {
                   size_t sample_count = static_cast<size_t>(converted) * 2;
-                  if (playback_volume <= 0.001f) {
-                    std::memset(pcm_out.data(), 0, sample_count * sizeof(int16_t));
-                  } else if (playback_volume < 0.999f) {
-                    for (size_t s = 0; s < sample_count; ++s) {
-                      pcm_out[s] = static_cast<int16_t>(pcm_out[s] * playback_volume);
-                    }
-                  }
                   const uint8_t* bytes_ptr = reinterpret_cast<const uint8_t*>(pcm_out.data());
                   audio_pending.insert(audio_pending.end(), bytes_ptr,
                                        bytes_ptr + (sample_count * sizeof(int16_t)));

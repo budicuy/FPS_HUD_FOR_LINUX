@@ -11,10 +11,8 @@ constexpr const char* kPlaybackSocketPrefix = "player_";
 enum class IpcPlaybackAction : uint32_t {
   Play = 1,
   Pause = 2,
-  Seek = 3,       // payload: value = seek_sec
-  SetSpeed = 4,   // payload: value = speed (0.5f, 1.0f, 1.5f, 2.0f)
-  SetVolume = 5,  // payload: value = volume (0.0f - 1.0f)
-  Close = 6       // Terminate player worker
+  Seek = 3,  // payload: value = seek_sec
+  Close = 4  // Terminate player worker
 };
 
 struct IpcPlaybackRequest {

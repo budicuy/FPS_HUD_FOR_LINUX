@@ -253,8 +253,6 @@ public:
   void play();
   void pause();
   void seek(float sec);
-  void set_speed(float speed);
-  void set_volume(float volume);
 
   [[nodiscard]] bool is_active() const noexcept;
   [[nodiscard]] const PlaybackShmHeader* header() const noexcept;

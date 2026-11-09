@@ -4189,7 +4189,9 @@ void run_all_devices_and_features_suite() {
     check_cond(header.magic == 0x504C4159, "10.3 PlaybackShmHeader magic is 'PLAY'");
     check_cond(header.current_time_sec.load() == 15.5f,
                "10.4 PlaybackShmHeader current_time_sec atomic load");
-    check_cond(sizeof(IpcPlaybackRequest) == 8, "10.5 IpcPlaybackRequest is compact 8 bytes");
+    check_cond(
+        sizeof(IpcPlaybackRequest) == 8 && static_cast<uint32_t>(IpcPlaybackAction::Close) == 4,
+        "10.5 IpcPlaybackRequest is compact 8 bytes & streamlined (Close=4)");
 
     const char* invalid_argv[] = {"fpshud_recorder_bin", "--player", "test_shm", "test_sock"};
     int rc = run_player_worker(4, const_cast<char**>(invalid_argv));
@@ -4204,8 +4206,6 @@ void run_all_devices_and_features_suite() {
     controller.play();
     controller.pause();
     controller.seek(10.0f);
-    controller.set_speed(1.5f);
-    controller.set_volume(0.8f);
     controller.close();
     check_cond(!controller.is_active(), "10.10 Player controller remains inactive after close");
 
@@ -4332,7 +4332,7 @@ void run_all_devices_and_features_suite() {
         delete_confirmation_present,
         "10.22 Recorded clip deletion requires two-step confirmation to prevent accidental loss");
 
-    // 10.23 PulseAudio playback engine & AAC audio decoding in player worker
+    // 10.23 PulseAudio native audio passthrough in player worker (speed/vol scaling stripped)
     bool audio_playback_implemented = false;
     {
       std::string player_src = read_text_file("src/recorder/recorder_player.cpp");
@@ -4340,24 +4340,29 @@ void run_all_devices_and_features_suite() {
           (player_src.find("class PulseAudioPlayback") != std::string::npos &&
            player_src.find("pa_stream_connect_playback") != std::string::npos &&
            player_src.find("swr_alloc_set_opts2") != std::string::npos &&
-           player_src.find("drain_audio") != std::string::npos);
+           player_src.find("drain_audio") != std::string::npos &&
+           player_src.find("update_speed") == std::string::npos &&
+           player_src.find("playback_volume") == std::string::npos);
     }
-    check_cond(
-        audio_playback_implemented,
-        "10.23 PulseAudio playback engine & AAC audio decoding implemented in player worker");
+    check_cond(audio_playback_implemented,
+               "10.23 PulseAudio native audio passthrough implemented in worker (speed/vol scaling "
+               "cleanly stripped)");
 
-    // 10.24 GUI modal synchronizes volume and playback speed on video clip launch
-    bool modal_syncs_volume_speed = false;
+    // 10.24 GUI modal fullscreen toggle support & streamlined playback controls
+    bool modal_fullscreen_supported = false;
     {
       std::string gui_src = read_text_file("src/ui/gui_menu.cpp");
-      modal_syncs_volume_speed =
-          (gui_src.find(
-               "g_player_controller.set_volume(g_player_muted ? 0.0f : g_player_volume);") !=
-               std::string::npos &&
-           gui_src.find("g_player_controller.set_speed(g_player_speed);") != std::string::npos);
+      modal_fullscreen_supported = (gui_src.find("g_player_fullscreen") != std::string::npos &&
+                                    gui_src.find("ImGuiKey_F") != std::string::npos &&
+                                    gui_src.find("ImGuiKey_Escape") != std::string::npos &&
+                                    gui_src.find("IsMouseDoubleClicked") != std::string::npos &&
+                                    gui_src.find("SpeedCombo") == std::string::npos &&
+                                    gui_src.find("VolumeSlider") == std::string::npos &&
+                                    gui_src.find("[Desktop]") == std::string::npos);
     }
-    check_cond(modal_syncs_volume_speed,
-               "10.24 GUI modal synchronizes volume and playback speed on video clip launch");
+    check_cond(
+        modal_fullscreen_supported,
+        "10.24 GUI modal fullscreen toggle (F/double-click/ESC) & streamlined controls verified");
 
     // 10.25 End-to-end player controller lifecycle with real audio/video clip verification
     bool e2e_playback_ok = false;
@@ -4367,8 +4372,6 @@ void run_all_devices_and_features_suite() {
       if (e2e_ctrl.open(sample_mp4, "./build/fpshud_recorder_bin")) {
         const auto* hdr = e2e_ctrl.header();
         if (hdr && hdr->magic == kPlaybackShmMagic && hdr->duration_sec > 60.0f) {
-          e2e_ctrl.set_volume(0.8f);
-          e2e_ctrl.set_speed(1.0f);
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
           if (hdr->frame_seq.load() >= 1) {
             e2e_playback_ok = true;
