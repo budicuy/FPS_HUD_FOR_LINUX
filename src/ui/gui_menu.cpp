@@ -130,6 +130,8 @@ static void open_modal_player(const std::string& filepath, const std::string& fi
     g_player_controller.close();
     return;
   }
+  g_player_controller.set_volume(g_player_muted ? 0.0f : g_player_volume);
+  g_player_controller.set_speed(g_player_speed);
   g_player_modal_open_requested = true;
 }
 
