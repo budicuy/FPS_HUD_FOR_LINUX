@@ -35,7 +35,6 @@ public:
 
   bool is_mouse_grabbed() const noexcept;
   const std::vector<EvdevDevice>& devices() const noexcept { return devices_; }
-  void rescan_devices();
 
 private:
   void scan_devices();

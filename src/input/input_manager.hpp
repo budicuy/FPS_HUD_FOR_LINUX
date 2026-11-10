@@ -47,11 +47,6 @@ public:
                              ImGuiIO* io) noexcept;
   void handle_pointer_wheel(float x, float y, const HudConfig& cfg, ImGuiIO* io) noexcept;
 
-  // Wayland listener callback handlers
-  void register_wayland_seat(void* seat, uint32_t id) noexcept;
-  void register_wayland_keyboard(void* seat) noexcept;
-  void register_wayland_pointer(void* seat) noexcept;
-
   // Polls keyboard & mouse events and updates ImGuiIO + HudConfig::gui_open
   void update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_width, float display_height);
 
@@ -81,14 +76,6 @@ public:
   HudConfig* active_config() const noexcept { return active_cfg_; }
   float display_width() const noexcept { return display_width_; }
   float display_height() const noexcept { return display_height_; }
-
-  // Modular backend accessors
-  EvdevBackend& evdev() noexcept { return *evdev_backend_; }
-  const EvdevBackend& evdev() const noexcept { return *evdev_backend_; }
-  WaylandBackend& wayland() noexcept { return *wayland_backend_; }
-  const WaylandBackend& wayland() const noexcept { return *wayland_backend_; }
-  X11Backend& x11() noexcept { return *x11_backend_; }
-  const X11Backend& x11() const noexcept { return *x11_backend_; }
 
 private:
   void set_mouse_grab(bool grab);

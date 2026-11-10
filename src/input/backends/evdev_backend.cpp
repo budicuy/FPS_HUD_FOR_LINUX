@@ -2,6 +2,7 @@
 #include "config.hpp"
 #include "imgui.h"
 #include "input_manager.hpp"
+#include "logger.hpp"
 
 #include <fcntl.h>
 #include <linux/input.h>
@@ -32,8 +33,6 @@ bool EvdevBackend::init() {
   }
   return !devices_.empty();
 }
-
-void EvdevBackend::rescan_devices() { scan_devices(); }
 
 void EvdevBackend::shutdown() noexcept {
   set_grab(false);
@@ -84,6 +83,8 @@ void EvdevBackend::close_devices() noexcept {
       if (dev.is_grabbed) {
         ioctl(dev.fd, EVIOCGRAB, 0);
         dev.is_grabbed = false;
+        FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Input, "Evdev mouse fd=%d ungrabbed on close",
+                         dev.fd);
       }
       close(dev.fd);
     }
@@ -97,10 +98,12 @@ void EvdevBackend::set_grab(bool grab) {
     if (grab && !dev.is_grabbed) {
       if (ioctl(dev.fd, EVIOCGRAB, 1) == 0) {
         dev.is_grabbed = true;
+        FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Input, "Evdev mouse fd=%d grabbed", dev.fd);
       }
     } else if (!grab && dev.is_grabbed) {
       ioctl(dev.fd, EVIOCGRAB, 0);
       dev.is_grabbed = false;
+      FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Input, "Evdev mouse fd=%d ungrabbed", dev.fd);
     }
   }
 }
@@ -127,6 +130,7 @@ void EvdevBackend::poll(InputManager& mgr, ImGuiIO* io, HudConfig* cfg, float di
   for (auto& dev : devices_) {
     while (read(dev.fd, &ev, sizeof(ev)) == static_cast<ssize_t>(sizeof(ev))) {
       if (ev.type == EV_KEY) {
+        if (ev.value == 2) continue;  // Ignore kernel key repeat
         bool down = (ev.value != 0);
 
         if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {

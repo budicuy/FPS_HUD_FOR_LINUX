@@ -570,7 +570,6 @@ Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateIn
 VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                                                   const VkAllocationCallbacks* pAllocator) {
   try {
-    fpshud::get_input_manager().detach_wayland_display(nullptr);
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
     if (id && id->GetInstanceProcAddr) {
       auto fpDestroySurfaceKHR = reinterpret_cast<PFN_vkDestroySurfaceKHR>(

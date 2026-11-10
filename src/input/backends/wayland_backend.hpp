@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 
@@ -28,9 +29,14 @@ public:
   void register_seat(void* seat, uint32_t id) noexcept;
   void register_keyboard(void* seat) noexcept;
   void register_pointer(void* seat) noexcept;
+  void destroy_keyboard() noexcept;
+  void destroy_pointer() noexcept;
+  bool has_seat() const noexcept;
 
   void set_input_manager(InputManager* mgr) noexcept { mgr_ = mgr; }
   InputManager* input_manager() const noexcept { return mgr_; }
+
+  void accumulate_axis(uint32_t axis, int32_t value) noexcept;
 
 private:
   void init_wayland_client_api() noexcept;
@@ -47,6 +53,9 @@ private:
   void* wayland_pointer_ = nullptr;
   bool wayland_attempted_ = false;
   bool wayland_attached_ = false;
+
+  std::atomic<float> wheel_x_{0.0f};
+  std::atomic<float> wheel_y_{0.0f};
 };
 
 }  // namespace fpshud

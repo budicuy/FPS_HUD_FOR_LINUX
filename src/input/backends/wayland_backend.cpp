@@ -1,5 +1,6 @@
 #include "backends/wayland_backend.hpp"
 #include "config.hpp"
+#include "imgui.h"
 #include "input_manager.hpp"
 
 #include <dlfcn.h>
@@ -89,6 +90,8 @@ struct WaylandClientApi {
   using PFN_proxy_marshal_constructor_versioned = struct wl_proxy* (*)(struct wl_proxy*, uint32_t,
                                                                        const struct wl_interface*,
                                                                        uint32_t, ...);
+  using PFN_proxy_create_wrapper = void* (*)(void*);
+  using PFN_proxy_wrapper_destroy = void (*)(void*);
 
   PFN_create_queue fn_display_create_queue = nullptr;
   PFN_destroy_queue fn_event_queue_destroy = nullptr;
@@ -99,6 +102,8 @@ struct WaylandClientApi {
   PFN_proxy_add_listener fn_proxy_add_listener = nullptr;
   PFN_proxy_marshal_constructor fn_marshal_constructor = nullptr;
   PFN_proxy_marshal_constructor_versioned fn_marshal_versioned = nullptr;
+  PFN_proxy_create_wrapper fn_proxy_create_wrapper = nullptr;
+  PFN_proxy_wrapper_destroy fn_proxy_wrapper_destroy = nullptr;
 
   const struct wl_interface* registry_interface = nullptr;
   const struct wl_interface* seat_interface = nullptr;
@@ -229,6 +234,10 @@ void WaylandBackend::init_wayland_client_api() noexcept {
   g_wl.fn_marshal_versioned =
       reinterpret_cast<WaylandClientApi::PFN_proxy_marshal_constructor_versioned>(
           dlsym(wayland_lib_, "wl_proxy_marshal_constructor_versioned"));
+  g_wl.fn_proxy_create_wrapper = reinterpret_cast<WaylandClientApi::PFN_proxy_create_wrapper>(
+      dlsym(wayland_lib_, "wl_proxy_create_wrapper"));
+  g_wl.fn_proxy_wrapper_destroy = reinterpret_cast<WaylandClientApi::PFN_proxy_wrapper_destroy>(
+      dlsym(wayland_lib_, "wl_proxy_wrapper_destroy"));
 
   g_wl.registry_interface =
       static_cast<const struct wl_interface*>(dlsym(wayland_lib_, "wl_registry_interface"));
@@ -263,6 +272,8 @@ void WaylandBackend::teardown_locked() noexcept {
   }
   wayland_display_ = nullptr;
   wayland_attached_ = false;
+  wheel_x_.store(0.0f, std::memory_order_relaxed);
+  wheel_y_.store(0.0f, std::memory_order_relaxed);
 }
 
 void WaylandBackend::attach_display(void* display, InputManager* mgr) noexcept {
@@ -292,14 +303,27 @@ void WaylandBackend::attach_display(void* display, InputManager* mgr) noexcept {
   wayland_queue_ = g_wl.fn_display_create_queue(dpy);
   if (!wayland_queue_) return;
 
-  // Opcode 1 = wl_display.get_registry
-  struct wl_proxy* reg = g_wl.fn_marshal_constructor(reinterpret_cast<struct wl_proxy*>(dpy), 1,
-                                                     g_wl.registry_interface, nullptr);
+  struct wl_proxy* reg = nullptr;
+  if (g_wl.fn_proxy_create_wrapper && g_wl.fn_proxy_wrapper_destroy) {
+    void* wrapper = g_wl.fn_proxy_create_wrapper(dpy);
+    if (!wrapper) return;
+    if (g_wl.fn_proxy_set_queue) {
+      g_wl.fn_proxy_set_queue(static_cast<struct wl_proxy*>(wrapper),
+                              static_cast<struct wl_event_queue*>(wayland_queue_));
+    }
+    // Opcode 1 = wl_display.get_registry
+    reg = g_wl.fn_marshal_constructor(static_cast<struct wl_proxy*>(wrapper), 1,
+                                      g_wl.registry_interface, nullptr);
+    g_wl.fn_proxy_wrapper_destroy(wrapper);
+  } else {
+    reg = g_wl.fn_marshal_constructor(reinterpret_cast<struct wl_proxy*>(dpy), 1,
+                                      g_wl.registry_interface, nullptr);
+    if (reg && g_wl.fn_proxy_set_queue) {
+      g_wl.fn_proxy_set_queue(reg, static_cast<struct wl_event_queue*>(wayland_queue_));
+    }
+  }
   if (!reg) return;
 
-  if (g_wl.fn_proxy_set_queue) {
-    g_wl.fn_proxy_set_queue(reg, static_cast<struct wl_event_queue*>(wayland_queue_));
-  }
   if (g_wl.fn_proxy_add_listener) {
     g_wl.fn_proxy_add_listener(reg, reinterpret_cast<void (**)(void)>(&g_registry_listener), this);
   }
@@ -320,10 +344,36 @@ void WaylandBackend::detach_display(void* display) noexcept {
   teardown_locked();
 }
 
+bool WaylandBackend::has_seat() const noexcept {
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
+  return wayland_seat_ != nullptr;
+}
+
+void WaylandBackend::destroy_keyboard() noexcept {
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
+  if (wayland_keyboard_ && g_wl.fn_proxy_destroy) {
+    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_keyboard_));
+    wayland_keyboard_ = nullptr;
+  }
+}
+
+void WaylandBackend::destroy_pointer() noexcept {
+  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
+  if (wayland_pointer_ && g_wl.fn_proxy_destroy) {
+    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_pointer_));
+    wayland_pointer_ = nullptr;
+  }
+}
+
 void WaylandBackend::register_seat(void* seat, uint32_t id) noexcept {
   (void)id;
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_) return;
+  if (!seat || !wayland_queue_ || wayland_seat_ != nullptr) {
+    if (seat && wayland_seat_ != nullptr && seat != wayland_seat_ && g_wl.fn_proxy_destroy) {
+      g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(seat));
+    }
+    return;
+  }
   wayland_seat_ = seat;
   if (g_wl.fn_proxy_set_queue) {
     g_wl.fn_proxy_set_queue(static_cast<struct wl_proxy*>(seat),
@@ -337,8 +387,10 @@ void WaylandBackend::register_seat(void* seat, uint32_t id) noexcept {
 
 void WaylandBackend::register_keyboard(void* seat) noexcept {
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_ || wayland_keyboard_ || !g_wl.keyboard_interface) return;
+  if (!seat || !wayland_queue_ || !g_wl.keyboard_interface) return;
   if (!g_wl.fn_marshal_constructor) return;
+
+  destroy_keyboard();
 
   struct wl_proxy* kbd = g_wl.fn_marshal_constructor(static_cast<struct wl_proxy*>(seat), 1,
                                                      g_wl.keyboard_interface, nullptr);
@@ -355,8 +407,10 @@ void WaylandBackend::register_keyboard(void* seat) noexcept {
 
 void WaylandBackend::register_pointer(void* seat) noexcept {
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_ || wayland_pointer_ || !g_wl.pointer_interface) return;
+  if (!seat || !wayland_queue_ || !g_wl.pointer_interface) return;
   if (!g_wl.fn_marshal_constructor) return;
+
+  destroy_pointer();
 
   struct wl_proxy* ptr = g_wl.fn_marshal_constructor(static_cast<struct wl_proxy*>(seat), 0,
                                                      g_wl.pointer_interface, nullptr);
@@ -371,6 +425,15 @@ void WaylandBackend::register_pointer(void* seat) noexcept {
   wayland_pointer_ = ptr;
 }
 
+void WaylandBackend::accumulate_axis(uint32_t axis, int32_t value) noexcept {
+  double delta = static_cast<double>(value) / 256.0 / 15.0;
+  if (axis == 0) {
+    wheel_y_.fetch_add(static_cast<float>(-delta), std::memory_order_relaxed);
+  } else if (axis == 1) {
+    wheel_x_.fetch_add(static_cast<float>(-delta), std::memory_order_relaxed);
+  }
+}
+
 void WaylandBackend::poll(InputManager& mgr) {
   std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
   if (mgr_ != &mgr) {
@@ -382,6 +445,15 @@ void WaylandBackend::poll(InputManager& mgr) {
 
   g_wl.fn_display_dispatch_queue_pending(static_cast<struct wl_display*>(wayland_display_),
                                          static_cast<struct wl_event_queue*>(wayland_queue_));
+
+  float wx = wheel_x_.exchange(0.0f, std::memory_order_relaxed);
+  float wy = wheel_y_.exchange(0.0f, std::memory_order_relaxed);
+  if (wx != 0.0f || wy != 0.0f) {
+    ImGuiIO* io = mgr.active_io();
+    if (io) {
+      io->AddMouseWheelEvent(wx, wy);
+    }
+  }
 }
 
 namespace {
@@ -391,6 +463,7 @@ void wl_reg_global(void* data, struct wl_registry* registry, uint32_t name, cons
   auto* self = static_cast<WaylandBackend*>(data);
   if (!self || !interface) return;
   if (std::strcmp(interface, "wl_seat") == 0 && g_wl.seat_interface) {
+    if (self->has_seat()) return;
     uint32_t bind_ver = std::min(version, 7u);
     struct wl_proxy* seat = nullptr;
     if (g_wl.fn_marshal_versioned) {
@@ -415,9 +488,13 @@ void wl_seat_caps(void* data, struct wl_seat* seat, uint32_t capabilities) {
   if (!self || !seat) return;
   if (capabilities & 1) {
     self->register_keyboard(seat);
+  } else {
+    self->destroy_keyboard();
   }
   if (capabilities & 2) {
     self->register_pointer(seat);
+  } else {
+    self->destroy_pointer();
   }
 }
 
@@ -477,8 +554,12 @@ void wl_ptr_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial
   mgr->handle_pointer_button(button, state == 1, cfg, mgr->active_io());
 }
 
-void wl_ptr_axis(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,
-                 uint32_t /*axis*/, int32_t /*value*/) {}
+void wl_ptr_axis(void* data, struct wl_pointer* /*pointer*/, uint32_t /*time*/, uint32_t axis,
+                 int32_t value) {
+  auto* self = static_cast<WaylandBackend*>(data);
+  if (!self) return;
+  self->accumulate_axis(axis, value);
+}
 void wl_ptr_frame(void* /*data*/, struct wl_pointer* /*pointer*/) {}
 void wl_ptr_axis_source(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*axis_source*/) {}
 void wl_ptr_axis_stop(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,

@@ -21,11 +21,6 @@ namespace fpshud {
 
 X11Backend::~X11Backend() { shutdown(); }
 
-bool X11Backend::is_active() const noexcept {
-  std::lock_guard<std::mutex> dpy_lock(dpy_mutex_);
-  return x11_display_ != nullptr;
-}
-
 bool X11Backend::init() {
   init_x11();
   return (x11_display_ != nullptr);
@@ -33,6 +28,7 @@ bool X11Backend::init() {
 
 void X11Backend::shutdown() noexcept {
   stop_worker();
+  is_grabbed_.store(false, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> dpy_lock(dpy_mutex_);
     if (x11_display_ && fn_xclose_display_) {
@@ -72,6 +68,9 @@ void X11Backend::init_x11() {
   fn_xdefault_root_ =
       reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
   fn_xquery_pointer_ = reinterpret_cast<PFN_XQueryPointer>(dlsym(x11_lib_, "XQueryPointer"));
+  fn_xget_input_focus_ = reinterpret_cast<PFN_XGetInputFocus>(dlsym(x11_lib_, "XGetInputFocus"));
+  fn_xtranslate_coordinates_ =
+      reinterpret_cast<PFN_XTranslateCoordinates>(dlsym(x11_lib_, "XTranslateCoordinates"));
 
   if (fnOpen) {
     x11_display_ = fnOpen(nullptr);
@@ -125,6 +124,11 @@ void X11Backend::worker_loop() {
       if (!batch.empty()) {
         std::lock_guard<std::mutex> lock(event_mutex_);
         pending_key_events_.insert(pending_key_events_.end(), batch.begin(), batch.end());
+        if (pending_key_events_.size() > 256) {
+          pending_key_events_.erase(
+              pending_key_events_.begin(),
+              pending_key_events_.begin() + (pending_key_events_.size() - 256));
+        }
       }
     }
 
@@ -135,15 +139,35 @@ void X11Backend::worker_loop() {
       int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
       unsigned int mask = 0;
       int ok = 0;
+      int final_x = 0;
+      int final_y = 0;
       {
         std::lock_guard<std::mutex> dpy_lock(dpy_mutex_);
         root = fn_xdefault_root_(dpy);
         ok = fn_xquery_pointer_(dpy, root, &ret_root, &ret_child, &root_x, &root_y, &win_x, &win_y,
                                 &mask);
+        if (ok) {
+          final_x = root_x;
+          final_y = root_y;
+          if (fn_xget_input_focus_ && fn_xtranslate_coordinates_) {
+            unsigned long focused_win = 0;
+            int revert_to = 0;
+            fn_xget_input_focus_(dpy, &focused_win, &revert_to);
+            if (focused_win > 1) {
+              int local_x = 0, local_y = 0;
+              unsigned long child = 0;
+              if (fn_xtranslate_coordinates_(dpy, root, focused_win, root_x, root_y, &local_x,
+                                             &local_y, &child)) {
+                final_x = local_x;
+                final_y = local_y;
+              }
+            }
+          }
+        }
       }
       if (ok) {
-        cursor_x_.store(static_cast<float>(root_x), std::memory_order_relaxed);
-        cursor_y_.store(static_cast<float>(root_y), std::memory_order_relaxed);
+        cursor_x_.store(static_cast<float>(final_x), std::memory_order_relaxed);
+        cursor_y_.store(static_cast<float>(final_y), std::memory_order_relaxed);
         mouse_down_[0].store((mask & Button1Mask) != 0, std::memory_order_relaxed);
         mouse_down_[1].store((mask & Button3Mask) != 0, std::memory_order_relaxed);
         mouse_down_[2].store((mask & Button2Mask) != 0, std::memory_order_relaxed);
@@ -155,6 +179,10 @@ void X11Backend::worker_loop() {
 }
 
 void X11Backend::set_grab(bool grab) {
+  if (!grab && !x11_display_) {
+    is_grabbed_.store(false, std::memory_order_relaxed);
+    return;
+  }
   init_x11();
   if (!x11_display_ || !x11_lib_) return;
 
@@ -176,13 +204,15 @@ void X11Backend::set_grab(bool grab) {
       Window root = fnDefaultRoot(dpy);
       // PointerMotionMask (64) | ButtonPressMask (4) | ButtonReleaseMask (8) = 76
       // GrabModeAsync (1)
-      fnGrab(dpy, root, False, 76, 1, 1, 0, 0, 0);
+      int res = fnGrab(dpy, root, False, 76, 1, 1, 0, 0, 0);
+      is_grabbed_.store(res == 0 /* GrabSuccess */, std::memory_order_relaxed);
     }
   } else {
     auto fnUngrab = reinterpret_cast<PFN_XUngrabPointer>(dlsym(x11_lib_, "XUngrabPointer"));
     if (fnUngrab) {
       fnUngrab(dpy, 0);
     }
+    is_grabbed_.store(false, std::memory_order_relaxed);
   }
   if (fnFlush) {
     fnFlush(dpy);
@@ -220,12 +250,8 @@ void X11Backend::poll(InputManager& mgr, ImGuiIO* io, HudConfig* cfg, float disp
     float raw_x = cursor_x_.load(std::memory_order_relaxed);
     float raw_y = cursor_y_.load(std::memory_order_relaxed);
     if (raw_x >= 0.0f && raw_y >= 0.0f) {
-      int dw = static_cast<int>(display_width);
-      int dh = static_cast<int>(display_height);
-      float cx = std::clamp(static_cast<float>(dw > 0 ? (static_cast<int>(raw_x) % dw) : 0), 0.0f,
-                            display_width);
-      float cy = std::clamp(static_cast<float>(dh > 0 ? (static_cast<int>(raw_y) % dh) : 0), 0.0f,
-                            display_height);
+      float cx = std::clamp(raw_x, 0.0f, display_width);
+      float cy = std::clamp(raw_y, 0.0f, display_height);
       mgr.set_cursor_pos(cx, cy);
       if (io) {
         io->AddMousePosEvent(cx, cy);

@@ -30,7 +30,7 @@ public:
   void set_grab(bool grab);
   void shutdown() noexcept;
 
-  bool is_active() const noexcept;
+  bool is_grabbed() const noexcept { return is_grabbed_.load(std::memory_order_relaxed); }
 
 private:
   void init_x11();
@@ -47,17 +47,23 @@ private:
   using PFN_XQueryPointer = int (*)(void*, unsigned long, unsigned long*, unsigned long*, int*,
                                     int*, int*, int*, unsigned int*);
   using PFN_XCloseDisplay = int (*)(void*);
+  using PFN_XGetInputFocus = int (*)(void*, unsigned long*, int*);
+  using PFN_XTranslateCoordinates = int (*)(void*, unsigned long, unsigned long, int, int, int*,
+                                            int*, unsigned long*);
 
   PFN_XQueryKeymap fn_xquery_keymap_ = nullptr;
   PFN_XDefaultRootWindow fn_xdefault_root_ = nullptr;
   PFN_XQueryPointer fn_xquery_pointer_ = nullptr;
   PFN_XCloseDisplay fn_xclose_display_ = nullptr;
+  PFN_XGetInputFocus fn_xget_input_focus_ = nullptr;
+  PFN_XTranslateCoordinates fn_xtranslate_coordinates_ = nullptr;
 
   struct PendingKeyEvent {
     uint32_t code = 0;
     bool down = false;
   };
 
+  std::atomic<bool> is_grabbed_{false};
   std::atomic<bool> worker_running_{false};
   std::thread worker_thread_;
   mutable std::mutex dpy_mutex_;

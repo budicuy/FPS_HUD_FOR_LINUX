@@ -5,6 +5,7 @@
 #include "evdev_backend.hpp"
 #include "imgui.h"
 #include "input_manager.hpp"
+#include "telemetry.hpp"
 #include "wayland_backend.hpp"
 #include "x11_backend.hpp"
 
@@ -50,7 +51,66 @@ fs::path find_libfpshud_so() {
 
 }  // namespace
 
-TEST_CASE("Input: Backends & Event Routing") {
+TEST_CASE("Input Manager") {
+  SUBCASE("Wayland Hook_DestroySurfaceKHR Display Preservation") {
+    fs::path rroot = find_repo_root();
+    if (!rroot.empty()) {
+      std::string hooks_src = read_text_file(rroot / "src" / "layer" / "vulkan_hooks.cpp");
+      size_t destroy_surface_pos = hooks_src.find("Hook_DestroySurfaceKHR");
+      REQUIRE(destroy_surface_pos != std::string::npos);
+      size_t destroy_surface_end = hooks_src.find("}", destroy_surface_pos);
+      REQUIRE(destroy_surface_end != std::string::npos);
+      std::string destroy_surface_body =
+          hooks_src.substr(destroy_surface_pos, destroy_surface_end - destroy_surface_pos);
+
+      bool no_detach_in_surface =
+          (destroy_surface_body.find("detach_wayland_display") == std::string::npos);
+      CHECK_MESSAGE(no_detach_in_surface,
+                    "Hook_DestroySurfaceKHR must not call detach_wayland_display");
+
+      size_t destroy_inst_pos = hooks_src.find("Hook_DestroyInstance");
+      REQUIRE(destroy_inst_pos != std::string::npos);
+      size_t destroy_inst_end = hooks_src.find("Hook_EnumeratePhysicalDevices", destroy_inst_pos);
+      REQUIRE(destroy_inst_end != std::string::npos);
+      std::string destroy_inst_body =
+          hooks_src.substr(destroy_inst_pos, destroy_inst_end - destroy_inst_pos);
+      bool detach_in_inst = (destroy_inst_body.find("detach_wayland_display") != std::string::npos);
+      CHECK_MESSAGE(detach_in_inst, "Hook_DestroyInstance must call detach_wayland_display");
+    }
+  }
+
+  SUBCASE("Conditional Grab: X11 Grab Suppressed When Wayland or Evdev Active") {
+    ImGuiContext* prev_ctx = ImGui::GetCurrentContext();
+    ImGuiContext* test_ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(test_ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+
+    InputManager im;
+    HudConfig cfg{};
+    cfg.enabled = true;
+    cfg.gui_open = false;
+
+    // When Wayland display is attached, sync_grab_state must not activate X11 grab
+    void* mock_display = reinterpret_cast<void*>(0x5678);
+    im.attach_wayland_display(mock_display);
+    REQUIRE(im.has_wayland_display());
+
+    cfg.gui_open = true;
+    im.sync_grab_state(io, cfg);
+    CHECK_MESSAGE(!im.is_mouse_grabbed(),
+                  "X11 grab not initiated when Wayland display is attached");
+
+    cfg.gui_open = false;
+    im.sync_grab_state(io, cfg);
+    im.detach_wayland_display(mock_display);
+
+    if (test_ctx) {
+      ImGui::DestroyContext(test_ctx);
+    }
+    ImGui::SetCurrentContext(prev_ctx);
+  }
+
   SUBCASE("Evdev Backend Non-Blocking Grab & Device Inspection") {
     EvdevBackend evdev;
     bool init_res = evdev.init();
@@ -130,6 +190,15 @@ TEST_CASE("Input: Backends & Event Routing") {
     im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
     im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
     im.handle_key_event(KEY_LEFTSHIFT, false, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(fpshud::get_telemetry().is_benchmark_active(), "Benchmark activated by Shift+F9");
+
+    // Toggle benchmark off to restore clean collector state
+    im.handle_key_event(KEY_LEFTSHIFT, true, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_LEFTSHIFT, false, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(!fpshud::get_telemetry().is_benchmark_active(),
+                  "Benchmark deactivated after second Shift+F9 trigger");
 
     // 1-key capture
     im.start_keybind_capture(KeybindTarget::ToggleHud);

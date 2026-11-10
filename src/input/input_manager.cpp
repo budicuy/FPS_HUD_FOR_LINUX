@@ -145,24 +145,6 @@ void InputManager::detach_wayland_display(void* display) noexcept {
   }
 }
 
-void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
-  if (wayland_backend_) {
-    wayland_backend_->register_seat(seat, id);
-  }
-}
-
-void InputManager::register_wayland_keyboard(void* seat) noexcept {
-  if (wayland_backend_) {
-    wayland_backend_->register_keyboard(seat);
-  }
-}
-
-void InputManager::register_wayland_pointer(void* seat) noexcept {
-  if (wayland_backend_) {
-    wayland_backend_->register_pointer(seat);
-  }
-}
-
 void InputManager::start_keybind_capture(KeybindTarget target) noexcept {
   capture_target_ = target;
   capture_mod_key_ = 0;
@@ -355,7 +337,8 @@ void InputManager::handle_pointer_wheel(float x, float y, const HudConfig& cfg,
 }
 
 bool InputManager::is_mouse_grabbed() const noexcept {
-  return evdev_backend_ ? evdev_backend_->is_mouse_grabbed() : false;
+  return (evdev_backend_ && evdev_backend_->is_mouse_grabbed()) ||
+         (x11_backend_ && x11_backend_->is_grabbed());
 }
 
 void InputManager::set_mouse_grab(bool grab) {
@@ -381,7 +364,10 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     pending_ungrab_ = false;
     set_mouse_grab(true);
-    set_x11_grab(true);
+    if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) &&
+        (!wayland_backend_ || !wayland_backend_->has_display())) {
+      set_x11_grab(true);
+    }
     // Draw software cursor ONLY when physical mouse is grabbed by kernel.
     // In fallback mode, the OS hardware cursor is already visible so drawing
     // a second cursor causes double cursor.
