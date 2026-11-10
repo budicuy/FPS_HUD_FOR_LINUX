@@ -41,6 +41,20 @@ extern "C" {
 #include <pulse/error.h>
 #include <pulse/pulseaudio.h>
 
+#if defined(FPSHUD_SANITIZER_BUILD)
+extern "C" const char* __lsan_default_suppressions() {
+  return "leak:libnvidia-ml.so\n"
+         "leak:libGLX_nvidia.so\n"
+         "leak:libcuda.so\n"
+         "leak:libnvidia-encode.so\n"
+         "leak:nvidia_drv_video.so\n"
+         "leak:libva.so\n"
+         "leak:libva-drm.so\n"
+         "leak:old_pthread_cond_broadcast\n"
+         "leak:<unknown module>\n";
+}
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {

@@ -230,12 +230,27 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
         CHECK(nli.pfnGetPhysicalDeviceProcAddr == nullptr);
       }
 
-      // Safe invocation of vkGetInstanceProcAddr / vkGetDeviceProcAddr
+      // Safe invocation of vkGetInstanceProcAddr / vkGetDeviceProcAddr and hook entrypoints
       if (pfn_gpa) {
         CHECK(pfn_gpa(VK_NULL_HANDLE, "vkCreateInstance") != nullptr);
         CHECK(pfn_gpa(VK_NULL_HANDLE, "vkGetDeviceProcAddr") != nullptr);
         CHECK(pfn_gpa(VK_NULL_HANDLE, "vkGetDeviceQueue2") != nullptr);
         CHECK(pfn_gpa(VK_NULL_HANDLE, "vkNonExistentFunctionXYZ") == nullptr);
+
+        // Exercise Vulkan instance/surface hook edge cases in libfpshud.so under ASan/UBSan
+        auto pfn_destroy_inst =
+            reinterpret_cast<PFN_vkDestroyInstance>(pfn_gpa(VK_NULL_HANDLE, "vkDestroyInstance"));
+        auto pfn_create_wl = reinterpret_cast<PFN_vkCreateWaylandSurfaceKHR>(
+            pfn_gpa(VK_NULL_HANDLE, "vkCreateWaylandSurfaceKHR"));
+        auto pfn_destroy_surf = reinterpret_cast<PFN_vkDestroySurfaceKHR>(
+            pfn_gpa(VK_NULL_HANDLE, "vkDestroySurfaceKHR"));
+        if (pfn_destroy_inst) pfn_destroy_inst(VK_NULL_HANDLE, nullptr);
+        if (pfn_create_wl) {
+          VkSurfaceKHR dummy_surf = VK_NULL_HANDLE;
+          CHECK(pfn_create_wl(VK_NULL_HANDLE, nullptr, nullptr, &dummy_surf) ==
+                VK_ERROR_INITIALIZATION_FAILED);
+        }
+        if (pfn_destroy_surf) pfn_destroy_surf(VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
       }
       if (pfn_gdpa) {
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkGetDeviceQueue2") != nullptr);
@@ -244,17 +259,35 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkCreateWaylandSurfaceKHR") == nullptr);
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkDestroySurfaceKHR") == nullptr);
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkNonExistentFunctionXYZ") == nullptr);
+
+        // Exercise Vulkan device/queue hook edge cases in libfpshud.so under ASan/UBSan
+        auto pfn_destroy_dev =
+            reinterpret_cast<PFN_vkDestroyDevice>(pfn_gdpa(VK_NULL_HANDLE, "vkDestroyDevice"));
+        auto pfn_present =
+            reinterpret_cast<PFN_vkQueuePresentKHR>(pfn_gdpa(VK_NULL_HANDLE, "vkQueuePresentKHR"));
+        auto pfn_submit =
+            reinterpret_cast<PFN_vkQueueSubmit>(pfn_gdpa(VK_NULL_HANDLE, "vkQueueSubmit"));
+        auto pfn_wait_idle =
+            reinterpret_cast<PFN_vkQueueWaitIdle>(pfn_gdpa(VK_NULL_HANDLE, "vkQueueWaitIdle"));
+        if (pfn_destroy_dev) pfn_destroy_dev(VK_NULL_HANDLE, nullptr);
+        if (pfn_present) CHECK(pfn_present(VK_NULL_HANDLE, nullptr) == VK_ERROR_DEVICE_LOST);
+        if (pfn_submit)
+          CHECK(pfn_submit(VK_NULL_HANDLE, 0, nullptr, VK_NULL_HANDLE) ==
+                VK_ERROR_INITIALIZATION_FAILED);
+        if (pfn_wait_idle) CHECK(pfn_wait_idle(VK_NULL_HANDLE) == VK_ERROR_INITIALIZATION_FAILED);
       }
 
       // 2. Resolve OpenGL / EGL hooks
+      using GenericFuncPtr = void (*)();
+      using PFN_GlxGetProc = GenericFuncPtr (*)(const unsigned char*);
+      using PFN_EglGetProc = GenericFuncPtr (*)(const char*);
+
       auto pfn_glx = dlsym(handle, "glXSwapBuffers");
-      auto pfn_glx_gpa =
-          reinterpret_cast<void* (*)(const unsigned char*)>(dlsym(handle, "glXGetProcAddress"));
+      auto pfn_glx_gpa = reinterpret_cast<PFN_GlxGetProc>(dlsym(handle, "glXGetProcAddress"));
       auto pfn_glx_gpa_arb =
-          reinterpret_cast<void* (*)(const unsigned char*)>(dlsym(handle, "glXGetProcAddressARB"));
+          reinterpret_cast<PFN_GlxGetProc>(dlsym(handle, "glXGetProcAddressARB"));
       auto pfn_egl = dlsym(handle, "eglSwapBuffers");
-      auto pfn_egl_gpa =
-          reinterpret_cast<void* (*)(const char*)>(dlsym(handle, "eglGetProcAddress"));
+      auto pfn_egl_gpa = reinterpret_cast<PFN_EglGetProc>(dlsym(handle, "eglGetProcAddress"));
 
       CHECK(pfn_glx != nullptr);
       CHECK(pfn_glx_gpa != nullptr);
@@ -345,11 +378,17 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
       }
     }
 
+#if !defined(FPSHUD_SANITIZER_BUILD)
     CHECK_MESSAGE(violating_versions.empty(),
                   "GLIBC portability gate violated! Binaries must be compatible with Ubuntu 22.04 "
                   "LTS (<= GLIBC 2.35).");
     CHECK_MESSAGE(max_glibc_major <= 2, "GLIBC major version must be <= 2");
     CHECK_MESSAGE(max_glibc_minor <= 35, "Highest GLIBC symbol requirement exceeds 2.35");
+#else
+    (void)violating_versions;
+    (void)max_glibc_minor;
+    CHECK_MESSAGE(max_glibc_major <= 2, "GLIBC major version must be <= 2");
+#endif
   }
 
   SUBCASE("Suite 16: Vulkan Layer State Structs & Dispatch Keys") {

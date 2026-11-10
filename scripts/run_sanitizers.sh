@@ -40,7 +40,7 @@ BUILD_DIR="${ROOT_DIR}/build_asan"
 echo "=========================================================="
 echo "  FPSHUD Memory Safety & Bug Detection Suite (ASan + UBSan)"
 echo "  Compiler : $(which ${CXX}) ($(${CXX} --version | head -n1))"
-echo "  Checks   : Memory Leaks, Buffer Overflow, UAF, UB, Int Overflow"
+echo "  Checks   : Memory Leaks, Buffer Overflow, UAF, Use-After-Scope, UB, Float-Div-Zero"
 echo "=========================================================="
 
 cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -G Ninja \
@@ -50,13 +50,13 @@ cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -G Ninja \
     -DENABLE_ASAN=ON \
     -DENABLE_UBSAN=ON
 
-ninja -C "${BUILD_DIR}" fpshud fpshud_test
+ninja -C "${BUILD_DIR}"
 
 echo "----------------------------------------------------------"
-echo "  Running Test Suite under AddressSanitizer & UBSan..."
+echo "  Running Test Suite under Strict AddressSanitizer & UBSan..."
 echo "----------------------------------------------------------"
 
-export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1"
+export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:strict_string_checks=1:detect_invalid_pointer_pairs=2:protect_shadow_gap=0"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 export LSAN_OPTIONS="suppressions=${ROOT_DIR}/tests/lsan_suppressions.txt"
 

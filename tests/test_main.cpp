@@ -12,7 +12,12 @@ extern "C" const char* __lsan_default_suppressions() {
   return "leak:libnvidia-ml.so\n"
          "leak:init_gpu_sensors_locked\n"
          "leak:libGLX_nvidia.so\n"
-         "leak:libcuda.so\n";
+         "leak:libcuda.so\n"
+         "leak:libnvidia-encode.so\n"
+         "leak:nvidia_drv_video.so\n"
+         "leak:libva.so\n"
+         "leak:libva-drm.so\n"
+         "leak:old_pthread_cond_broadcast\n";
 }
 
 int main(int argc, char** argv) {

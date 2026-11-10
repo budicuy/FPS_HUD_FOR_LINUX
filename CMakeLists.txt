@@ -79,6 +79,7 @@ endif()
 
 if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
     set(USE_SANITIZERS ON)
+    add_compile_definitions(FPSHUD_SANITIZER_BUILD=1)
 else()
     set(USE_SANITIZERS OFF)
 endif()
@@ -196,15 +197,15 @@ else()
 endif()
 
 if(ENABLE_ASAN)
-    message(STATUS "  -> AddressSanitizer + LeakSanitizer: ENABLED")
-    add_compile_options(-fsanitize=address)
+    message(STATUS "  -> AddressSanitizer + LeakSanitizer (Strict Use-After-Scope): ENABLED")
+    add_compile_options(-fsanitize=address -fsanitize-address-use-after-scope)
     add_link_options(-fsanitize=address)
 endif()
 
 if(ENABLE_UBSAN)
-    message(STATUS "  -> UndefinedBehaviorSanitizer: ENABLED")
-    add_compile_options(-fsanitize=undefined -fno-sanitize-recover=all)
-    add_link_options(-fsanitize=undefined)
+    message(STATUS "  -> UndefinedBehaviorSanitizer (Strict + Float-Div-By-Zero): ENABLED")
+    add_compile_options(-fsanitize=undefined -fsanitize=float-divide-by-zero -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=undefined -fsanitize=float-divide-by-zero)
 endif()
 
 if(ENABLE_TSAN)
@@ -468,10 +469,14 @@ if (BUILD_STATIC_RECORDER)
 
     target_link_options(fpshud_recorder_bin PRIVATE
         -Wl,--gc-sections
-        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
-        -static-libgcc
         ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
     )
+    if(NOT USE_SANITIZERS)
+        target_link_options(fpshud_recorder_bin PRIVATE
+            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+            -static-libgcc
+        )
+    endif()
 
     # Universal lightweight container-aware launcher
     add_executable(fpshud_recorder
