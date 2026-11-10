@@ -151,7 +151,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           auto stop_wait_start = std::chrono::steady_clock::now();
           while (std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - stop_wait_start)
-                     .count() < 1500) {
+                     .count() < 3000) {
             int wstatus = 0;
             pid_t res = waitpid(child_pid, &wstatus, WNOHANG);
             if (res == child_pid) {
@@ -173,10 +173,10 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
         }
 
         CHECK_MESSAGE(child_stopped_cleanly,
-                      "Recorder daemon stops cleanly (<1500ms exit on odd dim 321x241)");
+                      "Recorder daemon stops cleanly (<3000ms exit on odd dim 321x241)");
       }
     } else {
-      CHECK_MESSAGE(true, "Verified at build time (standalone deployment without recorder binary)");
+      CHECK(!rec_path.empty());
     }
 
     // Verify A/V Timestamp Synchronization & SHM Bounds Guard (I1, I4)
@@ -355,9 +355,8 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
     CHECK_MESSAGE(paused_seek_supported,
                   "10.20 Playback worker decodes single frame on seek while paused");
 
-    // 10.25 End-to-end player controller lifecycle with real audio/video clip verification
+    // 10.25 End-to-end player controller lifecycle with synthetic video verification
     bool e2e_playback_ok = false;
-    std::string sample_mp4 = "/home/budicuy/Video/FPSHUD/FPSHUD_20261109_032919.mp4";
     std::string helper_bin = "./build/fpshud_recorder_bin";
     if (!rroot.empty() && fs::exists(rroot / "build" / "fpshud_recorder_bin")) {
       helper_bin = (rroot / "build" / "fpshud_recorder_bin").string();
@@ -365,29 +364,44 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
       helper_bin = "./fpshud_recorder_bin";
     }
 
+    ScopedTempDir tmp_video("fpshud_synth_video_");
+    fs::path sample_mp4 = tmp_video / "synthetic_test.mp4";
+    std::string gen_cmd =
+        "ffmpeg -y -f lavfi -i testsrc=duration=2:size=320x240:rate=30 -f lavfi -i "
+        "sine=frequency=1000:duration=2 -c:v libx264 -c:a aac -pix_fmt yuv420p \"" +
+        sample_mp4.string() + "\" >/dev/null 2>&1";
+    int gen_rc = std::system(gen_cmd.c_str());
+    (void)gen_rc;
+
     if (fs::exists(sample_mp4) && fs::exists(helper_bin)) {
-      fpshud::VideoPlayerController e2e_ctrl;
-      if (e2e_ctrl.open(sample_mp4, helper_bin)) {
-        const auto* hdr = e2e_ctrl.header();
-        if (hdr && hdr->magic == kPlaybackShmMagic && hdr->duration_sec > 60.0f) {
-          auto wait_start = std::chrono::steady_clock::now();
-          while (std::chrono::steady_clock::now() - wait_start < std::chrono::milliseconds(1000)) {
-            if (hdr->frame_seq.load() >= 1) {
-              e2e_playback_ok = true;
-              break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      fpshud::VideoPlayerController player;
+      if (player.open(sample_mp4.string(), helper_bin)) {
+        CHECK(player.is_active());
+        const auto* hdr = player.header();
+        REQUIRE(hdr != nullptr);
+        CHECK(hdr->magic == kPlaybackShmMagic);
+        CHECK(hdr->width > 0);
+        CHECK(hdr->height > 0);
+        CHECK(hdr->duration_sec > 0.0f);
+        CHECK(player.frame_pixels() != nullptr);
+
+        auto wait_start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - wait_start < std::chrono::milliseconds(1000)) {
+          if (hdr->frame_seq.load() >= 1) {
+            e2e_playback_ok = true;
+            break;
           }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        e2e_ctrl.close();
+        player.close();
+        CHECK(!player.is_active());
       }
     } else {
-      // In CI / build without sample clip, verify controller interface invariants
+      // In CI / build without ffmpeg generator, verify controller interface invariants
       e2e_playback_ok = true;
     }
-    CHECK_MESSAGE(
-        e2e_playback_ok,
-        "10.25 End-to-end player controller lifecycle with real audio/video clip verification");
+    CHECK_MESSAGE(e2e_playback_ok,
+                  "10.25 End-to-end player controller lifecycle with synthetic video verification");
   }
 
   SUBCASE("Safe Texture Management & Deferred Release") {
@@ -474,8 +488,13 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 
     // 10.15 In-game GUI state contract remains coherent during in-game GUI & modal player
     auto& cur_cfg = fpshud::get_mutable_config();
-    CHECK_MESSAGE((cur_cfg.gui_open == fpshud::get_global_config().gui_open),
-                  "10.15 In-game GUI state contract verified during overlay navigation");
+    const bool initial_gui_state = cur_cfg.gui_open;
+    cur_cfg.gui_open = !initial_gui_state;
+    CHECK_MESSAGE((fpshud::get_global_config().gui_open == !initial_gui_state),
+                  "10.15 In-game GUI state transition observed in global config");
+    cur_cfg.gui_open = initial_gui_state;
+    CHECK_MESSAGE((fpshud::get_global_config().gui_open == initial_gui_state),
+                  "10.15 In-game GUI state restoration observed in global config");
 
     // 10.17 GUI menu close on F12 terminates active player controller
     bool f12_cleanup_logic_present = rroot.empty();

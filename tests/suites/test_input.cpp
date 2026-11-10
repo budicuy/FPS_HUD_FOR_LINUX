@@ -1,13 +1,14 @@
 #include "doctest.h"
 #include "test_common.hpp"
 
+#include "backends/evdev_backend.hpp"
+#include "backends/wayland_backend.hpp"
+#include "backends/x11_backend.hpp"
 #include "config.hpp"
-#include "evdev_backend.hpp"
 #include "imgui.h"
 #include "input_manager.hpp"
+#include "recorder_ipc.hpp"
 #include "telemetry.hpp"
-#include "wayland_backend.hpp"
-#include "x11_backend.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -20,36 +21,6 @@
 
 namespace fs = std::filesystem;
 using namespace fpshud;
-
-namespace {
-
-fs::path find_libfpshud_so() {
-  std::vector<fs::path> candidates;
-  char exe_buf[4096] = {0};
-  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
-  if (len > 0) {
-    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
-    candidates.push_back(exe_dir / "libfpshud.so");
-    candidates.push_back(exe_dir / "build" / "libfpshud.so");
-  }
-  fs::path repo_root = find_repo_root();
-  if (!repo_root.empty()) {
-    candidates.push_back(repo_root / "build" / "libfpshud.so");
-    candidates.push_back(repo_root / "libfpshud.so");
-  }
-  candidates.push_back(fs::path("./build/libfpshud.so"));
-  candidates.push_back(fs::path("./libfpshud.so"));
-
-  for (const auto& p : candidates) {
-    std::error_code ec;
-    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
-      return fs::canonical(p, ec);
-    }
-  }
-  return {};
-}
-
-}  // namespace
 
 TEST_CASE("Input Manager") {
   SUBCASE("Wayland Hook_DestroySurfaceKHR Display Preservation") {
@@ -84,6 +55,7 @@ TEST_CASE("Input Manager") {
     ImGuiContext* test_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(test_ctx);
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1920.0f, 1080.0f);
 
     InputManager im;
@@ -155,13 +127,13 @@ TEST_CASE("Input Manager") {
   }
 
   SUBCASE("X11 Backend Decoupled Worker & Idempotent Shutdown") {
-    X11Backend x11;
-    bool init_res = x11.init();
+    X11Backend xb;
+    bool init_res = xb.init();
     (void)init_res;
-    x11.shutdown();  // Must safely join worker thread without deadlock
-    x11.shutdown();  // Idempotent shutdown check
+    xb.shutdown();  // Must safely join worker thread without deadlock
+    xb.shutdown();  // Idempotent shutdown check
 
-    CHECK_MESSAGE(true, "17.3 X11Backend Lifecycle, Thread Safety & Decoupled Polling verified");
+    CHECK(!xb.is_grabbed());
   }
 
   SUBCASE("InputManager Hotkey Routing & Keybind Capture") {
@@ -190,15 +162,11 @@ TEST_CASE("Input Manager") {
     im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
     im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
     im.handle_key_event(KEY_LEFTSHIFT, false, cfg, 1920.0f, 1080.0f);
-    CHECK_MESSAGE(fpshud::get_telemetry().is_benchmark_active(), "Benchmark activated by Shift+F9");
+    CHECK(fpshud::get_telemetry().is_benchmark_active());
 
-    // Toggle benchmark off to restore clean collector state
-    im.handle_key_event(KEY_LEFTSHIFT, true, cfg, 1920.0f, 1080.0f);
-    im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
-    im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
-    im.handle_key_event(KEY_LEFTSHIFT, false, cfg, 1920.0f, 1080.0f);
-    CHECK_MESSAGE(!fpshud::get_telemetry().is_benchmark_active(),
-                  "Benchmark deactivated after second Shift+F9 trigger");
+    // Stop benchmark cleanly
+    fpshud::get_telemetry().toggle_benchmark();
+    CHECK(!fpshud::get_telemetry().is_benchmark_active());
 
     // 1-key capture
     im.start_keybind_capture(KeybindTarget::ToggleHud);
@@ -219,10 +187,24 @@ TEST_CASE("Input Manager") {
     bool two_key_captured = (cfg.bind_benchmark == Keybind{KEY_LEFTALT, KEY_B});
     CHECK_MESSAGE(!im.is_capturing_keybind(), "2-key combo capture finished");
     CHECK_MESSAGE(two_key_captured, "2-key capture mapped LeftAlt+B to ToggleBenchmark");
+
+    // Cancel capture via KEY_ESC
+    im.start_keybind_capture(KeybindTarget::ToggleHud);
+    CHECK(im.is_capturing_keybind());
+    im.handle_key_event(KEY_ESC, true, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_ESC, false, cfg, 1920.0f, 1080.0f);
+    CHECK(!im.is_capturing_keybind());
+    CHECK(cfg.bind_toggle_hud == Keybind{0, KEY_F8});
+
+    // F10 hotkey triggers screenshot request
+    RecorderController::instance().consume_screenshot_request();
+    im.handle_key_event(KEY_F10, true, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_F10, false, cfg, 1920.0f, 1080.0f);
+    CHECK(RecorderController::instance().consume_screenshot_request());
   }
 
   SUBCASE("InputManager Mouse Isolation & Double-Cursor Safety") {
-    fs::path so_path = find_libfpshud_so();
+    fs::path so_path = fpshud::test::find_libfpshud_path();
     if (!so_path.empty()) {
       void* handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
       if (handle) {
@@ -243,6 +225,7 @@ TEST_CASE("Input Manager") {
     ImGuiContext* test_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(test_ctx);
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1920.0f, 1080.0f);
     io.DeltaTime = 1.0f / 60.0f;
     io.ConfigInputTrickleEventQueue = false;

@@ -656,6 +656,7 @@ void compute_clamped_hud_pos(const HudConfig& cfg, float display_w, float displa
 }
 
 void setup_overlay_font(ImGuiIO& io) {
+  io.IniFilename = nullptr;
   std::string home_fonts;
   if (const char* home = std::getenv("HOME"); home && *home) {
     home_fonts = std::string(home) + "/.local/share/fpshud/fonts/";

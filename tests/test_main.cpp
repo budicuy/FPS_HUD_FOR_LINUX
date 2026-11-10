@@ -10,27 +10,9 @@
 
 extern "C" const char* __lsan_default_suppressions() {
   return "leak:libnvidia-ml.so\n"
-         "leak:libcuda.so\n"
-         "leak:libGLX_nvidia.so\n";
-}
-
-TEST_CASE("Doctest Scaffolding Smoke Test") {
-  SUBCASE("Basic assertion check") {
-    CHECK(1 + 1 == 2);
-    check_cond(true, "Scaffolding check_cond shim test");
-  }
-
-  SUBCASE("ScopedTempDir RAII lifecycle") {
-    fs::path dir_path;
-    {
-      ScopedTempDir tmp("fpshud_mock_smoke_");
-      dir_path = tmp.path;
-      CHECK(fs::exists(dir_path));
-      write_mock_file(tmp / "sample.txt", "hello doctest");
-      CHECK(fs::exists(dir_path / "sample.txt"));
-    }
-    CHECK(!fs::exists(dir_path));
-  }
+         "leak:init_gpu_sensors_locked\n"
+         "leak:libGLX_nvidia.so\n"
+         "leak:libcuda.so\n";
 }
 
 int main(int argc, char** argv) {

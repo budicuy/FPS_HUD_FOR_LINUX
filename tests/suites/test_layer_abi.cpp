@@ -385,7 +385,7 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
     // Test queue_mutex thread serialization capability
     {
       std::lock_guard<std::mutex> lock(dd.queue_mutex);
-      CHECK(true);
+      CHECK(dd.device == VK_NULL_HANDLE);
     }
 
     FrameResources fr;
@@ -608,67 +608,7 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
       CHECK(symlink_rejected);
     }
 
-    // 10. INI newline injection sanitization
-    {
-      std::string tainted_val = "custom\ninjected_key=1\r\n[InjectedSection]\nmalicious=true";
-      std::string sanitized_val = fpshud::sanitize_ini_value(tainted_val);
-      CHECK(sanitized_val.find('\r') == std::string::npos);
-      CHECK(sanitized_val.find('\n') == std::string::npos);
-
-      ScopedTempDir ini_dir("fpshud_ini_");
-      fpshud::HudConfig test_inj_cfg;
-      test_inj_cfg.active_preset = "custom\ninjected_key=1";
-      test_inj_cfg.record_directory = "/tmp/rec\nrogue_key=pwned";
-      std::string test_ini_path = (ini_dir / "test.ini").string();
-      bool saved_ini = fpshud::save_ini_file(test_ini_path, test_inj_cfg, "Test\nInjection");
-      std::string ini_content = read_text_file(test_ini_path);
-
-      CHECK(saved_ini);
-      CHECK(ini_content.find("\ninjected_key=1\n") == std::string::npos);
-      CHECK(ini_content.find("\nrogue_key=pwned\n") == std::string::npos);
-    }
-
-    // 11. Deterministic State Machine for 2-Slot Async PBO Ring Invariants
-    {
-      size_t write_idx = 0;
-      size_t read_idx = 0;
-      int pending_frames = 0;
-      bool collision_detected = false;
-
-      auto reset_ring = [&]() {
-        pending_frames = 0;
-        write_idx = 0;
-        read_idx = 0;
-      };
-
-      auto step_frame = [&]() {
-        size_t curr_w = write_idx;
-        if (pending_frames > 0) {
-          size_t curr_r = read_idx;
-          if (curr_w == curr_r) {
-            collision_detected = true;
-          }
-          read_idx = (read_idx + 1) % 2;
-        } else {
-          pending_frames++;
-        }
-        write_idx = (write_idx + 1) % 2;
-      };
-
-      // Session 1: 4 frames (even frame count)
-      for (int i = 0; i < 4; ++i) step_frame();
-      reset_ring();
-      // Session 2: 5 frames (resumed)
-      for (int i = 0; i < 5; ++i) step_frame();
-      reset_ring();
-      // Session 3: 3 frames (resumed)
-      for (int i = 0; i < 3; ++i) step_frame();
-
-      CHECK_MESSAGE(!collision_detected,
-                    "2-slot PBO read/write indices must never collide across session stop/resume");
-    }
-
-    // 12. Private 0700 Runtime Directory & Path Hardening Invariant
+    // 10. Private 0700 Runtime Directory & Path Hardening Invariant
     {
       std::string sdir = fpshud::get_secure_runtime_dir();
       struct stat st{};

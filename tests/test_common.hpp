@@ -71,6 +71,10 @@ inline fs::path find_libfpshud_path() {
   return {};
 }
 
+namespace fpshud::test {
+using ::find_libfpshud_path;
+}  // namespace fpshud::test
+
 /// Resolve the path to fpshud_recorder_bin
 inline fs::path find_recorder_bin_path() {
   std::vector<fs::path> candidates;

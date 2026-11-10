@@ -102,58 +102,6 @@ TEST_CASE("Core: ISO C++26 Modernization Suite") {
     static_assert(std::is_same_v<fpshud::PackType<2, const char*, int, float, bool>, float>);
     CHECK(val == 45.67f);
   }
-
-  SUBCASE("SIMD frametime analytics parity and edge cases") {
-    // 1. Empty vector returns total_ms == 0.0
-    std::vector<float> empty_vec;
-    SimdStatsResult r_empty = compute_frametime_stats_simd(empty_vec);
-    CHECK(r_empty.total_ms == 0.0);
-    CHECK(r_empty.min_val == 0.0f);
-    CHECK(r_empty.max_val == 0.0f);
-
-    // 2. Single element returns min_val == 16.6f && max_val == 16.6f
-    std::vector<float> single_vec = {16.6f};
-    SimdStatsResult r_single = compute_frametime_stats_simd(single_vec);
-    CHECK(std::fabs(r_single.total_ms - 16.6) < 1e-4);
-    CHECK(r_single.min_val == 16.6f);
-    CHECK(r_single.max_val == 16.6f);
-
-    // 3. Multi-element vector with non-VSize count (11 elements)
-    std::vector<float> multi_vec = {16.6f, 8.33f, 33.3f, 12.5f, 20.0f, 6.94f,
-                                    14.2f, 18.1f, 22.0f, 10.0f, 15.0f};
-    SimdStatsResult r_multi = compute_frametime_stats_simd(multi_vec);
-    double expected_total = 0.0;
-    float expected_min = multi_vec[0];
-    float expected_max = multi_vec[0];
-    for (float v : multi_vec) {
-      expected_total += static_cast<double>(v);
-      if (v < expected_min) expected_min = v;
-      if (v > expected_max) expected_max = v;
-    }
-    CHECK(std::fabs(r_multi.total_ms - expected_total) < 1e-4);
-    CHECK(r_multi.min_val == expected_min);
-    CHECK(r_multi.max_val == expected_max);
-
-    // 4. All non-finite vector returns clean zeros
-    std::vector<float> nan_only_vec = {NAN, INFINITY, -INFINITY};
-    SimdStatsResult r_nan = compute_frametime_stats_simd(nan_only_vec);
-    CHECK(r_nan.total_ms == 0.0);
-    CHECK(r_nan.min_val == 0.0f);
-    CHECK(r_nan.max_val == 0.0f);
-
-    // 5. >512 SIMD chunks (5,003 elements) mixed with NaN/+Inf/-Inf
-    std::vector<float> large_vec(5003, 10.0f);
-    large_vec[0] = NAN;
-    large_vec[100] = INFINITY;
-    large_vec[2049] = -INFINITY;
-    large_vec[2500] = 2.5f;
-    large_vec[5002] = 30.0f;
-    // Remaining finite elements: 4998 * 10.0 + 2.5 + 30.0 = 50012.5
-    SimdStatsResult r_large = compute_frametime_stats_simd(large_vec);
-    CHECK(std::fabs(r_large.total_ms - 50012.5) < 0.01);
-    CHECK(r_large.min_val == 2.5f);
-    CHECK(r_large.max_val == 30.0f);
-  }
 }
 
 TEST_CASE("Core Config") {
@@ -446,65 +394,6 @@ TEST_CASE("Core: GUI Presets, INI Persistence & Video Encoders") {
       CHECK(vk_src.find("has_dma_buf_support") == std::string::npos);
       CHECK(vk_src.find("GetMemoryFdKHR") == std::string::npos);
     }
-  }
-
-  SUBCASE("Interactive 1-or-2-Key Shortcut Capture & Combo Matching") {
-    InputManager im;
-    HudConfig kcfg{};
-    kcfg.hud_visible = true;
-    kcfg.gui_open = false;
-
-    // 1. Single-key capture: capture KEY_F8 (66) for ToggleHud
-    im.start_keybind_capture(KeybindTarget::ToggleHud);
-    CHECK(im.is_capturing_keybind());
-    CHECK(im.capturing_target() == KeybindTarget::ToggleHud);
-    im.handle_key_event(66, true, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(66, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(!im.is_capturing_keybind());
-    CHECK(kcfg.bind_toggle_hud.mod_key == 0);
-    CHECK(kcfg.bind_toggle_hud.main_key == 66);
-
-    // 2. Two-key combo capture: capture LeftAlt (56) + F (33) for ToggleHud
-    im.start_keybind_capture(KeybindTarget::ToggleHud);
-    im.handle_key_event(56, true, kcfg, 1920.0f, 1080.0f, nullptr);  // Press LeftAlt
-    CHECK(im.is_capturing_keybind());
-    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);  // Press F
-    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(56, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(!im.is_capturing_keybind());
-    CHECK(kcfg.bind_toggle_hud.mod_key == 56);
-    CHECK(kcfg.bind_toggle_hud.main_key == 33);
-
-    // 3. Triggering custom 2-key combo: pressing F alone does NOT toggle hud_visible, pressing
-    // LeftAlt + F DOES toggle hud_visible
-    kcfg.hud_visible = true;
-    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(kcfg.hud_visible == true);
-
-    im.handle_key_event(56, true, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(33, true, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(33, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(56, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(kcfg.hud_visible == false);
-
-    // 4. Cancel capture via KEY_ESC (1)
-    im.start_keybind_capture(KeybindTarget::ToggleHud);
-    im.handle_key_event(1, true, kcfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(1, false, kcfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(!im.is_capturing_keybind());
-    CHECK(kcfg.bind_toggle_hud.mod_key == 56);
-    CHECK(kcfg.bind_toggle_hud.main_key == 33);
-
-    // 5. Default F10 (68) must trigger Screenshot without toggling GUI open
-    HudConfig f10_cfg{};
-    f10_cfg.enabled = true;
-    f10_cfg.gui_open = false;
-    RecorderController::instance().consume_screenshot_request();
-    im.handle_key_event(68, true, f10_cfg, 1920.0f, 1080.0f, nullptr);
-    im.handle_key_event(68, false, f10_cfg, 1920.0f, 1080.0f, nullptr);
-    CHECK(!f10_cfg.gui_open);
-    CHECK(RecorderController::instance().consume_screenshot_request());
   }
 
   SUBCASE("INI Newline and Carriage Return Sanitization") {

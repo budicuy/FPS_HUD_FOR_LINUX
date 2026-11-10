@@ -127,6 +127,32 @@ TEST_CASE("Telemetry: Analytics & System Provider") {
     CHECK(empty_res.total_ms == 0.0);
     CHECK(empty_res.min_val == 0.0f);
     CHECK(empty_res.max_val == 0.0f);
+
+    // Multi-element vector with non-VSize count (11 elements)
+    std::vector<float> multi_vec = {16.6f, 8.33f, 33.3f, 12.5f, 20.0f, 6.94f,
+                                    14.2f, 18.1f, 22.0f, 10.0f, 15.0f};
+    SimdStatsResult r_multi = compute_frametime_stats_simd(multi_vec);
+    CHECK(r_multi.min_val == 6.94f);
+    CHECK(r_multi.max_val == 33.3f);
+
+    // All non-finite vector returns clean zeros
+    std::vector<float> nan_only_vec = {NAN, INFINITY, -INFINITY};
+    SimdStatsResult r_nan = compute_frametime_stats_simd(nan_only_vec);
+    CHECK(r_nan.total_ms == 0.0);
+    CHECK(r_nan.min_val == 0.0f);
+    CHECK(r_nan.max_val == 0.0f);
+
+    // Large vector with >512 SIMD chunks (5,003 elements) mixed with NaN/+Inf/-Inf
+    std::vector<float> large_vec(5003, 10.0f);
+    large_vec[0] = NAN;
+    large_vec[100] = INFINITY;
+    large_vec[2049] = -INFINITY;
+    large_vec[2500] = 2.5f;
+    large_vec[5002] = 30.0f;
+    SimdStatsResult r_large = compute_frametime_stats_simd(large_vec);
+    CHECK(std::fabs(r_large.total_ms - 50012.5) < 0.01);
+    CHECK(r_large.min_val == 2.5f);
+    CHECK(r_large.max_val == 30.0f);
   }
 
   SUBCASE("Suite 15.3: BenchmarkRecorder Lifecycle, Peak Sensors & CSV Output") {
