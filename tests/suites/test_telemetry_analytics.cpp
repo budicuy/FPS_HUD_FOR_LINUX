@@ -333,4 +333,78 @@ TEST_CASE("Telemetry: Analytics & System Provider") {
     CHECK(sata_data.disk_temp_available);
     CHECK(sata_data.disk_temp_c == 38);
   }
+
+  SUBCASE("Suite 15.5: BenchmarkRecorder Concurrency & Zero-Stall Stop") {
+    // 1. Basic race & frame counting test
+    {
+      ScopedTempDir tmp_bench("fpshud_bench_race");
+      fpshud::BenchmarkRecorder rec;
+      rec.set_csv_path((tmp_bench / "race_bench.csv").string());
+      fpshud::TelemetryData dummy{};
+      rec.start(dummy);
+      for (int i = 0; i < 1000; ++i) {
+        rec.on_frame(6.94f, dummy);
+        CHECK(rec.get_elapsed_sec() >= 0.0f);
+      }
+      rec.stop(dummy);
+      CHECK(rec.has_result());
+      CHECK(rec.get_last_summary().total_frames == 1000);
+    }
+
+    // 2. High-contention concurrent render & reader threads stress test
+    {
+      ScopedTempDir tmp_bench("fpshud_bench_stress");
+      fpshud::BenchmarkRecorder rec((tmp_bench / "concurrent_bench.csv").string());
+      fpshud::TelemetryData dummy{};
+      dummy.cpu_temp_c = 55;
+      dummy.cpu_power_w = 45.0f;
+      dummy.gpu_temp_c = 65;
+      dummy.gpu_power_w = 120.0f;
+
+      rec.start(dummy);
+      std::atomic<bool> stop_flag{false};
+      std::atomic<int> frames_rendered{0};
+
+      // Thread 1: Render thread invoking on_frame and reading elapsed time
+      std::thread render_thread([&]() {
+        while (!stop_flag.load(std::memory_order_relaxed)) {
+          rec.on_frame(6.944f, dummy);
+          float el = rec.get_elapsed_sec();
+          CHECK(el >= 0.0f);
+          frames_rendered.fetch_add(1, std::memory_order_relaxed);
+          std::this_thread::yield();
+        }
+      });
+
+      // Thread 2: UI / Polling thread reading status & last summary
+      std::thread ui_thread([&]() {
+        while (!stop_flag.load(std::memory_order_relaxed)) {
+          (void)rec.is_active();
+          (void)rec.has_result();
+          (void)rec.get_elapsed_sec();
+          (void)rec.get_last_summary();
+          std::this_thread::yield();
+        }
+      });
+
+      // Let threads run concurrently for 50 milliseconds
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+      // Stop recorder while render and UI threads are actively running
+      rec.stop(dummy);
+      stop_flag.store(true, std::memory_order_relaxed);
+
+      render_thread.join();
+      ui_thread.join();
+
+      CHECK(!rec.is_active());
+      CHECK(rec.has_result());
+      BenchmarkSummary sum = rec.get_last_summary();
+      CHECK(sum.has_result);
+      CHECK(sum.total_frames > 0);
+      CHECK(sum.total_frames <= static_cast<size_t>(frames_rendered.load()));
+      CHECK(sum.avg_fps > 0.0f);
+      CHECK(sum.duration_sec >= 0.0);
+    }
+  }
 }

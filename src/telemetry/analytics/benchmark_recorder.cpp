@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "frametime_analyzer.hpp"
+#include "analytics/frametime_analyzer.hpp"
 #include "telemetry.hpp"
 
 namespace fs = std::filesystem;
@@ -46,38 +46,85 @@ BenchmarkRecorder::BenchmarkRecorder(std::string csv_path)
 void BenchmarkRecorder::start() {
   std::lock_guard<std::mutex> block(bench_mutex_);
   bench_frametimes_ms_.clear();
-  bench_frametimes_ms_.reserve(16384);
+  bench_frametimes_ms_.reserve(65536);
   bench_max_gpu_temp_c_ = 0;
   bench_max_gpu_power_w_ = 0.0f;
   bench_max_cpu_temp_c_ = 0;
   bench_max_cpu_power_w_ = 0.0f;
-  bench_start_time_ = std::chrono::steady_clock::now();
+
+  auto now = std::chrono::steady_clock::now();
+  bench_start_time_ = now;
+  int64_t now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+  bench_start_ns_.store(now_ns, std::memory_order_release);
   bench_active_.store(true, std::memory_order_release);
 }
 
-void BenchmarkRecorder::stop() {
-  if (!bench_active_.exchange(false, std::memory_order_acq_rel)) {
-    return;
-  }
-
-  auto end_time = std::chrono::steady_clock::now();
+void BenchmarkRecorder::start(const TelemetryData& current_snapshot) {
   std::lock_guard<std::mutex> block(bench_mutex_);
+  bench_frametimes_ms_.clear();
+  bench_frametimes_ms_.reserve(65536);
+  bench_max_gpu_temp_c_ = current_snapshot.gpu_temp_c;
+  bench_max_gpu_power_w_ = current_snapshot.gpu_power_w;
+  bench_max_cpu_temp_c_ = current_snapshot.cpu_temp_c;
+  bench_max_cpu_power_w_ = current_snapshot.cpu_power_w;
 
-  if (bench_frametimes_ms_.empty()) {
-    return;
+  auto now = std::chrono::steady_clock::now();
+  bench_start_time_ = now;
+  int64_t now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+  bench_start_ns_.store(now_ns, std::memory_order_release);
+  bench_active_.store(true, std::memory_order_release);
+}
+
+void BenchmarkRecorder::stop(const TelemetryData& current_snapshot) {
+  update_peaks(current_snapshot.cpu_temp_c, current_snapshot.cpu_power_w,
+               current_snapshot.gpu_temp_c, current_snapshot.gpu_power_w);
+  stop();
+}
+
+void BenchmarkRecorder::stop() {
+  std::vector<float> local_samples;
+  std::chrono::steady_clock::time_point start_time;
+  auto end_time = std::chrono::steady_clock::now();
+  int max_gpu_temp = 0;
+  float max_gpu_power = 0.0f;
+  int max_cpu_temp = 0;
+  float max_cpu_power = 0.0f;
+  std::string csv_path;
+
+  {
+    std::lock_guard<std::mutex> block(bench_mutex_);
+    if (!bench_active_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    bench_active_.store(false, std::memory_order_release);
+
+    if (bench_frametimes_ms_.empty()) {
+      return;
+    }
+
+    std::swap(local_samples, bench_frametimes_ms_);
+    start_time = bench_start_time_;
+    max_gpu_temp = bench_max_gpu_temp_c_;
+    max_gpu_power = bench_max_gpu_power_w_;
+    max_cpu_temp = bench_max_cpu_temp_c_;
+    max_cpu_power = bench_max_cpu_power_w_;
+    csv_path = custom_csv_path_.empty() ? get_default_benchmark_csv_path() : custom_csv_path_;
   }
 
   BenchmarkSummary sum{};
   sum.has_result = true;
-  sum.duration_sec = std::chrono::duration<double>(end_time - bench_start_time_).count();
+  sum.total_frames = local_samples.size();
+  sum.duration_sec = std::chrono::duration<double>(end_time - start_time).count();
   sum.finished_time = end_time;
-  sum.max_gpu_temp_c = bench_max_gpu_temp_c_;
-  sum.max_gpu_power_w = bench_max_gpu_power_w_;
-  sum.max_cpu_temp_c = bench_max_cpu_temp_c_;
-  sum.max_cpu_power_w = bench_max_cpu_power_w_;
+  sum.max_gpu_temp_c = max_gpu_temp;
+  sum.max_gpu_power_w = max_gpu_power;
+  sum.max_cpu_temp_c = max_cpu_temp;
+  sum.max_cpu_power_w = max_cpu_power;
 
-  size_t n = bench_frametimes_ms_.size();
-  SimdStatsResult stats = compute_frametime_stats_simd(bench_frametimes_ms_);
+  size_t n = local_samples.size();
+  SimdStatsResult stats = compute_frametime_stats_simd(local_samples);
   double total_ms = stats.total_ms;
   float min_ft_ms = stats.min_val;
   float max_ft_ms = stats.max_val;
@@ -87,14 +134,14 @@ void BenchmarkRecorder::stop() {
   sum.max_fps = (min_ft_ms > 0.001f) ? (1000.0f / min_ft_ms) : 0.0f;
   sum.min_fps = (max_ft_ms > 0.001f) ? (1000.0f / max_ft_ms) : 0.0f;
 
-  std::sort(bench_frametimes_ms_.begin(), bench_frametimes_ms_.end(), std::greater<float>());
+  std::sort(local_samples.begin(), local_samples.end(), std::greater<float>());
 
   auto calc_bench_time_weighted_low = [&](double tail_ratio) -> float {
     double target_ms = total_ms * tail_ratio;
     double accum_ms = 0.0;
     double weighted_sum = 0.0;
     for (size_t i = 0; i < n; ++i) {
-      double ft = static_cast<double>(bench_frametimes_ms_[i]);
+      double ft = static_cast<double>(local_samples[i]);
       if (accum_ms + ft >= target_ms) {
         double rem = target_ms - accum_ms;
         weighted_sum += rem * ft;
@@ -105,8 +152,7 @@ void BenchmarkRecorder::stop() {
       accum_ms += ft;
     }
     if (accum_ms <= 0.0001) {
-      return (n > 0 && bench_frametimes_ms_[0] > 0.0001f) ? (1000.0f / bench_frametimes_ms_[0])
-                                                          : 0.0f;
+      return (n > 0 && local_samples[0] > 0.0001f) ? (1000.0f / local_samples[0]) : 0.0f;
     }
     double denom = weighted_sum / accum_ms;
     return (denom > 0.0001) ? static_cast<float>(1000.0 / denom) : 0.0f;
@@ -114,9 +160,6 @@ void BenchmarkRecorder::stop() {
 
   sum.fps_1pct_low = calc_bench_time_weighted_low(0.01);
   sum.fps_01pct_low = std::min(sum.fps_1pct_low, calc_bench_time_weighted_low(0.001));
-
-  std::string csv_path =
-      custom_csv_path_.empty() ? get_default_benchmark_csv_path() : custom_csv_path_;
 
   std::error_code ec;
   bool file_exists = fs::exists(csv_path, ec) && fs::file_size(csv_path, ec) > 0;
@@ -146,9 +189,11 @@ void BenchmarkRecorder::stop() {
     }
   }
 
-  last_bench_summary_ = sum;
-  bench_has_result_.store(true, std::memory_order_relaxed);
-  std::vector<float>().swap(bench_frametimes_ms_);
+  {
+    std::lock_guard<std::mutex> lock(summary_mutex_);
+    last_bench_summary_ = sum;
+  }
+  bench_has_result_.store(true, std::memory_order_release);
 }
 
 void BenchmarkRecorder::toggle() {
@@ -159,11 +204,22 @@ void BenchmarkRecorder::toggle() {
   }
 }
 
+void BenchmarkRecorder::toggle(const TelemetryData& current_snapshot) {
+  if (is_active()) {
+    stop(current_snapshot);
+  } else {
+    start(current_snapshot);
+  }
+}
+
 void BenchmarkRecorder::on_frame(float dt_ms, const TelemetryData& current_snapshot) {
-  if (!bench_active_.load(std::memory_order_relaxed)) {
+  if (!bench_active_.load(std::memory_order_acquire)) {
     return;
   }
   std::lock_guard<std::mutex> block(bench_mutex_);
+  if (!bench_active_.load(std::memory_order_relaxed)) {
+    return;
+  }
   if (bench_frametimes_ms_.size() < 360000) {
     bench_frametimes_ms_.push_back(dt_ms);
   }
@@ -187,6 +243,9 @@ void BenchmarkRecorder::update_peaks(int cpu_temp_c, float cpu_power_w, int gpu_
     return;
   }
   std::lock_guard<std::mutex> block(bench_mutex_);
+  if (!bench_active_.load(std::memory_order_relaxed)) {
+    return;
+  }
   if (cpu_temp_c > bench_max_cpu_temp_c_) {
     bench_max_cpu_temp_c_ = cpu_temp_c;
   }
@@ -205,18 +264,35 @@ float BenchmarkRecorder::get_elapsed_sec() const noexcept {
   if (!bench_active_.load(std::memory_order_acquire)) {
     return 0.0f;
   }
+  int64_t start_ns = bench_start_ns_.load(std::memory_order_acquire);
+  if (start_ns <= 0) {
+    return 0.0f;
+  }
   auto now = std::chrono::steady_clock::now();
-  return std::chrono::duration<float>(now - bench_start_time_).count();
+  int64_t now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+  int64_t diff_ns = now_ns - start_ns;
+  if (diff_ns < 0) {
+    return 0.0f;
+  }
+  return static_cast<float>(diff_ns) * 1e-9f;
 }
 
-BenchmarkSummary BenchmarkRecorder::get_summary() const {
-  std::lock_guard<std::mutex> block(bench_mutex_);
+BenchmarkSummary BenchmarkRecorder::get_summary() const { return get_last_summary(); }
+
+BenchmarkSummary BenchmarkRecorder::get_last_summary() const {
+  std::lock_guard<std::mutex> block(summary_mutex_);
   return last_bench_summary_;
 }
 
 void BenchmarkRecorder::set_csv_path(std::string path) {
   std::lock_guard<std::mutex> block(bench_mutex_);
   custom_csv_path_ = std::move(path);
+}
+
+std::string BenchmarkRecorder::get_csv_path() const {
+  std::lock_guard<std::mutex> block(bench_mutex_);
+  return custom_csv_path_;
 }
 
 }  // namespace fpshud

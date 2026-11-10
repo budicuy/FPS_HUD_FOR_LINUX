@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -12,6 +13,7 @@ struct TelemetryData;
 
 struct BenchmarkSummary {
   bool has_result = false;
+  size_t total_frames = 0;
   double duration_sec = 0.0;
   float avg_fps = 0.0f;
   float fps_1pct_low = 0.0f;
@@ -30,8 +32,11 @@ public:
   explicit BenchmarkRecorder(std::string csv_path = "");
 
   void start();
+  void start(const TelemetryData& current_snapshot);
   void stop();
+  void stop(const TelemetryData& current_snapshot);
   void toggle();
+  void toggle(const TelemetryData& current_snapshot);
   void on_frame(float dt_ms, const TelemetryData& current_snapshot);
 
   void update_peaks(int cpu_temp_c, float cpu_power_w, int gpu_temp_c, float gpu_power_w);
@@ -44,14 +49,17 @@ public:
   }
   [[nodiscard]] float get_elapsed_sec() const noexcept;
   [[nodiscard]] BenchmarkSummary get_summary() const;
+  [[nodiscard]] BenchmarkSummary get_last_summary() const;
 
   void set_csv_path(std::string path);
-  [[nodiscard]] const std::string& get_csv_path() const noexcept { return custom_csv_path_; }
+  [[nodiscard]] std::string get_csv_path() const;
 
 private:
   mutable std::mutex bench_mutex_;
+  mutable std::mutex summary_mutex_;
   std::atomic<bool> bench_active_{false};
   std::atomic<bool> bench_has_result_{false};
+  std::atomic<int64_t> bench_start_ns_{0};
   std::chrono::steady_clock::time_point bench_start_time_{};
   std::vector<float> bench_frametimes_ms_;
   int bench_max_gpu_temp_c_ = 0;
