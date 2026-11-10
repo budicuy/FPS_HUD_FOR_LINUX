@@ -16,7 +16,7 @@ struct EvdevDevice {
   bool is_grabbed = false;
 };
 
-class __attribute__((visibility("hidden"))) EvdevBackend {
+class EvdevBackend {
 public:
   EvdevBackend() = default;
   ~EvdevBackend();

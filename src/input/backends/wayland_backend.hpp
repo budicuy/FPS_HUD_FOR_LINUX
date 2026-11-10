@@ -7,7 +7,7 @@ namespace fpshud {
 
 class InputManager;
 
-class __attribute__((visibility("hidden"))) WaylandBackend {
+class WaylandBackend {
 public:
   WaylandBackend() = default;
   ~WaylandBackend();

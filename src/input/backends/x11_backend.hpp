@@ -13,7 +13,7 @@ namespace fpshud {
 class InputManager;
 struct HudConfig;
 
-class __attribute__((visibility("hidden"))) X11Backend {
+class X11Backend {
 public:
   X11Backend() = default;
   ~X11Backend();
