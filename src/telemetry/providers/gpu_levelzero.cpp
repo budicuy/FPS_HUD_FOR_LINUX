@@ -199,7 +199,7 @@ bool LevelZeroGpuProvider::init(const std::string& root_prefix,
   if (ze_dispatch_.zesDeviceEnumMemoryModules) {
     ze_dispatch_.zesDeviceEnumMemoryModules(ze_device_, &count, &ze_mem_);
   }
-  has_vram_total_ = (ze_mem_ != nullptr);
+  has_vram_total_.store(ze_mem_ != nullptr, std::memory_order_relaxed);
   count = 1;
   if (ze_dispatch_.zesDeviceEnumEngineGroups) {
     ze_dispatch_.zesDeviceEnumEngineGroups(ze_device_, &count, &ze_eng_);
@@ -272,15 +272,17 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
       float used_gb = static_cast<float>(used_bytes) * kBytesToGb;
       out_data.gpu_vram_total_gb = total_gb;
       out_data.gpu_vram_used_gb = used_gb;
-      has_vram_total_ = true;
+      has_vram_total_.store(true, std::memory_order_relaxed);
       ze_vram_ok = true;
     }
   }
   if (!ze_vram_ok) {
-    has_vram_total_ = false;
-    if (api_vram_total_bytes_ > 0) {
-      out_data.gpu_vram_total_gb = static_cast<float>(api_vram_total_bytes_) * kBytesToGb;
-      out_data.gpu_vram_used_gb = static_cast<float>(api_vram_used_bytes_) * kBytesToGb;
+    has_vram_total_.store(false, std::memory_order_relaxed);
+    uint64_t api_total = api_vram_total_bytes_.load(std::memory_order_relaxed);
+    if (api_total > 0) {
+      uint64_t api_used = api_vram_used_bytes_.load(std::memory_order_relaxed);
+      out_data.gpu_vram_total_gb = static_cast<float>(api_total) * kBytesToGb;
+      out_data.gpu_vram_used_gb = static_cast<float>(api_used) * kBytesToGb;
     }
   }
 
@@ -406,9 +408,9 @@ void LevelZeroGpuProvider::shutdown() noexcept {
   prev_ze_eng_ts_ = 0;
   prev_ze_pwr_energy_ = 0;
   prev_ze_pwr_ts_ = 0;
-  has_vram_total_ = false;
-  api_vram_used_bytes_ = 0;
-  api_vram_total_bytes_ = 0;
+  has_vram_total_.store(false, std::memory_order_relaxed);
+  api_vram_used_bytes_.store(0, std::memory_order_relaxed);
+  api_vram_total_bytes_.store(0, std::memory_order_relaxed);
 
   act_freq_path_.clear();
   act_freq_in_hz_ = false;

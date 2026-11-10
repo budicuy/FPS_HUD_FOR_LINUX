@@ -102,7 +102,7 @@ void TelemetryCollector::init_gpu_sensors_locked() {
     // Upgrade Intel GPU to Level Zero Sysman if available
     if (drm_provider_.detected_vendor_id() == 0x8086 && !disable_level_zero_) {
       const LevelZeroDispatch* mock_ptr = has_mock_ze_ ? &mock_ze_dispatch_ : nullptr;
-      if (levelzero_provider_.init(root_prefix_, mock_ptr)) {
+      if (levelzero_provider_.init(root_prefix_, mock_ptr, bound_device_id_)) {
         gpu_backend_ = GpuBackendType::IntelLevelZero;
       }
     }
@@ -111,7 +111,7 @@ void TelemetryCollector::init_gpu_sensors_locked() {
 
   // Fallback if DRM not detected but Level Zero is injected/available
   if (!disable_level_zero_ && has_mock_ze_) {
-    if (levelzero_provider_.init(root_prefix_, &mock_ze_dispatch_)) {
+    if (levelzero_provider_.init(root_prefix_, &mock_ze_dispatch_, bound_device_id_)) {
       gpu_backend_ = GpuBackendType::IntelLevelZero;
       return;
     }

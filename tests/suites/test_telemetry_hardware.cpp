@@ -759,6 +759,36 @@ TEST_CASE("Telemetry: Hardware Providers (CPU, RAM, GPU)") {
     CHECK(hdata.gpu_vram_total_gb > 7.5f);
     CHECK(hdata.gpu_vram_used_gb > 1.8f);
     lz_prov.shutdown();
+
+    // Multi-card binding verification: ensure discover_hybrid_sysfs matches bound_device_id_
+    ScopedTempDir mock_multi_cards("fpshud_mock_lz_multi_cards");
+    fs::path c0 = mock_multi_cards.path / "sys/class/drm/card0";
+    fs::path c1 = mock_multi_cards.path / "sys/class/drm/card1";
+    fs::create_directories(c0 / "device");
+    fs::create_directories(c1 / "device");
+    // Card 0: Intel iGPU (0x8086, 0x46a6), clock fallback 300 MHz
+    write_mock_file(c0 / "device/vendor", "0x8086\n");
+    write_mock_file(c0 / "device/device", "0x46a6\n");
+    write_mock_file(c0 / "gt_act_freq_mhz", "300\n");
+    // Card 1: Intel Arc dGPU (0x8086, 0x56a0), clock fallback 2100 MHz
+    write_mock_file(c1 / "device/vendor", "0x8086\n");
+    write_mock_file(c1 / "device/device", "0x56a0\n");
+    write_mock_file(c1 / "gt_act_freq_mhz", "2100\n");
+
+    fpshud::LevelZeroGpuProvider lz_multi;
+    // When bound to 0x56a0, it should bind to card1 (2100 MHz) instead of card0 (300 MHz)
+    CHECK(lz_multi.init(mock_multi_cards.path.string(), &ze_wrap_mock, 0x56a0));
+    fpshud::HardwareTelemetryData dgpu_data{};
+    lz_multi.poll(dgpu_data);
+    CHECK(dgpu_data.gpu_clock_mhz == 2100);
+    lz_multi.shutdown();
+
+    // When bound to 0x46a6, it should bind to card0 (300 MHz)
+    CHECK(lz_multi.init(mock_multi_cards.path.string(), &ze_wrap_mock, 0x46a6));
+    fpshud::HardwareTelemetryData igpu_data{};
+    lz_multi.poll(igpu_data);
+    CHECK(igpu_data.gpu_clock_mhz == 300);
+    lz_multi.shutdown();
   }
 
   SUBCASE("Suite 17: CPU Power Tier-2 TDP Fallback") {

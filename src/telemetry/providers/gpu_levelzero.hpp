@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -95,18 +96,20 @@ public:
   void shutdown() noexcept;
 
   void update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept {
-    api_vram_used_bytes_ = used_bytes;
-    api_vram_total_bytes_ = total_bytes;
+    api_vram_used_bytes_.store(used_bytes, std::memory_order_relaxed);
+    api_vram_total_bytes_.store(total_bytes, std::memory_order_relaxed);
   }
-  [[nodiscard]] bool has_vram_total() const noexcept { return has_vram_total_; }
+  [[nodiscard]] bool has_vram_total() const noexcept {
+    return has_vram_total_.load(std::memory_order_relaxed);
+  }
 
 private:
   void discover_hybrid_sysfs(const std::string& root_prefix);
 
   uint32_t bound_device_id_ = 0;
-  bool has_vram_total_ = false;
-  uint64_t api_vram_used_bytes_ = 0;
-  uint64_t api_vram_total_bytes_ = 0;
+  std::atomic<bool> has_vram_total_{false};
+  std::atomic<uint64_t> api_vram_used_bytes_{0};
+  std::atomic<uint64_t> api_vram_total_bytes_{0};
 
   void* ze_lib_ = nullptr;
   void* ze_driver_ = nullptr;
