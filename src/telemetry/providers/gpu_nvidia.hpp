@@ -20,9 +20,11 @@ public:
   void poll(HardwareTelemetryData& out_data);
   void shutdown() noexcept;
 
-  [[nodiscard]] bool is_available() const noexcept { return nvml_device_ != nullptr; }
+  void set_root_prefix(const std::string& prefix) noexcept { root_prefix_ = prefix; }
+  [[nodiscard]] bool is_d3cold_suspended() const noexcept;
 
 private:
+  std::string root_prefix_;
   void* nvml_lib_ = nullptr;
   void* nvml_device_ = nullptr;
   bool nvml_initialized_ = false;
@@ -43,7 +45,7 @@ private:
   int (*pfn_nvmlDeviceGetPowerUsage_)(void*, unsigned int*) = nullptr;
   int (*pfn_nvmlDeviceGetClockInfo_)(void*, int, unsigned int*) = nullptr;
   int (*pfn_nvmlDeviceGetMemoryBusWidth_)(void*, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetPcieThroughput_)(void*, int, unsigned int*) = nullptr;
+  int (*pfn_nvmlDeviceGetPciInfo_)(void*, void*) = nullptr;
 };
 
 }  // namespace fpshud

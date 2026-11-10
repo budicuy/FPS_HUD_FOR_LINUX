@@ -89,14 +89,24 @@ public:
   LevelZeroGpuProvider(const LevelZeroGpuProvider&) = delete;
   LevelZeroGpuProvider& operator=(const LevelZeroGpuProvider&) = delete;
 
-  bool init(const std::string& root_prefix, const LevelZeroDispatch* mock_dispatch);
+  bool init(const std::string& root_prefix, const LevelZeroDispatch* mock_dispatch,
+            uint32_t bound_device_id = 0);
   void poll(HardwareTelemetryData& out_data);
   void shutdown() noexcept;
 
-  [[nodiscard]] bool is_available() const noexcept { return ze_device_ != nullptr; }
+  void update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept {
+    api_vram_used_bytes_ = used_bytes;
+    api_vram_total_bytes_ = total_bytes;
+  }
+  [[nodiscard]] bool has_vram_total() const noexcept { return has_vram_total_; }
 
 private:
   void discover_hybrid_sysfs(const std::string& root_prefix);
+
+  uint32_t bound_device_id_ = 0;
+  bool has_vram_total_ = false;
+  uint64_t api_vram_used_bytes_ = 0;
+  uint64_t api_vram_total_bytes_ = 0;
 
   void* ze_lib_ = nullptr;
   void* ze_driver_ = nullptr;
@@ -115,6 +125,13 @@ private:
   uint64_t prev_ze_eng_ts_ = 0;
   uint64_t prev_ze_pwr_energy_ = 0;
   uint64_t prev_ze_pwr_ts_ = 0;
+
+  std::string act_freq_path_;
+  bool act_freq_in_hz_ = false;
+  std::string temp_input_path_;
+  std::string energy_input_path_;
+  uint64_t prev_sysfs_energy_uj_ = 0;
+  uint64_t prev_sysfs_energy_ts_ = 0;
 
   std::string drm_mclk_freq_path_;
   std::string drm_fan_pwm_path_;

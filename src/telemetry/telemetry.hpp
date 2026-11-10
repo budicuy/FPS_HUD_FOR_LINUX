@@ -2,9 +2,6 @@
 
 #include <inplace_vector>
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -45,7 +42,6 @@ struct TelemetryData {
   float gpu_vram_used_gb = 0.0f;
   float gpu_vram_total_gb = 0.0f;
   float gpu_bandwidth_gbs = 0.0f;
-  float gpu_max_bandwidth_gbs = 0.0f;
   int gpu_temp_c = 0;
   int gpu_fan_pct = 0;
   float gpu_power_w = 0.0f;
@@ -154,7 +150,11 @@ public:
   // Active GPU binding & rendering API VRAM reporting
   void notify_active_gpu(uint32_t vendor_id, uint32_t device_id);
   void update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept;
+  [[nodiscard]] static const char* classify_maps_line(std::string_view line) noexcept;
   [[nodiscard]] bool needs_api_vram_query() const noexcept {
+    if (gpu_backend_.load(std::memory_order_relaxed) == GpuBackendType::IntelLevelZero) {
+      return !levelzero_provider_.has_vram_total();
+    }
     uint32_t idx = active_hw_buf_.load(std::memory_order_relaxed);
     return hw_buffers_[idx].gpu_vram_total_gb <= 0.0f;
   }
@@ -191,8 +191,6 @@ private:
   bool disable_nvml_ = false;
   uint32_t bound_vendor_id_ = 0;
   uint32_t bound_device_id_ = 0;
-  std::atomic<uint64_t> api_vram_used_bytes_{0};
-  std::atomic<uint64_t> api_vram_total_bytes_{0};
 
   bool disable_level_zero_ = false;
   bool has_mock_ze_ = false;
@@ -211,6 +209,10 @@ private:
 
   // Frame timing state
   std::chrono::steady_clock::time_point last_frame_time_{};
+  std::chrono::steady_clock::time_point first_frame_time_{};
+  bool bench_started_ = false;
+  bool bench_finished_ = false;
+  int map_scan_attempts_ = 0;
 
   std::atomic<const char*> active_api_{"VULKAN"};
   std::atomic<const char*> translated_api_{nullptr};

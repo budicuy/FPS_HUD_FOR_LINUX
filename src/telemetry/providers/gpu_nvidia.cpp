@@ -33,25 +33,52 @@ struct NvmlMemory {
   unsigned long long used;
 };
 
+struct NvmlPciInfo {
+  char busIdLegacy[16];
+  unsigned int domain;
+  unsigned int bus;
+  unsigned int device;
+  unsigned int pciDeviceId;
+  unsigned int pciSubSystemId;
+  char busId[32];
+};
+
 }  // namespace
 
 NvidiaGpuProvider::NvidiaGpuProvider() = default;
 
 NvidiaGpuProvider::~NvidiaGpuProvider() { shutdown(); }
 
-bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
-                             uint32_t device_id) {
-  (void)device_id;
-  shutdown();
-
+bool NvidiaGpuProvider::is_d3cold_suspended() const noexcept {
   std::error_code ec;
-
-  // Optimus D3cold Protection: Check if all NVIDIA cards are in D3cold (suspended)
-  bool nvidia_all_suspended = false;
   bool has_nvidia_card = false;
-  std::string drm_base = root_prefix + "/sys/class/drm";
+  bool all_susp = true;
+
+  // 1. Check /sys/bus/pci/devices
+  std::string pci_base = root_prefix_ + "/sys/bus/pci/devices";
+  if (fs::exists(pci_base, ec)) {
+    for (const auto& entry : fs::directory_iterator(pci_base, ec)) {
+      fs::path dev_dir = entry.path();
+      char vbuf[32] = {0};
+      if (read_sysfs_buf((dev_dir / "vendor").c_str(), vbuf, sizeof(vbuf))) {
+        if (std::strcmp(vbuf, "0x10de") == 0 || std::strtoul(vbuf, nullptr, 16) == 0x10de) {
+          has_nvidia_card = true;
+          char pbuf[32] = {0};
+          if (read_sysfs_buf((dev_dir / "power/runtime_status").c_str(), pbuf, sizeof(pbuf))) {
+            if (std::strcmp(pbuf, "suspended") != 0 && std::strstr(pbuf, "suspended") == nullptr) {
+              all_susp = false;
+            }
+          } else {
+            all_susp = false;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Check /sys/class/drm
+  std::string drm_base = root_prefix_ + "/sys/class/drm";
   if (fs::exists(drm_base, ec)) {
-    bool all_susp = true;
     for (int card_idx = 0; card_idx < 8; ++card_idx) {
       fs::path dev_dir = fs::path(drm_base) / ("card" + std::to_string(card_idx)) / "device";
       if (!fs::exists(dev_dir, ec)) continue;
@@ -70,12 +97,22 @@ bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
         }
       }
     }
-    if (has_nvidia_card && all_susp) {
-      nvidia_all_suspended = true;
-    }
   }
 
-  bool allow_nvml = root_prefix.empty();
+  return has_nvidia_card && all_susp;
+}
+
+bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
+                             uint32_t device_id) {
+  shutdown();
+  if (!root_prefix.empty()) {
+    root_prefix_ = root_prefix;
+  }
+
+  // Optimus D3cold Protection: Check if all NVIDIA cards are in D3cold (suspended)
+  bool nvidia_all_suspended = is_d3cold_suspended();
+
+  bool allow_nvml = root_prefix_.empty();
   if (vendor_id != 0 && vendor_id != 0x10de) {
     allow_nvml = false;
   }
@@ -123,8 +160,12 @@ bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
       dlsym(nvml_lib_, "nvmlDeviceGetClockInfo"));
   pfn_nvmlDeviceGetMemoryBusWidth_ = reinterpret_cast<int (*)(void*, unsigned int*)>(
       dlsym(nvml_lib_, "nvmlDeviceGetMemoryBusWidth"));
-  pfn_nvmlDeviceGetPcieThroughput_ = reinterpret_cast<int (*)(void*, int, unsigned int*)>(
-      dlsym(nvml_lib_, "nvmlDeviceGetPcieThroughput"));
+  pfn_nvmlDeviceGetPciInfo_ =
+      reinterpret_cast<int (*)(void*, void*)>(dlsym(nvml_lib_, "nvmlDeviceGetPciInfo_v3"));
+  if (!pfn_nvmlDeviceGetPciInfo_) {
+    pfn_nvmlDeviceGetPciInfo_ =
+        reinterpret_cast<int (*)(void*, void*)>(dlsym(nvml_lib_, "nvmlDeviceGetPciInfo"));
+  }
 
   if (!pfn_nvmlInit_v2_ || !pfn_nvmlDeviceGetHandleByIndex_v2_ ||
       pfn_nvmlInit_v2_() != NVML_SUCCESS) {
@@ -146,6 +187,17 @@ bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
   for (unsigned int idx = 0; idx < dev_count; ++idx) {
     void* h = nullptr;
     if (pfn_nvmlDeviceGetHandleByIndex_v2_(idx, &h) == NVML_SUCCESS && h) {
+      if (device_id != 0 && pfn_nvmlDeviceGetPciInfo_) {
+        NvmlPciInfo pci{};
+        if (pfn_nvmlDeviceGetPciInfo_(h, &pci) == NVML_SUCCESS) {
+          uint32_t dev_id_hi = (pci.pciDeviceId >> 16) & 0xFFFF;
+          uint32_t dev_id_lo = pci.pciDeviceId & 0xFFFF;
+          if (dev_id_hi == device_id || dev_id_lo == device_id) {
+            best_handle = h;
+            break;
+          }
+        }
+      }
       unsigned long long total_vram = 0;
       if (pfn_nvmlDeviceGetMemoryInfo_) {
         NvmlMemory mem{};
@@ -243,7 +295,6 @@ void NvidiaGpuProvider::poll(HardwareTelemetryData& out_data) {
     float max_bw_gbs = (static_cast<float>(mem_clock_mhz) * 2.0f *
                         (static_cast<float>(gpu_bus_width_bits_) / 8.0f)) /
                        1000.0f;
-    out_data.gpu_max_bandwidth_gbs = max_bw_gbs;
     float used_vram_bw = max_bw_gbs * (ok_util ? (static_cast<float>(util.memory) / 100.0f) : 0.0f);
     out_data.gpu_bandwidth_gbs = used_vram_bw;
   }
@@ -281,7 +332,7 @@ void NvidiaGpuProvider::shutdown() noexcept {
   pfn_nvmlDeviceGetPowerUsage_ = nullptr;
   pfn_nvmlDeviceGetClockInfo_ = nullptr;
   pfn_nvmlDeviceGetMemoryBusWidth_ = nullptr;
-  pfn_nvmlDeviceGetPcieThroughput_ = nullptr;
+  pfn_nvmlDeviceGetPciInfo_ = nullptr;
 }
 
 }  // namespace fpshud

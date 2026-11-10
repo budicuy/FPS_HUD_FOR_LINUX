@@ -37,12 +37,46 @@ void LevelZeroGpuProvider::discover_hybrid_sysfs(const std::string& root_prefix)
       continue;
     }
 
+    if (bound_device_id_ != 0) {
+      if (read_sysfs_buf((dev_dir / "device").c_str(), buf, sizeof(buf))) {
+        uint32_t dev_id = static_cast<uint32_t>(std::strtoul(buf, nullptr, 16));
+        if (dev_id != bound_device_id_) continue;
+      } else {
+        continue;
+      }
+    }
+
+    // Core clock fallback discovery
+    if (fs::exists(card_root / "gt_act_freq_mhz", ec)) {
+      act_freq_path_ = (card_root / "gt_act_freq_mhz").string();
+      act_freq_in_hz_ = false;
+    } else if (fs::exists(card_root / "gt/gt0/rps_cur_freq_mhz", ec)) {
+      act_freq_path_ = (card_root / "gt/gt0/rps_cur_freq_mhz").string();
+      act_freq_in_hz_ = false;
+    } else if (fs::exists(dev_dir / "tile0/gt0/freq0/act_freq", ec)) {
+      act_freq_path_ = (dev_dir / "tile0/gt0/freq0/act_freq").string();
+      act_freq_in_hz_ = false;
+    } else if (fs::exists(card_root / "gt_cur_freq_mhz", ec)) {
+      act_freq_path_ = (card_root / "gt_cur_freq_mhz").string();
+      act_freq_in_hz_ = false;
+    }
+
     fs::path hwmon_root = dev_dir / "hwmon";
     if (fs::exists(hwmon_root, ec)) {
       for (const auto& hm : fs::directory_iterator(hwmon_root, ec)) {
         fs::path hp = hm.path();
+        if (act_freq_path_.empty() && fs::exists(hp / "freq1_input", ec)) {
+          act_freq_path_ = (hp / "freq1_input").string();
+          act_freq_in_hz_ = true;
+        }
         if (fs::exists(hp / "freq2_input", ec)) {
           drm_mclk_freq_path_ = (hp / "freq2_input").string();
+        }
+        if (fs::exists(hp / "temp1_input", ec)) {
+          temp_input_path_ = (hp / "temp1_input").string();
+        }
+        if (fs::exists(hp / "energy1_input", ec)) {
+          energy_input_path_ = (hp / "energy1_input").string();
         }
         if (fs::exists(hp / "pwm1", ec)) {
           drm_fan_pwm_path_ = (hp / "pwm1").string();
@@ -59,8 +93,9 @@ void LevelZeroGpuProvider::discover_hybrid_sysfs(const std::string& root_prefix)
 }
 
 bool LevelZeroGpuProvider::init(const std::string& root_prefix,
-                                const LevelZeroDispatch* mock_dispatch) {
+                                const LevelZeroDispatch* mock_dispatch, uint32_t bound_device_id) {
   shutdown();
+  bound_device_id_ = bound_device_id;
   discover_hybrid_sysfs(root_prefix);
 
   if (mock_dispatch) {
@@ -164,6 +199,7 @@ bool LevelZeroGpuProvider::init(const std::string& root_prefix,
   if (ze_dispatch_.zesDeviceEnumMemoryModules) {
     ze_dispatch_.zesDeviceEnumMemoryModules(ze_device_, &count, &ze_mem_);
   }
+  has_vram_total_ = (ze_mem_ != nullptr);
   count = 1;
   if (ze_dispatch_.zesDeviceEnumEngineGroups) {
     ze_dispatch_.zesDeviceEnumEngineGroups(ze_device_, &count, &ze_eng_);
@@ -198,6 +234,14 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
       out_data.gpu_clock_mhz = static_cast<int>(fstate.actual);
     }
   }
+  if (out_data.gpu_clock_mhz <= 0 && !act_freq_path_.empty()) {
+    char clk_buf[64]{};
+    if (read_sysfs_buf(act_freq_path_.c_str(), clk_buf, sizeof(clk_buf))) {
+      uint64_t val = std::strtoull(clk_buf, nullptr, 10);
+      out_data.gpu_clock_mhz =
+          act_freq_in_hz_ ? static_cast<int>((val + 500000) / 1000000) : static_cast<int>(val);
+    }
+  }
 
   // 2. Temperature
   if (ze_temp_ && ze_dispatch_.zesTemperatureGetState) {
@@ -206,18 +250,37 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
       out_data.gpu_temp_c = static_cast<int>(temp_val + 0.5);
     }
   }
+  if (out_data.gpu_temp_c <= 0 && !temp_input_path_.empty()) {
+    char tbuf[64]{};
+    if (read_sysfs_buf(temp_input_path_.c_str(), tbuf, sizeof(tbuf))) {
+      long millideg = std::strtol(tbuf, nullptr, 10);
+      if (millideg > 0 && millideg < 130000) {
+        out_data.gpu_temp_c = static_cast<int>((millideg + 500) / 1000);
+      }
+    }
+  }
 
   // 3. VRAM Memory
+  bool ze_vram_ok = false;
+  constexpr float kBytesToGb = 1.0f / (1024.0f * 1024.0f * 1024.0f);
   if (ze_mem_ && ze_dispatch_.zesMemoryGetState) {
     intel_ze::zes_mem_state_t mstate{};
     if (ze_dispatch_.zesMemoryGetState(ze_mem_, &mstate) == intel_ze::ZE_RESULT_SUCCESS &&
         mstate.size > 0) {
-      constexpr float kBytesToGb = 1.0f / (1024.0f * 1024.0f * 1024.0f);
       float total_gb = static_cast<float>(mstate.size) * kBytesToGb;
       uint64_t used_bytes = (mstate.size > mstate.free) ? (mstate.size - mstate.free) : 0;
       float used_gb = static_cast<float>(used_bytes) * kBytesToGb;
       out_data.gpu_vram_total_gb = total_gb;
       out_data.gpu_vram_used_gb = used_gb;
+      has_vram_total_ = true;
+      ze_vram_ok = true;
+    }
+  }
+  if (!ze_vram_ok) {
+    has_vram_total_ = false;
+    if (api_vram_total_bytes_ > 0) {
+      out_data.gpu_vram_total_gb = static_cast<float>(api_vram_total_bytes_) * kBytesToGb;
+      out_data.gpu_vram_used_gb = static_cast<float>(api_vram_used_bytes_) * kBytesToGb;
     }
   }
 
@@ -225,7 +288,8 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
   if (ze_pwr_ && ze_dispatch_.zesPowerGetEnergyCounter) {
     intel_ze::zes_power_energy_counter_t pwr{};
     if (ze_dispatch_.zesPowerGetEnergyCounter(ze_pwr_, &pwr) == intel_ze::ZE_RESULT_SUCCESS) {
-      if (prev_ze_pwr_ts_ != 0 && pwr.timestamp > prev_ze_pwr_ts_) {
+      if (prev_ze_pwr_ts_ != 0 && pwr.timestamp > prev_ze_pwr_ts_ &&
+          pwr.energy >= prev_ze_pwr_energy_) {
         uint64_t d_energy = pwr.energy - prev_ze_pwr_energy_;  // microjoules
         uint64_t d_time = pwr.timestamp - prev_ze_pwr_ts_;     // microseconds
         if (d_time > 0) {
@@ -237,12 +301,33 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
       prev_ze_pwr_ts_ = pwr.timestamp;
     }
   }
+  if (out_data.gpu_power_w <= 0.0f && !energy_input_path_.empty()) {
+    char pbuf[64]{};
+    if (read_sysfs_buf(energy_input_path_.c_str(), pbuf, sizeof(pbuf))) {
+      uint64_t curr_uj = std::strtoull(pbuf, nullptr, 10);
+      auto now = std::chrono::steady_clock::now();
+      uint64_t now_us = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+      if (prev_sysfs_energy_ts_ != 0 && now_us > prev_sysfs_energy_ts_ &&
+          curr_uj >= prev_sysfs_energy_uj_) {
+        uint64_t d_energy = curr_uj - prev_sysfs_energy_uj_;
+        uint64_t d_time = now_us - prev_sysfs_energy_ts_;
+        if (d_time > 10000) {
+          float watts = static_cast<float>(d_energy) / static_cast<float>(d_time);
+          out_data.gpu_power_w = std::clamp(watts, 0.0f, 1000.0f);
+        }
+      }
+      prev_sysfs_energy_uj_ = curr_uj;
+      prev_sysfs_energy_ts_ = now_us;
+    }
+  }
 
   // 5. Engine Activity (Load %)
   if (ze_eng_ && ze_dispatch_.zesEngineGetActivity) {
     intel_ze::zes_engine_stats_t stats{};
     if (ze_dispatch_.zesEngineGetActivity(ze_eng_, &stats) == intel_ze::ZE_RESULT_SUCCESS) {
-      if (prev_ze_eng_ts_ != 0 && stats.timestamp > prev_ze_eng_ts_) {
+      if (prev_ze_eng_ts_ != 0 && stats.timestamp > prev_ze_eng_ts_ &&
+          stats.activeTime >= prev_ze_eng_active_) {
         uint64_t d_active = stats.activeTime - prev_ze_eng_active_;
         uint64_t d_time = stats.timestamp - prev_ze_eng_ts_;
         if (d_time > 0) {
@@ -286,14 +371,14 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
                           ? 32.0f
                           : ((out_data.gpu_vram_total_gb >= 10.5f) ? 24.0f : 16.0f);
     float mult = (out_data.gpu_vram_clock_mhz > 0) ? 2.0f : 1.0f;
-    out_data.gpu_max_bandwidth_gbs = (static_cast<float>(eff_clk) * mult * bus_bytes) / 1000.0f;
+    float max_bw_gbs = (static_cast<float>(eff_clk) * mult * bus_bytes) / 1000.0f;
     float util_ratio =
         (out_data.gpu_load_pct > 0.0f)
             ? (out_data.gpu_load_pct / 100.0f)
             : ((out_data.gpu_vram_total_gb > 0.0f)
                    ? std::clamp(out_data.gpu_vram_used_gb / out_data.gpu_vram_total_gb, 0.05f, 1.0f)
                    : 0.1f);
-    out_data.gpu_bandwidth_gbs = out_data.gpu_max_bandwidth_gbs * util_ratio;
+    out_data.gpu_bandwidth_gbs = max_bw_gbs * util_ratio;
   }
 
   out_data.gpu_available = true;
@@ -321,6 +406,16 @@ void LevelZeroGpuProvider::shutdown() noexcept {
   prev_ze_eng_ts_ = 0;
   prev_ze_pwr_energy_ = 0;
   prev_ze_pwr_ts_ = 0;
+  has_vram_total_ = false;
+  api_vram_used_bytes_ = 0;
+  api_vram_total_bytes_ = 0;
+
+  act_freq_path_.clear();
+  act_freq_in_hz_ = false;
+  temp_input_path_.clear();
+  energy_input_path_.clear();
+  prev_sysfs_energy_uj_ = 0;
+  prev_sysfs_energy_ts_ = 0;
 
   drm_mclk_freq_path_.clear();
   drm_fan_pwm_path_.clear();

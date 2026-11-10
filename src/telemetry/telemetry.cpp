@@ -163,23 +163,23 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
   }();
 
   if (s_auto_bench_secs > 0) {
-    static auto s_first_frame = now;
-    static bool s_bench_started = false;
-    static bool s_bench_finished = false;
+    if (first_frame_time_.time_since_epoch().count() == 0) {
+      first_frame_time_ = now;
+    }
 
-    if (!s_bench_started && !s_bench_finished) {
-      double warmup = std::chrono::duration<double>(now - s_first_frame).count();
+    if (!bench_started_ && !bench_finished_) {
+      double warmup = std::chrono::duration<double>(now - first_frame_time_).count();
       if (warmup >= 1.0) {
         start_benchmark();
-        s_bench_started = true;
+        bench_started_ = true;
         std::fprintf(stderr, "[FPSHUD] Automated Benchmark started (duration: %d seconds)...\n",
                      s_auto_bench_secs);
       }
-    } else if (s_bench_started && !s_bench_finished) {
+    } else if (bench_started_ && !bench_finished_) {
       float elapsed = benchmark_recorder_.get_elapsed_sec();
       if (elapsed >= static_cast<float>(s_auto_bench_secs)) {
         stop_benchmark();
-        s_bench_finished = true;
+        bench_finished_ = true;
         std::fprintf(stderr, "[FPSHUD] Automated Benchmark complete! Results saved to CSV.\n");
         if (const char* exit_env = std::getenv("FPSHUD_BENCHMARK_EXIT");
             exit_env && std::atoi(exit_env) != 0) {
@@ -198,16 +198,32 @@ void TelemetryCollector::toggle_benchmark() { benchmark_recorder_.toggle(); }
 
 namespace {
 
-bool contains_icase(const char* haystack, const char* needle) noexcept {
-  if (!haystack || !needle || !*needle) return false;
-  size_t nlen = std::strlen(needle);
-  for (const char* p = haystack; *p; ++p) {
-    if (strncasecmp(p, needle, nlen) == 0) return true;
-  }
-  return false;
+bool contains_icase(std::string_view haystack, std::string_view needle) noexcept {
+  if (needle.empty()) return false;
+  auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+                        [](char ch1, char ch2) {
+                          return std::tolower(static_cast<unsigned char>(ch1)) ==
+                                 std::tolower(static_cast<unsigned char>(ch2));
+                        });
+  return it != haystack.end();
 }
 
 }  // namespace
+
+const char* TelemetryCollector::classify_maps_line(std::string_view line) noexcept {
+  if (contains_icase(line, "vkd3d") || contains_icase(line, "d3d12.dll") ||
+      contains_icase(line, "d3d12core.dll")) {
+    return "DX12";
+  }
+  // Check DX9 before generic DXVK / DX11 so /path/to/dxvk/d3d9.dll correctly identifies as DX9
+  if (contains_icase(line, "d3d9.dll")) {
+    return "DX9";
+  }
+  if (contains_icase(line, "dxvk") || contains_icase(line, "d3d11.dll")) {
+    return "DX11";
+  }
+  return "";
+}
 
 const char* detect_effective_render_api(const char* base_api, const char* maps_path) noexcept {
   if (!base_api || !*base_api) return "VULKAN";
@@ -222,16 +238,17 @@ const char* detect_effective_render_api(const char* base_api, const char* maps_p
   bool has_dx9 = false;
   char line[1024];
   while (std::fgets(line, sizeof(line), fp)) {
-    if (contains_icase(line, "vkd3d") || contains_icase(line, "d3d12.dll") ||
-        contains_icase(line, "d3d12core.dll")) {
+    const char* classified = TelemetryCollector::classify_maps_line(line);
+    if (std::strcmp(classified, "DX12") == 0) {
       has_dx12 = true;
       break;
     }
-    if (contains_icase(line, "dxvk") || contains_icase(line, "d3d11.dll")) {
-      has_dx11 = true;
-      break;
-    } else if (contains_icase(line, "d3d9.dll")) {
+    if (std::strcmp(classified, "DX9") == 0) {
       has_dx9 = true;
+      break;
+    }
+    if (std::strcmp(classified, "DX11") == 0) {
+      has_dx11 = true;
       break;
     }
   }
@@ -271,6 +288,7 @@ TelemetryData TelemetryCollector::get_snapshot() const {
 }
 
 void TelemetryCollector::poll_once_sync() {
+  std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
   poll_cpu_load();
   poll_cpu_clock();
   poll_cpu_temp();
@@ -302,6 +320,19 @@ void TelemetryCollector::notify_active_gpu(uint32_t vendor_id, uint32_t device_i
   bound_vendor_id_ = vendor_id;
   bound_device_id_ = device_id;
   shutdown_sensors_locked();
+
+  // Clear stale GPU telemetry fields before probing/polling newly bound GPU
+  staging_hw_data_.gpu_load_pct = 0.0f;
+  staging_hw_data_.gpu_clock_mhz = 0;
+  staging_hw_data_.gpu_vram_clock_mhz = 0;
+  staging_hw_data_.gpu_temp_c = 0;
+  staging_hw_data_.gpu_power_w = 0.0f;
+  staging_hw_data_.gpu_vram_used_gb = 0.0f;
+  staging_hw_data_.gpu_vram_total_gb = 0.0f;
+  staging_hw_data_.gpu_fan_pct = 0;
+  staging_hw_data_.gpu_bandwidth_gbs = 0.0f;
+  staging_hw_data_.gpu_available = false;
+
   init_gpu_sensors_locked();
   if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
     poll_nvidia_gpu();
@@ -314,9 +345,8 @@ void TelemetryCollector::notify_active_gpu(uint32_t vendor_id, uint32_t device_i
 }
 
 void TelemetryCollector::update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept {
-  api_vram_used_bytes_.store(used_bytes, std::memory_order_relaxed);
-  api_vram_total_bytes_.store(total_bytes, std::memory_order_relaxed);
   drm_provider_.update_api_vram_info(used_bytes, total_bytes);
+  levelzero_provider_.update_api_vram_info(used_bytes, total_bytes);
 }
 
 void TelemetryCollector::worker_loop() {
@@ -337,7 +367,6 @@ void TelemetryCollector::poll_local_clock() {
   system_provider_.poll_local_clock(staging_hw_data_);
 
   if (!translated_api_cached_.load(std::memory_order_relaxed)) {
-    static int s_map_scan_attempts = 0;
     std::string maps_path =
         root_prefix_.empty() ? "/proc/self/maps" : (root_prefix_ + "/proc/self/maps");
     const char* detected = detect_effective_render_api("VULKAN", maps_path.c_str());
@@ -346,7 +375,7 @@ void TelemetryCollector::poll_local_clock() {
       translated_api_cached_.store(true, std::memory_order_relaxed);
     } else {
       translated_api_.store("VULKAN", std::memory_order_relaxed);
-      if (++s_map_scan_attempts >= 3) {
+      if (++map_scan_attempts_ >= 3) {
         // After 3 initial attempts (~1.5s), permanently freeze and stop reading /proc/self/maps
         translated_api_cached_.store(true, std::memory_order_relaxed);
       }
@@ -377,7 +406,6 @@ void TelemetryCollector::poll_game_ram() { ram_provider_.poll_game_ram(staging_h
 void TelemetryCollector::poll_mem_pressure() { ram_provider_.poll_mem_pressure(staging_hw_data_); }
 
 void TelemetryCollector::poll_gpu() {
-  std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);
   if (gpu_backend_ == GpuBackendType::NvidiaNvml) {
     poll_nvidia_gpu();
   } else if (gpu_backend_ == GpuBackendType::IntelLevelZero) {

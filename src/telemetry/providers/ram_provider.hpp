@@ -19,6 +19,10 @@ public:
 
 private:
   std::string root_prefix_;
+  std::string proc_meminfo_path_;
+  std::string proc_statm_path_;
+  std::string proc_status_path_;
+  std::string proc_pressure_mem_path_;
 };
 
 }  // namespace fpshud

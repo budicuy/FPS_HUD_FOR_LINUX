@@ -15,6 +15,11 @@ namespace fpshud {
 RamProvider::RamProvider(std::string root_prefix) : root_prefix_(std::move(root_prefix)) {}
 
 void RamProvider::init() {
+  proc_meminfo_path_ = root_prefix_ + "/proc/meminfo";
+  proc_statm_path_ = root_prefix_ + "/proc/self/statm";
+  proc_status_path_ = root_prefix_ + "/proc/self/status";
+  proc_pressure_mem_path_ = root_prefix_ + "/proc/pressure/memory";
+
   FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Telemetry, "RamProvider initialized (prefix: %s)",
                    root_prefix_.c_str());
 }
@@ -26,8 +31,7 @@ void RamProvider::poll(HardwareTelemetryData& out_data) {
 }
 
 void RamProvider::poll_ram(HardwareTelemetryData& out_data) {
-  std::string mem_path = root_prefix_ + "/proc/meminfo";
-  int fd = open(mem_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = open(proc_meminfo_path_.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
   char buf[4096];
   ssize_t n = read(fd, buf, sizeof(buf) - 1);
@@ -67,9 +71,8 @@ void RamProvider::poll_ram(HardwareTelemetryData& out_data) {
 
 void RamProvider::poll_game_ram(HardwareTelemetryData& out_data) {
   // Fast path: /proc/self/statm (single line: size resident shared text lib data dirty)
-  std::string statm_path = root_prefix_ + "/proc/self/statm";
   char buf[128];
-  if (read_sysfs_buf(statm_path.c_str(), buf, sizeof(buf))) {
+  if (read_sysfs_buf(proc_statm_path_.c_str(), buf, sizeof(buf))) {
     unsigned long size = 0;
     unsigned long resident = 0;
     if (std::sscanf(buf, "%lu %lu", &size, &resident) == 2) {
@@ -81,8 +84,7 @@ void RamProvider::poll_game_ram(HardwareTelemetryData& out_data) {
   }
 
   // Fallback: /proc/self/status VmRSS
-  std::string status_path = root_prefix_ + "/proc/self/status";
-  int fd = open(status_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = open(proc_status_path_.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
   char sbuf[4096];
   ssize_t n = read(fd, sbuf, sizeof(sbuf) - 1);
@@ -99,9 +101,8 @@ void RamProvider::poll_game_ram(HardwareTelemetryData& out_data) {
 void RamProvider::poll_mem_pressure(HardwareTelemetryData& out_data) {
   // Linux PSI: share of time (last 10s) in which at least one task stalled waiting for memory
   char buf[256];
-  std::string psi_path = root_prefix_ + "/proc/pressure/memory";
   float some_avg10 = -1.0f;
-  if (read_sysfs_buf(psi_path.c_str(), buf, sizeof(buf))) {
+  if (read_sysfs_buf(proc_pressure_mem_path_.c_str(), buf, sizeof(buf))) {
     float v = 0.0f;
     if (std::sscanf(buf, "some avg10=%f", &v) == 1) {
       some_avg10 = std::clamp(v, 0.0f, 100.0f);

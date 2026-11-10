@@ -27,6 +27,9 @@ public:
 
 private:
   std::string root_prefix_;
+  std::string proc_stat_path_;
+  std::string proc_cpuinfo_path_;
+  bool cpuinfo_has_mhz_ = true;
   char cpu_name_[48] = "CPU";
 
   struct CpuFreqSensor {

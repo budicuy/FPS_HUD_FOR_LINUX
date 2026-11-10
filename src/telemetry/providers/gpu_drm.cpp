@@ -600,7 +600,7 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
     prev_gpu_energy_time_ = now;
   }
 
-  int eff_temp = (temp_c > 0) ? temp_c : out_data.cpu_temp_c;
+  int eff_temp = (temp_c > 0) ? temp_c : (out_data.cpu_temp_c > 0 ? out_data.cpu_temp_c : 0);
 
   out_data.gpu_available = true;
   std::snprintf(out_data.gpu_vendor, sizeof(out_data.gpu_vendor), "%s", gpu_vendor_);
@@ -614,7 +614,6 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
   out_data.gpu_vram_used_gb = vram_used_gb;
   out_data.gpu_vram_total_gb = vram_total_gb;
   out_data.gpu_bandwidth_gbs = bw_gbs;
-  out_data.gpu_max_bandwidth_gbs = max_bw_gbs;
   out_data.gpu_temp_c = eff_temp;
   out_data.gpu_fan_pct = fan_pct;
   out_data.gpu_power_w = watts;

@@ -37,6 +37,8 @@ private:
   bool battery_discovered_ = false;
 
   // Storage & Network state
+  std::string proc_diskstats_path_;
+  std::string proc_net_dev_path_;
   std::string disk_temp_path_;
   uint64_t prev_disk_read_sectors_ = 0;
   uint64_t prev_disk_write_sectors_ = 0;

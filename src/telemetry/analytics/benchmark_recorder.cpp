@@ -1,4 +1,4 @@
-#include "benchmark_recorder.hpp"
+#include "analytics/benchmark_recorder.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>

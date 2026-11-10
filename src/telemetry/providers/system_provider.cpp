@@ -1,4 +1,4 @@
-#include "system_provider.hpp"
+#include "providers/system_provider.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -51,6 +51,8 @@ bool is_whole_disk(const char* dev) noexcept {
 SystemProvider::SystemProvider(std::string root_prefix) : root_prefix_(std::move(root_prefix)) {}
 
 void SystemProvider::init() {
+  proc_diskstats_path_ = root_prefix_ + "/proc/diskstats";
+  proc_net_dev_path_ = root_prefix_ + "/proc/net/dev";
   init_battery_sensors();
   init_storage_sensors();
 }
@@ -216,19 +218,23 @@ void SystemProvider::poll_disk_temp(HardwareTelemetryData& data) {
 }
 
 void SystemProvider::poll_disk_io(HardwareTelemetryData& data) {
-  std::string stat_path = root_prefix_ + "/proc/diskstats";
-  int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = open(proc_diskstats_path_.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
-  char buf[16384];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  std::array<char, 65536> buf;
+  ssize_t total_read = 0;
+  while (total_read < static_cast<ssize_t>(buf.size() - 1)) {
+    ssize_t n = read(fd, buf.data() + total_read, buf.size() - 1 - total_read);
+    if (n <= 0) break;
+    total_read += n;
+  }
   close(fd);
-  if (n <= 0) return;
-  buf[n] = '\0';
+  if (total_read <= 0) return;
+  buf[total_read] = '\0';
 
   uint64_t total_read_sectors = 0;
   uint64_t total_write_sectors = 0;
 
-  const char* line = buf;
+  const char* line = buf.data();
   while (*line) {
     const char* next_line = std::strchr(line, '\n');
     unsigned int maj = 0, min_id = 0;
@@ -272,8 +278,7 @@ void SystemProvider::poll_disk_io(HardwareTelemetryData& data) {
 }
 
 void SystemProvider::poll_network(HardwareTelemetryData& data) {
-  std::string net_path = root_prefix_ + "/proc/net/dev";
-  int fd = open(net_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = open(proc_net_dev_path_.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
   char buf[8192];
   ssize_t n = read(fd, buf, sizeof(buf) - 1);

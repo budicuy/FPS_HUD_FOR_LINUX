@@ -1,4 +1,4 @@
-#include "frametime_analyzer.hpp"
+#include "analytics/frametime_analyzer.hpp"
 
 #include <algorithm>
 #include <cmath>

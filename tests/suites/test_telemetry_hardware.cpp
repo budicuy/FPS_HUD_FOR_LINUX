@@ -94,8 +94,8 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
       is_real_hw ? (!d.gpu_available ||
                     (d.gpu_load_pct >= 0.0f && d.gpu_vram_total_gb >= 0.0f && d.gpu_temp_c >= 0))
                  : (d.gpu_load_pct >= 0.0f && d.gpu_clock_mhz > 0 && d.gpu_vram_total_gb > 0.0f &&
-                    d.gpu_vram_used_gb > 0.0f && d.gpu_max_bandwidth_gbs > 0.0f &&
-                    d.gpu_temp_c > 0 && d.gpu_power_w > 0.0f);
+                    d.gpu_vram_used_gb > 0.0f && d.gpu_bandwidth_gbs > 0.0f && d.gpu_temp_c > 0 &&
+                    d.gpu_power_w > 0.0f);
   const bool cpu_sensors_ok =
       is_real_hw ? (d.cpu_load_pct >= 0.0f && d.ram_total_gb > 0.0f &&
                     std::strlen(d.local_time_str) >= 4 && api_switch_ok)
@@ -673,5 +673,123 @@ TEST_CASE("Telemetry: Hardware Providers (CPU, RAM, GPU)") {
                             ", host_init=" + std::to_string(host_init) +
                             ", host_polled=" + std::to_string(host_polled);
     check_cond(nv_passed, "14.4 NvidiaGpuProvider Vendor Gating & Lifecycle", nv_detail.c_str());
+  }
+
+  SUBCASE("Suite 15: Map Line Classification (DX9/DX11/DX12)") {
+    CHECK(std::string_view(
+              fpshud::TelemetryCollector::classify_maps_line("/usr/lib/dxvk/d3d9.dll")) == "DX9");
+    CHECK(std::string_view(
+              fpshud::TelemetryCollector::classify_maps_line("/usr/lib/dxvk/d3d11.dll")) == "DX11");
+    CHECK(std::string_view(fpshud::TelemetryCollector::classify_maps_line(
+              "/usr/lib/vkd3d-proton/d3d12core.dll")) == "DX12");
+  }
+
+  SUBCASE("Suite 16: Level Zero Counter Underflow Guard & API VRAM Fallback") {
+    LevelZeroDispatch ze_wrap_mock{};
+    ze_wrap_mock.zesInit = [](uint32_t) -> int { return 0; };
+    ze_wrap_mock.zesDriverGet = [](uint32_t* count, void** phDrivers) -> int {
+      if (count) *count = 1;
+      if (phDrivers) *phDrivers = reinterpret_cast<void*>(0x1111);
+      return 0;
+    };
+    ze_wrap_mock.zesDeviceGet = [](void*, uint32_t* count, void** phDevices) -> int {
+      if (count) *count = 1;
+      if (phDevices) *phDevices = reinterpret_cast<void*>(0x2222);
+      return 0;
+    };
+    ze_wrap_mock.zesDeviceGetProperties = [](void*,
+                                             intel_ze::zes_device_properties_t* pProps) -> int {
+      if (pProps) {
+        std::snprintf(pProps->modelName, sizeof(pProps->modelName), "Intel Arc A770");
+        std::snprintf(pProps->driverVersion, sizeof(pProps->driverVersion), "Level Zero 1.14");
+      }
+      return 0;
+    };
+    static uint64_t s_wrap_pwr_ts = 1000000;
+    static uint64_t s_wrap_pwr_uj = 10000000;
+    ze_wrap_mock.zesDeviceEnumPowerDomains = [](void*, uint32_t* count, void** phPower) -> int {
+      if (count) *count = 1;
+      if (phPower) *phPower = reinterpret_cast<void*>(0x6666);
+      return 0;
+    };
+    ze_wrap_mock.zesPowerGetEnergyCounter =
+        [](void*, intel_ze::zes_power_energy_counter_t* pEnergy) -> int {
+      if (pEnergy) {
+        pEnergy->timestamp = s_wrap_pwr_ts;
+        pEnergy->energy = s_wrap_pwr_uj;
+      }
+      return 0;
+    };
+    static uint64_t s_wrap_eng_ts = 1000000;
+    static uint64_t s_wrap_eng_active = 200000;
+    ze_wrap_mock.zesDeviceEnumEngineGroups = [](void*, uint32_t* count, void** phEngine) -> int {
+      if (count) *count = 1;
+      if (phEngine) *phEngine = reinterpret_cast<void*>(0x7777);
+      return 0;
+    };
+    ze_wrap_mock.zesEngineGetActivity = [](void*, intel_ze::zes_engine_stats_t* pStats) -> int {
+      if (pStats) {
+        pStats->timestamp = s_wrap_eng_ts;
+        pStats->activeTime = s_wrap_eng_active;
+      }
+      return 0;
+    };
+    ze_wrap_mock.zesDeviceEnumMemoryModules = [](void*, uint32_t* count, void**) -> int {
+      if (count) *count = 0;
+      return 0;
+    };
+
+    fpshud::LevelZeroGpuProvider lz_prov;
+    bool init_ok = lz_prov.init("", &ze_wrap_mock);
+    CHECK(init_ok);
+    fpshud::HardwareTelemetryData hdata{};
+    lz_prov.poll(hdata);
+
+    s_wrap_pwr_ts += 1000000;
+    s_wrap_pwr_uj = 5000000;
+    s_wrap_eng_ts += 1000000;
+    s_wrap_eng_active = 100000;
+    lz_prov.poll(hdata);
+
+    CHECK(hdata.gpu_power_w < 500.0f);
+    CHECK(hdata.gpu_load_pct <= 100.0f);
+
+    lz_prov.update_api_vram_info(2ULL * 1024 * 1024 * 1024, 8ULL * 1024 * 1024 * 1024);
+    lz_prov.poll(hdata);
+    CHECK(hdata.gpu_vram_total_gb > 7.5f);
+    CHECK(hdata.gpu_vram_used_gb > 1.8f);
+    lz_prov.shutdown();
+  }
+
+  SUBCASE("Suite 17: CPU Power Tier-2 TDP Fallback") {
+    ScopedTempDir tmp_tdp("fpshud_cpu_tier2_tdp");
+    const fs::path& base = tmp_tdp.get();
+    std::error_code ec;
+    fs::create_directories(base / "sys/class/powercap/intel-rapl:0", ec);
+    write_mock_file(base / "sys/class/powercap/intel-rapl:0/constraint_0_max_power_uw",
+                    "65000000\n");
+    write_mock_file(base / "sys/class/powercap/intel-rapl:0/energy_uj", "0000\n");
+
+    fpshud::CpuProvider cpu_prov(base.string());
+    cpu_prov.init();
+    fpshud::HardwareTelemetryData hdata{};
+    cpu_prov.poll(hdata);
+    CHECK(hdata.cpu_power_w > 5.0f);
+    CHECK(hdata.cpu_power_w <= 65.0f);
+  }
+
+  SUBCASE("Suite 18: NVIDIA D3cold Runtime Suspend Guard") {
+    ScopedTempDir tmp_nv_d3("fpshud_nv_d3cold");
+    const fs::path& base = tmp_nv_d3.get();
+    std::error_code ec;
+    fs::create_directories(base / "sys/bus/pci/devices/0000:01:00.0/power", ec);
+    write_mock_file(base / "sys/bus/pci/devices/0000:01:00.0/vendor", "0x10de\n");
+    write_mock_file(base / "sys/bus/pci/devices/0000:01:00.0/power/runtime_status", "suspended\n");
+
+    fpshud::NvidiaGpuProvider nv_prov;
+    nv_prov.set_root_prefix(base.string());
+    CHECK(nv_prov.is_d3cold_suspended() == true);
+    bool init_ok = nv_prov.init(base.string(), 0, 0);
+    CHECK(init_ok == false);
   }
 }

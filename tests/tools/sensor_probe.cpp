@@ -108,7 +108,7 @@ void run_sensor_probe() {
     print_probe_row("09. GPU VRAM Usage", false, "VRAM capacity sensor unavailable", avail, total);
   }
 
-  if (d.gpu_max_bandwidth_gbs > 0.0f || d.gpu_bandwidth_gbs > 0.0f) {
+  if (d.gpu_bandwidth_gbs > 0.0f) {
     std::snprintf(buf, sizeof(buf), "%.1f GB/s", d.gpu_bandwidth_gbs);
     print_probe_row("10. GPU Memory Bandwidth", true, buf, avail, total);
   } else {

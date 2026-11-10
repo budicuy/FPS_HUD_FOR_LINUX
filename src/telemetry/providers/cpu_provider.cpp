@@ -22,24 +22,31 @@ CpuProvider::CpuProvider(std::string root_prefix) : root_prefix_(std::move(root_
 }
 
 void CpuProvider::init() {
+  proc_stat_path_ = root_prefix_ + "/proc/stat";
+  proc_cpuinfo_path_ = root_prefix_ + "/proc/cpuinfo";
+  cpuinfo_has_mhz_ = false;
+
   std::error_code ec;
   char buf[128];
 
   // 1. Detect CPU Model Name from /proc/cpuinfo (Works on Intel, AMD, & ARM)
   {
-    std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
-    if (FILE* fp = std::fopen(cpuinfo_path.c_str(), "r")) {
+    if (FILE* fp = std::fopen(proc_cpuinfo_path_.c_str(), "r")) {
       char line_buf[256];
+      bool model_found = false;
       while (std::fgets(line_buf, sizeof(line_buf), fp)) {
         std::string line(line_buf);
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
-        if (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0) {
+        if (!model_found && (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0)) {
           auto colon = line.find(':');
           if (colon != std::string::npos) {
             std::string raw_name = line.substr(colon + 1);
             clean_hardware_name(raw_name.c_str(), cpu_name_, sizeof(cpu_name_));
-            break;
+            model_found = true;
           }
+        }
+        if (line.rfind("cpu MHz", 0) == 0) {
+          cpuinfo_has_mhz_ = true;
         }
       }
       std::fclose(fp);
@@ -190,9 +197,11 @@ void CpuProvider::poll(HardwareTelemetryData& out_data) {
 }
 
 void CpuProvider::poll_cpu_load(HardwareTelemetryData& out_data) {
-  std::string stat_path = root_prefix_ + "/proc/stat";
+  if (out_data.cpu_name[0] == '\0' && cpu_name_[0] != '\0') {
+    std::memcpy(out_data.cpu_name, cpu_name_, sizeof(out_data.cpu_name));
+  }
 
-  int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = open(proc_stat_path_.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
   char buf[16384];
   ssize_t n = read(fd, buf, sizeof(buf) - 1);
@@ -281,38 +290,49 @@ void CpuProvider::poll_cpu_clock(HardwareTelemetryData& out_data) {
   std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
 
   // 1. Fast path: parse /proc/cpuinfo in a single file read (zero IPI interrupts to CPU cores)
-  std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
-  int fd = open(cpuinfo_path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd >= 0) {
-    char buf[16384];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n > 0) {
-      buf[n] = '\0';
-      int cur_processor = -1;
-      const char* p = buf;
-      while (*p) {
-        if (std::strncmp(p, "processor", 9) == 0) {
-          const char* colon = std::strchr(p, ':');
-          if (colon) {
-            cur_processor = std::atoi(colon + 1);
-          }
-        } else if (std::strncmp(p, "cpu MHz", 7) == 0 && cur_processor >= 0) {
-          const char* colon = std::strchr(p, ':');
-          if (colon) {
-            float mhz_f = std::strtof(colon + 1, nullptr);
-            int mhz = static_cast<int>(mhz_f + 0.5f);
-            if (mhz > max_mhz) max_mhz = mhz;
-            if (cur_processor < static_cast<int>(TelemetryData::kMaxCpuCores)) {
-              core_clocks[cur_processor] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
-              core_updated.set(cur_processor);
-              max_core_seen = std::max(max_core_seen, cur_processor + 1);
+  if (cpuinfo_has_mhz_) {
+    int fd = open(proc_cpuinfo_path_.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+      std::array<char, 65536> buf;
+      ssize_t total_read = 0;
+      while (total_read < static_cast<ssize_t>(buf.size() - 1)) {
+        ssize_t n = read(fd, buf.data() + total_read, buf.size() - 1 - total_read);
+        if (n <= 0) break;
+        total_read += n;
+      }
+      close(fd);
+      if (total_read > 0) {
+        buf[total_read] = '\0';
+        int cur_processor = -1;
+        int mhz_entries_found = 0;
+        const char* p = buf.data();
+        while (*p) {
+          if (std::strncmp(p, "processor", 9) == 0) {
+            const char* colon = std::strchr(p, ':');
+            if (colon) {
+              cur_processor = std::atoi(colon + 1);
+            }
+          } else if (std::strncmp(p, "cpu MHz", 7) == 0 && cur_processor >= 0) {
+            const char* colon = std::strchr(p, ':');
+            if (colon) {
+              float mhz_f = std::strtof(colon + 1, nullptr);
+              int mhz = static_cast<int>(mhz_f + 0.5f);
+              if (mhz > max_mhz) max_mhz = mhz;
+              if (cur_processor < static_cast<int>(TelemetryData::kMaxCpuCores)) {
+                core_clocks[cur_processor] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
+                core_updated.set(cur_processor);
+                max_core_seen = std::max(max_core_seen, cur_processor + 1);
+              }
+              ++mhz_entries_found;
             }
           }
+          const char* next = std::strchr(p, '\n');
+          if (!next) break;
+          p = next + 1;
         }
-        const char* next = std::strchr(p, '\n');
-        if (!next) break;
-        p = next + 1;
+        if (mhz_entries_found == 0) {
+          cpuinfo_has_mhz_ = false;
+        }
       }
     }
   }
@@ -358,8 +378,10 @@ void CpuProvider::poll_cpu_temp(HardwareTelemetryData& out_data) {
   if (!read_sysfs_buf(cpu_temp_path_.c_str(), buf, sizeof(buf))) return;
 
   long millideg = std::strtol(buf, nullptr, 10);
-  int temp_c = static_cast<int>((millideg + 500) / 1000);
-  out_data.cpu_temp_c = temp_c;
+  if (millideg > 0 && millideg < 130000) {
+    int temp_c = static_cast<int>((millideg + 500) / 1000);
+    out_data.cpu_temp_c = temp_c;
+  }
 }
 
 void CpuProvider::poll_cpu_power(HardwareTelemetryData& out_data) {
@@ -369,8 +391,8 @@ void CpuProvider::poll_cpu_power(HardwareTelemetryData& out_data) {
   // 1. Primary: Intel / AMD RAPL energy counter
   const std::string& energy_path =
       !rapl_energy_path_.empty() ? rapl_energy_path_ : cpu_hwmon_energy_uj_path_;
-  if (!energy_path.empty() && read_sysfs_buf(energy_path.c_str(), buf, sizeof(buf))) {
-    uint64_t curr_uj = std::strtoull(buf, nullptr, 10);
+  uint64_t curr_uj = 0;
+  if (!energy_path.empty() && read_sysfs_u64(energy_path.c_str(), curr_uj) && curr_uj > 0) {
     auto now = std::chrono::steady_clock::now();
 
     if (prev_rapl_time_.time_since_epoch().count() != 0) {
@@ -396,8 +418,9 @@ void CpuProvider::poll_cpu_power(HardwareTelemetryData& out_data) {
     watts = static_cast<float>(uw) / 1e6f;
   }
 
-  // 3. Tier-3 Fallback: Sudo-free TDP estimation (constraint_0_max_power_uw + load & boost ratio)
-  if (watts < 0.0f && energy_path.empty() && cpu_hwmon_power_uw_path_.empty()) {
+  // 3. Tier-2 / Tier-3 Fallback: Sudo-free Dynamic TDP estimation (constraint_0_max_power_uw + load
+  // & boost ratio)
+  if (watts < 0.0f) {
     float load_ratio = std::clamp(out_data.cpu_load_pct / 100.0f, 0.0f, 1.0f);
     int cur_mhz = out_data.cpu_clock_mhz;
     float freq_ratio = 1.0f;

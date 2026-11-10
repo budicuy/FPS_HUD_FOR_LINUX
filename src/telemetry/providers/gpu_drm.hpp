@@ -28,12 +28,6 @@ public:
 
   [[nodiscard]] GpuBackendType get_backend_type() const noexcept { return backend_type_; }
   [[nodiscard]] uint32_t detected_vendor_id() const noexcept { return detected_vendor_id_; }
-  [[nodiscard]] uint32_t detected_device_id() const noexcept { return detected_device_id_; }
-
-  [[nodiscard]] const std::string& mclk_freq_path() const noexcept { return drm_mclk_freq_path_; }
-  [[nodiscard]] const std::string& fan_pwm_path() const noexcept { return drm_fan_pwm_path_; }
-  [[nodiscard]] const std::string& fan_rpm_path() const noexcept { return drm_fan_rpm_path_; }
-  [[nodiscard]] const std::string& fan_max_path() const noexcept { return drm_fan_max_path_; }
 
 private:
   std::string root_prefix_;

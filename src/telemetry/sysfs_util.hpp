@@ -45,6 +45,10 @@ inline bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
   return true;
 }
 
+inline bool read_sysfs_uint64(const char* path, uint64_t& out) noexcept {
+  return read_sysfs_u64(path, out);
+}
+
 inline bool is_sysfs_readable(const char* path) noexcept {
   if (!path || !*path) return false;
   struct stat st{};
