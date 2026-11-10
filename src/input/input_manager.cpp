@@ -158,6 +158,9 @@ void InputManager::cancel_keybind_capture() noexcept {
 void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, float display_width,
                                     float display_height, ImGuiIO* io) noexcept {
   if (code < 512) {
+    if (keys_down_.test(code) == down) {
+      return;
+    }
     keys_down_.set(code, down);
   }
   if (code == KEY_LEFTALT || code == KEY_RIGHTALT) {
@@ -317,6 +320,9 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
     btn_idx = 2;
 
   if (btn_idx >= 0) {
+    if (mouse_buttons_[btn_idx] == down) {
+      return;
+    }
     mouse_buttons_[btn_idx] = down;
     if (io && (cfg.gui_open || !down)) {
       io->AddMouseButtonEvent(btn_idx, down);
@@ -417,23 +423,26 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
   display_width_ = display_width;
   display_height_ = display_height;
 
-  // 1. Wayland in-process client polling (zero sudo, native Wayland)
-  if (wayland_backend_ && wayland_backend_->has_display()) {
-    wayland_backend_->poll(*this);
-  }
-
-  // 2. Evdev device polling (if /dev/input permissions available)
+  // 1. Evdev device polling (preferred when /dev/input permissions are available;
+  //    supports hardware EVIOCGRAB mouse isolation across Wayland, Xwayland, and X11)
+  bool polled_evdev = false;
   if (evdev_backend_) {
     if (evdev_backend_->devices().empty()) {
       evdev_backend_->init();
     }
     if (!evdev_backend_->devices().empty()) {
       evdev_backend_->poll(*this);
-    } else if (!wayland_backend_ || !wayland_backend_->has_display()) {
-      // 3. X11 fallback (X11 / Xwayland desktops)
-      if (x11_backend_) {
-        x11_backend_->poll(*this);
-      }
+      polled_evdev = true;
+    }
+  }
+
+  // 2. Wayland in-process client fallback (zero-sudo when /dev/input is unavailable)
+  if (!polled_evdev) {
+    if (wayland_backend_ && wayland_backend_->has_display()) {
+      wayland_backend_->poll(*this);
+    } else if (x11_backend_) {
+      // 3. X11 fallback (zero-sudo on X11 / Xwayland desktops)
+      x11_backend_->poll(*this);
     }
   }
 

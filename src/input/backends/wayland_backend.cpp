@@ -287,9 +287,13 @@ void WaylandBackend::attach_display(void* display, InputManager* mgr) noexcept {
   teardown_locked();
   wayland_display_ = display;
   wayland_attached_ = true;
+}
+
+void WaylandBackend::ensure_queue_locked() noexcept {
+  if (!wayland_display_ || wayland_queue_) return;
 
   // Mock / dummy pointer for test harness
-  if (display == reinterpret_cast<void*>(0x5678)) {
+  if (wayland_display_ == reinterpret_cast<void*>(0x5678)) {
     return;
   }
 
@@ -299,7 +303,7 @@ void WaylandBackend::attach_display(void* display, InputManager* mgr) noexcept {
     return;
   }
 
-  auto* dpy = static_cast<struct wl_display*>(display);
+  auto* dpy = static_cast<struct wl_display*>(wayland_display_);
   wayland_queue_ = g_wl.fn_display_create_queue(dpy);
   if (!wayland_queue_) return;
 
@@ -439,7 +443,13 @@ void WaylandBackend::poll(InputManager& mgr) {
   if (mgr_ != &mgr) {
     mgr_ = &mgr;
   }
-  if (!wayland_display_ || !wayland_queue_ || !g_wl.fn_display_dispatch_queue_pending) {
+  if (!wayland_display_) {
+    return;
+  }
+  if (!wayland_queue_) {
+    ensure_queue_locked();
+  }
+  if (!wayland_queue_ || !g_wl.fn_display_dispatch_queue_pending) {
     return;
   }
 

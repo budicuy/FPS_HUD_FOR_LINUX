@@ -201,6 +201,27 @@ TEST_CASE("Input Manager") {
     im.handle_key_event(KEY_F10, true, cfg, 1920.0f, 1080.0f);
     im.handle_key_event(KEY_F10, false, cfg, 1920.0f, 1080.0f);
     CHECK(RecorderController::instance().consume_screenshot_request());
+
+    // Rising-edge deduplication: duplicate down=true while key is held must NOT immediately
+    // toggle Benchmark or GUI back off
+    cfg.bind_benchmark = Keybind{0, KEY_F9};
+    CHECK(!fpshud::get_telemetry().is_benchmark_active());
+    im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(fpshud::get_telemetry().is_benchmark_active(),
+                  "First KEY_F9 down=true starts benchmark");
+    // Simulate duplicate key-down from secondary backend / device node before key release
+    im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(fpshud::get_telemetry().is_benchmark_active(),
+                  "Duplicate KEY_F9 down=true while held must not stop benchmark");
+    im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(fpshud::get_telemetry().is_benchmark_active(),
+                  "KEY_F9 release keeps benchmark running until next press");
+
+    // Second distinct press stops benchmark
+    im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
+    im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
+    CHECK_MESSAGE(!fpshud::get_telemetry().is_benchmark_active(),
+                  "Second distinct KEY_F9 press stops benchmark");
   }
 
   SUBCASE("InputManager Mouse Isolation & Double-Cursor Safety") {

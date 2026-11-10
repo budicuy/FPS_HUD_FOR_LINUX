@@ -40,6 +40,7 @@ public:
 
 private:
   void init_wayland_client_api() noexcept;
+  void ensure_queue_locked() noexcept;
   void teardown_locked() noexcept;
 
   mutable std::recursive_mutex wayland_mutex_;

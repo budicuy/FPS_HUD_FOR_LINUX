@@ -7,9 +7,38 @@
 
 #include <cstring>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 namespace fpshud::vk {
+
+namespace {
+std::unordered_set<VkSurfaceKHR> g_wayland_surfaces;
+
+void register_wayland_surface(VkSurfaceKHR surface, void* display) {
+  if (surface != VK_NULL_HANDLE) {
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    g_wayland_surfaces.insert(surface);
+  }
+  if (display) {
+    fpshud::get_input_manager().attach_wayland_display(display);
+  }
+}
+
+void release_wayland_surface(VkSurfaceKHR surface) {
+  if (surface == VK_NULL_HANDLE) return;
+  bool last_wayland_surface = false;
+  {
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    if (g_wayland_surfaces.erase(surface) > 0 && g_wayland_surfaces.empty()) {
+      last_wayland_surface = true;
+    }
+  }
+  if (last_wayland_surface) {
+    fpshud::get_input_manager().detach_wayland_display(nullptr);
+  }
+}
+}  // namespace
 
 VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
                                                    const VkAllocationCallbacks* pAllocator,
@@ -87,6 +116,10 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* p
 VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
                                                 const VkAllocationCallbacks* pAllocator) {
   try {
+    {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      g_wayland_surfaces.clear();
+    }
     fpshud::get_input_manager().detach_wayland_display(nullptr);
     if (!instance) return;
 
@@ -553,15 +586,17 @@ VKAPI_ATTR VkResult VKAPI_CALL
 Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
                              const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
   try {
-    if (pCreateInfo && pCreateInfo->display) {
-      fpshud::get_input_manager().attach_wayland_display(pCreateInfo->display);
-    }
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
     if (!id || !id->GetInstanceProcAddr) return VK_ERROR_INITIALIZATION_FAILED;
     auto fpCreateWaylandSurfaceKHR = reinterpret_cast<PFN_vkCreateWaylandSurfaceKHR>(
         id->GetInstanceProcAddr(instance, "vkCreateWaylandSurfaceKHR"));
     if (!fpCreateWaylandSurfaceKHR) return VK_ERROR_EXTENSION_NOT_PRESENT;
-    return fpCreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
+    VkResult res = fpCreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
+    if (res == VK_SUCCESS) {
+      register_wayland_surface(pSurface ? *pSurface : VK_NULL_HANDLE,
+                               pCreateInfo ? pCreateInfo->display : nullptr);
+    }
+    return res;
   } catch (...) {
     return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
@@ -570,6 +605,7 @@ Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateIn
 VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                                                   const VkAllocationCallbacks* pAllocator) {
   try {
+    release_wayland_surface(surface);
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
     if (id && id->GetInstanceProcAddr) {
       auto fpDestroySurfaceKHR = reinterpret_cast<PFN_vkDestroySurfaceKHR>(
