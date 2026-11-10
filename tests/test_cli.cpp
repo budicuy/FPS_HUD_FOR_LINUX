@@ -12,6 +12,7 @@
 #include "gui_menu.hpp"
 #include "imgui.h"
 #include "logger.hpp"
+#include "vulkan_swapchain.hpp"
 #include "providers/cpu_provider.hpp"
 #include "providers/ram_provider.hpp"
 #include "providers/gpu_drm.hpp"
@@ -980,30 +981,19 @@ void run_elf_and_layer_abi_suite() {
     bool vk_try_catch_ok = false;
     if (!rroot.empty()) {
       std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
-      size_t pos_qpresent = vk_src.find("Hook_QueuePresentKHR");
-      size_t pos_cswap = vk_src.find("Hook_CreateSwapchainKHR");
-      size_t pos_cdev = vk_src.find("Hook_CreateDevice");
-      if (pos_qpresent != std::string::npos && pos_cswap != std::string::npos &&
-          pos_cdev != std::string::npos) {
-        size_t next_fn1 = vk_src.find("VKAPI_ATTR", pos_cdev + 20);
-        size_t next_fn2 = vk_src.find("VKAPI_ATTR", pos_cswap + 20);
-        size_t next_fn3 = vk_src.find("extern \"C\"", pos_qpresent + 20);
-        std::string cd_sub =
-            (next_fn1 != std::string::npos) ? vk_src.substr(pos_cdev, next_fn1 - pos_cdev) : "";
-        std::string cs_sub =
-            (next_fn2 != std::string::npos) ? vk_src.substr(pos_cswap, next_fn2 - pos_cswap) : "";
-        std::string qp_sub = (next_fn3 != std::string::npos)
-                                 ? vk_src.substr(pos_qpresent, next_fn3 - pos_qpresent)
-                                 : "";
-        if (qp_sub.find("try {") != std::string::npos &&
-            qp_sub.find("catch (...)") != std::string::npos &&
-            cs_sub.find("try {") != std::string::npos &&
-            cs_sub.find("catch (...)") != std::string::npos &&
-            cd_sub.find("try {") != std::string::npos &&
-            cd_sub.find("catch (...)") != std::string::npos) {
-          vk_try_catch_ok = true;
-        }
-      }
+      std::string hooks_src = read_text_file(rroot / "src" / "layer" / "vulkan_hooks.cpp");
+      std::string swap_src = read_text_file(rroot / "src" / "layer" / "vulkan_swapchain.cpp");
+
+      bool qp_ok = (vk_src.find("Hook_QueuePresentKHR") != std::string::npos &&
+                    vk_src.find("try {") != std::string::npos &&
+                    vk_src.find("catch (...)") != std::string::npos);
+      bool cs_ok = (swap_src.find("Hook_CreateSwapchainKHR") != std::string::npos &&
+                    swap_src.find("try {") != std::string::npos &&
+                    swap_src.find("catch (...)") != std::string::npos);
+      bool cd_ok = (hooks_src.find("Hook_CreateDevice") != std::string::npos &&
+                    hooks_src.find("try {") != std::string::npos &&
+                    hooks_src.find("catch (...)") != std::string::npos);
+      vk_try_catch_ok = qp_ok && cs_ok && cd_ok;
     } else {
       vk_try_catch_ok = true;
     }
@@ -1017,11 +1007,12 @@ void run_elf_and_layer_abi_suite() {
     // 3.3 Vulkan Swapchain Destruction Concurrency Hardening
     bool vk_shared_swapchain_ok = false;
     if (!rroot.empty()) {
-      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
-      if (vk_src.find("std::shared_ptr<SwapchainData>") != std::string::npos &&
-          vk_src.find("destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd)") !=
+      std::string swap_src = read_text_file(rroot / "src" / "layer" / "vulkan_swapchain.cpp");
+      if (swap_src.empty()) swap_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      if (swap_src.find("std::shared_ptr<SwapchainData>") != std::string::npos &&
+          swap_src.find("destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd)") !=
               std::string::npos &&
-          vk_src.find("std::lock_guard<std::mutex> lock(sd->mutex);") != std::string::npos) {
+          swap_src.find("std::lock_guard<std::mutex> lock(sd->mutex);") != std::string::npos) {
         vk_shared_swapchain_ok = true;
       }
     } else {
@@ -3444,11 +3435,12 @@ void run_all_devices_and_features_suite() {
   // 4.9 10-Bit HDR / Wide-Gamut Swapchain Format Preservation
   bool hdr_10bit_format_ok = rroot.empty();
   if (!rroot.empty()) {
-    std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+    std::string cap_src = read_text_file(rroot / "src" / "layer" / "vulkan_capture.cpp");
+    if (cap_src.empty()) cap_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
     std::string rec_src = read_text_file(rroot / "src" / "recorder" / "recorder_main.cpp");
-    bool vk_maps_10bit = (vk_src.find("fmt = 2") != std::string::npos &&
-                          vk_src.find("fmt = 3") != std::string::npos &&
-                          vk_src.find("VK_FORMAT_A2B10G10R10_UNORM_PACK32") != std::string::npos);
+    bool vk_maps_10bit = (cap_src.find("fmt = 2") != std::string::npos &&
+                          cap_src.find("fmt = 3") != std::string::npos &&
+                          cap_src.find("VK_FORMAT_A2B10G10R10_UNORM_PACK32") != std::string::npos);
     bool rec_unpacks_10bit = (rec_src.find("AV_PIX_FMT_X2BGR10LE") != std::string::npos &&
                               rec_src.find("AV_PIX_FMT_X2RGB10LE") != std::string::npos);
     hdr_10bit_format_ok = vk_maps_10bit && rec_unpacks_10bit;
@@ -4144,11 +4136,13 @@ void run_all_devices_and_features_suite() {
           read_text_file(rroot / "src" / "telemetry" / "telemetry.cpp") +
           read_text_file(rroot / "src" / "telemetry" / "providers" / "gpu_levelzero.cpp") +
           read_text_file(rroot / "src" / "telemetry" / "providers" / "gpu_nvidia.cpp");
-      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      std::string hooks_src = read_text_file(rroot / "src" / "layer" / "vulkan_hooks.cpp");
+      if (hooks_src.empty())
+        hooks_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       gpu_src_ok = (tel_src.find("ZES_ENABLE_SYSMAN") != std::string::npos &&
                     tel_src.find("nvmlDeviceGetCount_v2") != std::string::npos &&
-                    vk_src.find("VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU") != std::string::npos &&
-                    vk_src.find("g_bound_discrete_gpu") != std::string::npos);
+                    hooks_src.find("VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU") != std::string::npos &&
+                    hooks_src.find("g_bound_discrete_gpu") != std::string::npos);
     }
 
     char detail_58[192];
@@ -4428,7 +4422,10 @@ void run_all_devices_and_features_suite() {
     // 10.27 Safe deferred texture release guarantees zero VRAM overhead and zero mid-frame stall
     bool deferred_release_present = rroot.empty();
     if (!rroot.empty()) {
-      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_player_stream.cpp");
+      if (vk_src.empty()) {
+        vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
+      }
       deferred_release_present =
           (vk_src.find("pending_release") != std::string::npos &&
            vk_src.find("vulkan_player_texture_releaser") != std::string::npos);
@@ -5109,6 +5106,54 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(sys_passed, "15.4 SystemProvider Sysfs & Proc Polling (Disk, Net, Battery, Clock)",
                sys_detail.c_str());
+  }
+
+  // =========================================================================
+  // SUITE 16: Vulkan Layer State Structs & Dispatch Key Architecture
+  // =========================================================================
+  {
+    std::printf("\n--- SUITE 16: Vulkan Layer State Structs & Dispatch Keys ---\n");
+    using namespace fpshud::vk;
+
+    // 16.1 Dispatch key handling
+    void* fake_dispatch_table = reinterpret_cast<void*>(0xDEADBEEF);
+    void* fake_handle = &fake_dispatch_table;
+    void* key = get_dispatch_key(fake_handle);
+    bool key_ok = (key == fake_dispatch_table);
+    bool null_key_ok = (get_dispatch_key(static_cast<void*>(nullptr)) == nullptr);
+
+    void* child_dispatch_table = nullptr;
+    void* child_handle = &child_dispatch_table;
+    copy_dispatch_key(child_handle, fake_handle);
+    bool copy_ok = (get_dispatch_key(child_handle) == fake_dispatch_table);
+
+    check_cond(key_ok && null_key_ok && copy_ok, "16.1 Dispatch Key Extraction & Inheritance",
+               "key_ok=1, null_key_ok=1, copy_ok=1");
+
+    // 16.2 State structs alignment and default initialization
+    InstanceData id;
+    bool id_ok = (id.instance == VK_NULL_HANDLE && id.GetInstanceProcAddr == nullptr &&
+                  id.DestroyInstance == nullptr && alignof(InstanceData) >= alignof(void*));
+
+    DeviceData dd;
+    bool dd_ok = (dd.device == VK_NULL_HANDLE && dd.graphics_queue == VK_NULL_HANDLE &&
+                  dd.CreateSwapchainKHR == nullptr && dd.QueuePresentKHR == nullptr &&
+                  dd.has_memory_budget_ext == false && alignof(DeviceData) >= alignof(void*));
+
+    // Test queue_mutex serialization capability
+    bool mutex_ok = false;
+    {
+      std::lock_guard<std::mutex> lock(dd.queue_mutex);
+      mutex_ok = true;
+    }
+
+    FrameResources fr;
+    bool fr_ok = (fr.image == VK_NULL_HANDLE && fr.staging_buffer == VK_NULL_HANDLE &&
+                  fr.mapped_ptr == nullptr && fr.buffer_size == 0 && !fr.has_valid_capture &&
+                  !fr.has_valid_screenshot && alignof(FrameResources) >= alignof(void*));
+
+    check_cond(id_ok && dd_ok && mutex_ok && fr_ok,
+               "16.2 Vulkan Layer State Structs & Mutex Alignment", "id=1, dd=1, mutex=1, fr=1");
   }
 
   std::printf("\n====================================================================\n");

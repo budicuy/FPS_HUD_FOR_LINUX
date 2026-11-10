@@ -250,6 +250,10 @@ add_library(fpshud SHARED
     src/input/input_manager.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
+    src/layer/vulkan_hooks.cpp
+    src/layer/vulkan_swapchain.cpp
+    src/layer/vulkan_capture.cpp
+    src/layer/vulkan_player_stream.cpp
     src/layer/vulkan_layer.cpp
     src/layer/opengl_hook.cpp
     ${IMGUI_SOURCES}
@@ -532,6 +536,10 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
@@ -591,6 +599,14 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
