@@ -345,11 +345,11 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
     if (FILE* fp = std::fopen(drm_pp_dpm_sclk_path_.c_str(), "r")) {
       char line_buf[128];
       while (std::fgets(line_buf, sizeof(line_buf), fp)) {
-        std::string line(line_buf);
-        if (line.find('*') != std::string::npos) {
+        std::string_view line(line_buf);
+        if (line.find('*') != std::string_view::npos) {
           auto colon = line.find(':');
-          if (colon != std::string::npos) {
-            clock_mhz = static_cast<int>(std::strtol(line.c_str() + colon + 1, nullptr, 10));
+          if (colon != std::string_view::npos) {
+            clock_mhz = static_cast<int>(std::strtol(line_buf + colon + 1, nullptr, 10));
             break;
           }
         }
@@ -516,11 +516,11 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
     if (FILE* fp = std::fopen(drm_pp_dpm_mclk_path_.c_str(), "r")) {
       char line_buf[128];
       while (std::fgets(line_buf, sizeof(line_buf), fp)) {
-        std::string line(line_buf);
-        if (line.find('*') != std::string::npos) {
+        std::string_view line(line_buf);
+        if (line.find('*') != std::string_view::npos) {
           auto colon = line.find(':');
-          if (colon != std::string::npos) {
-            mclk_mhz = static_cast<int>(std::strtol(line.c_str() + colon + 1, nullptr, 10));
+          if (colon != std::string_view::npos) {
+            mclk_mhz = static_cast<int>(std::strtol(line_buf + colon + 1, nullptr, 10));
             break;
           }
         }
