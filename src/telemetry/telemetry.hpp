@@ -19,46 +19,17 @@
 #include <thread>
 #include <vector>
 
+#include "analytics/benchmark_recorder.hpp"
+#include "analytics/frametime_analyzer.hpp"
 #include "providers/cpu_provider.hpp"
 #include "providers/gpu_drm.hpp"
 #include "providers/gpu_levelzero.hpp"
 #include "providers/gpu_nvidia.hpp"
 #include "providers/ram_provider.hpp"
+#include "providers/system_provider.hpp"
 #include "sysfs_util.hpp"
 
 namespace fpshud {
-
-struct BenchmarkSummary {
-  bool has_result = false;
-  double duration_sec = 0.0;
-  float avg_fps = 0.0f;
-  float fps_1pct_low = 0.0f;
-  float fps_01pct_low = 0.0f;
-  float min_fps = 0.0f;
-  float max_fps = 0.0f;
-  int max_gpu_temp_c = 0;
-  float max_gpu_power_w = 0.0f;
-  int max_cpu_temp_c = 0;
-  float max_cpu_power_w = 0.0f;
-  std::chrono::steady_clock::time_point finished_time{};
-};
-
-struct SimdStatsResult {
-  double total_ms = 0.0;
-  float min_val = 0.0f;
-  float max_val = 0.0f;
-};
-
-constexpr bool has_simd_frametime_backend() noexcept {
-#if __has_include(<experimental/simd>)
-  return true;
-#else
-  return false;
-#endif
-}
-
-// Accelerated frametime analytics (sum, min, max) using C++26 SIMD reduction
-[[nodiscard]] SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data);
 
 // Trivially copyable snapshot struct (zero heap allocations per frame!)
 struct TelemetryData {
@@ -134,9 +105,9 @@ using HardwareTelemetryData = TelemetryData;
 
 class TelemetryCollector {
 public:
-  static constexpr size_t kFrameWindowSize = 512;
-  static constexpr size_t kGraphHistorySize = 120;
-  static constexpr float kRollingWindowMaxMs = 3500.0f;  // 3.5-second real-time window
+  static constexpr size_t kFrameWindowSize = FrametimeAnalyzer::kFrameWindowSize;
+  static constexpr size_t kGraphHistorySize = FrametimeAnalyzer::kGraphHistorySize;
+  static constexpr float kRollingWindowMaxMs = FrametimeAnalyzer::kRollingWindowMaxMs;
 
   TelemetryCollector();
   explicit TelemetryCollector(std::string mock_root_prefix, bool disable_nvml = false,
@@ -167,17 +138,15 @@ public:
   TelemetryData get_snapshot() const;
 
   // Access 120-frame frametime/FPS history directly on render thread
-  const float* get_ft_history() const noexcept { return graph_ft_ms_.data(); }
-  const float* get_fps_history() const noexcept { return graph_fps_.data(); }
-  int get_graph_offset() const noexcept { return graph_offset_; }
+  const float* get_ft_history() const noexcept { return frametime_analyzer_.get_ft_history(); }
+  const float* get_fps_history() const noexcept { return frametime_analyzer_.get_fps_history(); }
+  int get_graph_offset() const noexcept { return frametime_analyzer_.get_graph_offset(); }
 
   // Benchmark Recording Controls (F9 or GUI Button)
   void start_benchmark();
   void stop_benchmark();
   void toggle_benchmark();
-  bool is_benchmark_active() const noexcept {
-    return bench_active_.load(std::memory_order_relaxed);
-  }
+  bool is_benchmark_active() const noexcept { return benchmark_recorder_.is_active(); }
 
   // Force an immediate synchronous poll (useful for CLI test)
   void poll_once_sync();
@@ -196,8 +165,6 @@ private:
   void init_cpu_sensors();
   void init_gpu_sensors();
   void init_gpu_sensors_locked();
-  void init_battery_sensors();
-  void init_storage_sensors();
   void shutdown_sensors();
   void shutdown_sensors_locked();
 
@@ -237,56 +204,17 @@ private:
 
   CpuProvider cpu_provider_;
   RamProvider ram_provider_;
+  SystemProvider system_provider_;
 
-  // Battery paths
-  std::string battery_capacity_path_;
-  std::string battery_status_path_;
-  std::string battery_power_uw_path_;
-  std::string battery_current_ua_path_;
-  std::string battery_voltage_uv_path_;
-  bool battery_discovered_ = false;
+  FrametimeAnalyzer frametime_analyzer_;
+  BenchmarkRecorder benchmark_recorder_;
 
-  // Storage & Network state
-  std::string disk_temp_path_;
-  uint64_t prev_disk_read_sectors_ = 0;
-  uint64_t prev_disk_write_sectors_ = 0;
-  std::chrono::steady_clock::time_point prev_disk_poll_time_{};
-  uint64_t prev_net_rx_bytes_ = 0;
-  uint64_t prev_net_tx_bytes_ = 0;
-  std::chrono::steady_clock::time_point prev_net_poll_time_{};
-
-  // Frame timing state (exclusively render thread — no mutex needed)
+  // Frame timing state
   std::chrono::steady_clock::time_point last_frame_time_{};
-  std::chrono::steady_clock::time_point last_fps_display_update_{};
-  float ema_frametime_ms_ = 0.0f;
-  std::array<float, kFrameWindowSize> ft_ring_{};
-  size_t ft_ring_pos_ = 0;
-  size_t ft_ring_count_ = 0;
-
-  std::array<float, kGraphHistorySize> graph_ft_ms_{};
-  std::array<float, kGraphHistorySize> graph_fps_{};
-  int graph_offset_ = 0;
 
   std::atomic<const char*> active_api_{"VULKAN"};
   std::atomic<const char*> translated_api_{nullptr};
   std::atomic<bool> translated_api_cached_{false};
-  std::atomic<float> displayed_fps_{0.0f};
-  std::atomic<float> displayed_fps_avg_{0.0f};
-  std::atomic<float> displayed_fps_1low_{0.0f};
-  std::atomic<float> displayed_fps_01low_{0.0f};
-  std::atomic<float> displayed_frametime_ms_{0.0f};
-
-  // Benchmark recording state
-  mutable std::mutex bench_mutex_;
-  std::atomic<bool> bench_active_{false};
-  std::atomic<bool> bench_has_result_{false};
-  std::chrono::steady_clock::time_point bench_start_time_{};
-  std::vector<float> bench_frametimes_ms_;
-  int bench_max_gpu_temp_c_ = 0;
-  float bench_max_gpu_power_w_ = 0.0f;
-  int bench_max_cpu_temp_c_ = 0;
-  float bench_max_cpu_power_w_ = 0.0f;
-  BenchmarkSummary last_bench_summary_{};
 
   // Lock-free double-buffered hardware telemetry snapshot (zero render-thread mutex contention)
   std::array<TelemetryData, 2> hw_buffers_{};

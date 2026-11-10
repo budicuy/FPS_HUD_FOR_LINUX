@@ -17,6 +17,9 @@
 #include "providers/gpu_drm.hpp"
 #include "providers/gpu_nvidia.hpp"
 #include "providers/gpu_levelzero.hpp"
+#include "analytics/frametime_analyzer.hpp"
+#include "analytics/benchmark_recorder.hpp"
+#include "providers/system_provider.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -4878,6 +4881,234 @@ void run_all_devices_and_features_suite() {
                   ", host_polled=" + std::to_string(host_polled);
     }
     check_cond(nv_passed, "14.4 NvidiaGpuProvider Vendor Gating & Lifecycle", nv_detail.c_str());
+  }
+
+  // --- SUITE 15: Modular Telemetry: Analytics & System Provider ---
+  {
+    std::printf("\n--- SUITE 15: Modular Telemetry: Analytics & System Provider ---\n");
+
+    // 15.1 FrametimeAnalyzer 100-frame simulation & percentiles
+    bool ft_passed = false;
+    std::string ft_detail;
+    {
+      fpshud::FrametimeAnalyzer fta;
+      for (int i = 0; i < 96; ++i) {
+        fta.on_frame(6.944f, true);
+      }
+      float pre_stutter_fps = fta.get_fps();
+
+      for (int i = 0; i < 4; ++i) {
+        fta.on_frame(20.0f, true);
+      }
+
+      float fps = fta.get_fps();
+      float fps_avg = fta.get_fps_avg();
+      float p1_low = fta.get_1pct_low();
+      float p01_low = fta.get_01pct_low();
+      float ft_ms = fta.get_frametime_ms();
+      const float* ft_hist = fta.get_ft_history();
+      const float* fps_hist = fta.get_fps_history();
+      int g_offset = fta.get_graph_offset();
+
+      bool pre_fps_ok = (pre_stutter_fps >= 143.0f && pre_stutter_fps <= 145.0f);
+      bool ema_fps_ok = (fps >= 85.0f && fps <= 90.0f);
+      bool avg_ok = (fps_avg >= 130.0f && fps_avg <= 138.0f);
+      bool p1_ok = (p1_low >= 48.0f && p1_low <= 52.0f);
+      bool p01_ok = (p01_low >= 48.0f && p01_low <= 52.0f);
+      bool hist_ok = (ft_hist != nullptr && fps_hist != nullptr && g_offset == 100);
+
+      ft_passed = pre_fps_ok && ema_fps_ok && avg_ok && p1_ok && p01_ok && hist_ok;
+      ft_detail = "pre_fps=" + std::to_string(pre_stutter_fps) +
+                  ", ema_fps=" + std::to_string(fps) + ", avg=" + std::to_string(fps_avg) +
+                  ", 1pct=" + std::to_string(p1_low) + ", 0.1pct=" + std::to_string(p01_low) +
+                  ", ft=" + std::to_string(ft_ms) + ", offset=" + std::to_string(g_offset);
+    }
+    check_cond(ft_passed, "15.1 FrametimeAnalyzer 100-Frame Simulation & Percentiles",
+               ft_detail.c_str());
+
+    // 15.2 FrametimeAnalyzer Scene Stall Reset (> 250ms frame)
+    bool stall_passed = false;
+    std::string stall_detail;
+    {
+      fpshud::FrametimeAnalyzer fta;
+      for (int i = 0; i < 30; ++i) {
+        fta.on_frame(16.6f, true);
+      }
+      float pre_stall_fps = fta.get_fps();
+      // Feed a 400ms loading stall -> must reset rolling history
+      fta.on_frame(400.0f, true);
+      float post_stall_fps = fta.get_fps();
+
+      // Reset explicitly
+      fta.reset();
+      float after_reset_fps = fta.get_fps();
+
+      stall_passed = (pre_stall_fps > 55.0f && after_reset_fps == 0.0f);
+      stall_detail = "pre_stall_fps=" + std::to_string(pre_stall_fps) +
+                     ", post_stall_fps=" + std::to_string(post_stall_fps) +
+                     ", after_reset=" + std::to_string(after_reset_fps);
+    }
+    check_cond(stall_passed, "15.2 FrametimeAnalyzer Scene Stall Reset & History Purge",
+               stall_detail.c_str());
+
+    // 15.3 BenchmarkRecorder Lifecycle, Peak Sensors & CSV Output
+    bool bench_passed = false;
+    std::string bench_detail;
+    {
+      char bench_dir_tmpl[] = "/tmp/fpshud_bench_test_XXXXXX";
+      char* bench_dir = ::mkdtemp(bench_dir_tmpl);
+      if (bench_dir) {
+        fs::path pdir(bench_dir);
+        fs::path csv_file = pdir / "test_benchmark.csv";
+
+        fpshud::BenchmarkRecorder recorder(csv_file.string());
+        bool initially_active = recorder.is_active();
+        recorder.start();
+        bool started_active = recorder.is_active();
+
+        fpshud::TelemetryData mock_snap{};
+        mock_snap.gpu_temp_c = 68;
+        mock_snap.gpu_power_w = 210.5f;
+        mock_snap.cpu_temp_c = 72;
+        mock_snap.cpu_power_w = 65.2f;
+
+        for (int i = 0; i < 96; ++i) {
+          recorder.on_frame(6.944f, mock_snap);
+        }
+        for (int i = 0; i < 4; ++i) {
+          recorder.on_frame(20.0f, mock_snap);
+        }
+
+        recorder.stop();
+        bool stopped_active = recorder.is_active();
+        fpshud::BenchmarkSummary summary = recorder.get_summary();
+
+        bool summary_ok =
+            summary.has_result && (summary.avg_fps >= 130.0f && summary.avg_fps <= 138.0f) &&
+            (summary.fps_1pct_low >= 48.0f && summary.fps_1pct_low <= 52.0f) &&
+            summary.max_gpu_temp_c == 68 &&
+            (summary.max_gpu_power_w >= 210.0f && summary.max_gpu_power_w <= 211.0f) &&
+            summary.max_cpu_temp_c == 72 &&
+            (summary.max_cpu_power_w >= 65.0f && summary.max_cpu_power_w <= 66.0f);
+
+        std::error_code ec_f;
+        bool csv_exists = fs::exists(csv_file, ec_f) && fs::file_size(csv_file, ec_f) > 0;
+
+        std::string csv_header;
+        if (csv_exists) {
+          std::ifstream in(csv_file);
+          std::getline(in, csv_header);
+        }
+        bool csv_header_ok = (csv_header.find("Timestamp") != std::string::npos &&
+                              csv_header.find("Avg_FPS") != std::string::npos);
+
+        bench_passed = !initially_active && started_active && !stopped_active && summary_ok &&
+                       csv_exists && csv_header_ok;
+        bench_detail = "init=" + std::to_string(initially_active) +
+                       ", started=" + std::to_string(started_active) +
+                       ", stopped=" + std::to_string(stopped_active) +
+                       ", avg=" + std::to_string(summary.avg_fps) +
+                       ", 1pct=" + std::to_string(summary.fps_1pct_low) +
+                       ", peak_gpu=" + std::to_string(summary.max_gpu_temp_c) + "C/" +
+                       std::to_string(summary.max_gpu_power_w) + "W" +
+                       ", peak_cpu=" + std::to_string(summary.max_cpu_temp_c) + "C/" +
+                       std::to_string(summary.max_cpu_power_w) + "W" +
+                       ", csv_exists=" + std::to_string(csv_exists);
+
+        std::error_code rm_ec;
+        fs::remove_all(pdir, rm_ec);
+      }
+    }
+    check_cond(bench_passed, "15.3 BenchmarkRecorder Lifecycle, Peak Sensors & CSV Output",
+               bench_detail.c_str());
+
+    // 15.4 SystemProvider Mock Sysfs & Proc Polling (Disk IO, NVMe Temp, Net, Battery, Clock)
+    bool sys_passed = false;
+    std::string sys_detail;
+    {
+      char sys_test_dir_tmpl[] = "/tmp/fpshud_test_system_XXXXXX";
+      char* sys_test_dir = ::mkdtemp(sys_test_dir_tmpl);
+      if (sys_test_dir) {
+        fs::path pdir(sys_test_dir);
+
+        // Mock /proc/diskstats
+        write_mock_file(
+            pdir / "proc/diskstats",
+            " 259       0 nvme0n1 1000 0 20000 100 2000 0 40000 200 0 300 300 0 0 0 0\n"
+            " 259       1 nvme0n1p1 500 0 10000 50 1000 0 20000 100 0 150 150 0 0 0 0\n");
+
+        // Mock /sys/class/hwmon for NVMe temp
+        fs::path hm_dir = pdir / "sys/class/hwmon/hwmon0";
+        fs::create_directories(hm_dir, ec);
+        write_mock_file(hm_dir / "name", "nvme\n");
+        write_mock_file(hm_dir / "temp1_input", "42000\n");
+
+        // Mock /proc/net/dev
+        write_mock_file(
+            pdir / "proc/net/dev",
+            "Inter-|   Receive                                                |  Transmit\n"
+            " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets "
+            "errs drop fifo colls carrier compressed\n"
+            "    lo: 100000       0    0    0    0     0          0         0   100000       0    "
+            "0    0    0     0       0          0\n"
+            "eth0: 10485760       0    0    0    0     0          0         0  5242880       0    "
+            "0    0    0     0       0          0\n");
+
+        // Mock /sys/class/power_supply/BAT0
+        fs::path bat_dir = pdir / "sys/class/power_supply/BAT0";
+        fs::create_directories(bat_dir, ec);
+        write_mock_file(bat_dir / "type", "Battery\n");
+        write_mock_file(bat_dir / "capacity", "85\n");
+        write_mock_file(bat_dir / "status", "Discharging\n");
+        write_mock_file(bat_dir / "power_now", "15000000\n");
+
+        fpshud::SystemProvider sys_prov(pdir.string());
+        sys_prov.init();
+        fpshud::HardwareTelemetryData hdata{};
+        sys_prov.poll(hdata);  // initial sample
+
+        // Second sample for deltas
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        write_mock_file(
+            pdir / "proc/diskstats",
+            " 259       0 nvme0n1 1100 0 40000 150 2100 0 60000 250 0 400 400 0 0 0 0\n");
+        write_mock_file(
+            pdir / "proc/net/dev",
+            "Inter-|   Receive                                                |  Transmit\n"
+            " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets "
+            "errs drop fifo colls carrier compressed\n"
+            "    lo: 100000       0    0    0    0     0          0         0   100000       0    "
+            "0    0    0     0       0          0\n"
+            "eth0: 20971520       0    0    0    0     0          0         0 10485760       0    "
+            "0    0    0     0       0          0\n");
+
+        sys_prov.poll(hdata);  // delta sample
+
+        bool disk_io_ok = (hdata.disk_read_mbs > 0.0f && hdata.disk_write_mbs > 0.0f);
+        bool disk_temp_ok = (hdata.disk_temp_available && hdata.disk_temp_c == 42);
+        bool net_ok = (hdata.net_rx_mbs > 0.0f && hdata.net_tx_mbs > 0.0f);
+        bool bat_ok = (hdata.battery_available && hdata.battery_pct == 85.0f &&
+                       std::fabs(hdata.battery_power_w - 15.0f) < 0.1f &&
+                       std::strcmp(hdata.battery_status, "Discharging") == 0);
+        bool clock_ok = (std::strlen(hdata.local_time_str) >= 4 &&
+                         std::strchr(hdata.local_time_str, ':') != nullptr);
+
+        sys_passed = disk_io_ok && disk_temp_ok && net_ok && bat_ok && clock_ok;
+        sys_detail = "disk_r=" + std::to_string(hdata.disk_read_mbs) +
+                     ", disk_w=" + std::to_string(hdata.disk_write_mbs) +
+                     ", disk_temp=" + std::to_string(hdata.disk_temp_c) +
+                     ", net_rx=" + std::to_string(hdata.net_rx_mbs) +
+                     ", net_tx=" + std::to_string(hdata.net_tx_mbs) +
+                     ", bat_pct=" + std::to_string(hdata.battery_pct) +
+                     ", bat_w=" + std::to_string(hdata.battery_power_w) +
+                     ", clock=" + std::string(hdata.local_time_str);
+
+        std::error_code rm_ec;
+        fs::remove_all(pdir, rm_ec);
+      }
+    }
+    check_cond(sys_passed, "15.4 SystemProvider Sysfs & Proc Polling (Disk, Net, Battery, Clock)",
+               sys_detail.c_str());
   }
 
   std::printf("\n====================================================================\n");
