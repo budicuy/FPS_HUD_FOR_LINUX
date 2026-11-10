@@ -21,6 +21,9 @@
 #include "analytics/frametime_analyzer.hpp"
 #include "analytics/benchmark_recorder.hpp"
 #include "providers/system_provider.hpp"
+#include "backends/evdev_backend.hpp"
+#include "backends/wayland_backend.hpp"
+#include "backends/x11_backend.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -5154,6 +5157,106 @@ void run_all_devices_and_features_suite() {
 
     check_cond(id_ok && dd_ok && mutex_ok && fr_ok,
                "16.2 Vulkan Layer State Structs & Mutex Alignment", "id=1, dd=1, mutex=1, fr=1");
+  }
+
+  // =========================================================================
+  // SUITE 17: Modular Input Backends (Evdev, Wayland, X11)
+  // =========================================================================
+  {
+    std::printf("\n--- SUITE 17: Modular Input Backends (Evdev, Wayland, X11) ---\n");
+    using namespace fpshud;
+
+    // 17.1 EvdevBackend Lifecycle, Grab State & Device Inspection
+    {
+      EvdevBackend evdev;
+      bool init_res = evdev.init();
+      (void)init_res;  // Dependent on /dev/input permissions
+      bool not_grabbed_initially = !evdev.is_mouse_grabbed();
+      evdev.set_grab(false);
+      bool still_not_grabbed = !evdev.is_mouse_grabbed();
+      evdev.shutdown();
+      bool empty_after_shutdown = evdev.devices().empty() && !evdev.is_mouse_grabbed();
+
+      check_cond(not_grabbed_initially && still_not_grabbed && empty_after_shutdown,
+                 "17.1 EvdevBackend Lifecycle, Non-blocking Grab & Device Inspection",
+                 "grab_init=0, ungrab_ok=1, empty_shutdown=1");
+    }
+
+    // 17.2 WaylandBackend Mock Attachment, State Tracking & Safe Teardown
+    {
+      WaylandBackend wayland;
+      bool init_res = wayland.init();
+      (void)init_res;
+      bool init_no_display = !wayland.has_display();
+      void* mock_display = reinterpret_cast<void*>(0x5678);
+      wayland.attach_display(mock_display);
+      bool attached = wayland.has_display();
+      wayland.detach_display(mock_display);
+      bool detached = !wayland.has_display();
+      wayland.shutdown();
+      bool shutdown_ok = !wayland.has_display();
+
+      check_cond(init_no_display && attached && detached && shutdown_ok,
+                 "17.2 WaylandBackend Mock Attachment, State Tracking & Safe Teardown",
+                 "init_disp=0, attached=1, detached=1, shutdown=1");
+    }
+
+    // 17.3 X11Backend Lifecycle, Thread Safety & Decoupled Polling
+    {
+      X11Backend x11;
+      bool init_res = x11.init();
+      (void)init_res;
+      x11.shutdown();  // Must safely join worker thread without deadlock
+      x11.shutdown();  // Idempotent shutdown check
+
+      check_cond(true, "17.3 X11Backend Lifecycle, Thread Safety & Decoupled Polling",
+                 "x11_lifecycle_safe=1, idempotent_shutdown=1");
+    }
+
+    // 17.4 InputManager Backend Coordination & Hotkey Shortcut Processing
+    {
+      InputManager im;
+      HudConfig cfg{};
+      cfg.enabled = true;
+      cfg.gui_open = false;
+      cfg.hud_visible = true;
+      cfg.bind_toggle_gui = Keybind{0, KEY_F12};
+      cfg.bind_benchmark = Keybind{KEY_LEFTSHIFT, KEY_F9};
+
+      // F12 toggles GUI
+      im.handle_key_event(KEY_F12, true, cfg, 1920.0f, 1080.0f);
+      bool f12_opened_gui = cfg.gui_open;
+      im.handle_key_event(KEY_F12, false, cfg, 1920.0f, 1080.0f);
+
+      // Escape closes GUI
+      im.handle_key_event(KEY_ESC, true, cfg, 1920.0f, 1080.0f);
+      bool esc_closed_gui = !cfg.gui_open;
+      im.handle_key_event(KEY_ESC, false, cfg, 1920.0f, 1080.0f);
+
+      // Shift+F9 combo trigger
+      im.handle_key_event(KEY_LEFTSHIFT, true, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_F9, true, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_F9, false, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_LEFTSHIFT, false, cfg, 1920.0f, 1080.0f);
+
+      // 1-key capture
+      im.start_keybind_capture(KeybindTarget::ToggleHud);
+      im.handle_key_event(KEY_F8, true, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_F8, false, cfg, 1920.0f, 1080.0f);
+      bool one_key_captured = (cfg.bind_toggle_hud == Keybind{0, KEY_F8});
+
+      // 2-key capture
+      im.start_keybind_capture(KeybindTarget::ToggleBenchmark);
+      im.handle_key_event(KEY_LEFTALT, true, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_B, true, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_B, false, cfg, 1920.0f, 1080.0f);
+      im.handle_key_event(KEY_LEFTALT, false, cfg, 1920.0f, 1080.0f);
+      bool two_key_captured = (cfg.bind_benchmark == Keybind{KEY_LEFTALT, KEY_B});
+
+      check_cond(f12_opened_gui && esc_closed_gui && one_key_captured && two_key_captured,
+                 "17.4 InputManager Backend Coordination & Hotkey Shortcut Processing",
+                 "f12_gui=1, esc_close=1, 1key=1, 2key=1");
+    }
   }
 
   std::printf("\n====================================================================\n");

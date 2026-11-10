@@ -247,6 +247,9 @@ add_library(fpshud SHARED
     src/telemetry/providers/gpu_levelzero.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
+    src/input/backends/evdev_backend.cpp
+    src/input/backends/wayland_backend.cpp
+    src/input/backends/x11_backend.cpp
     src/input/input_manager.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
@@ -268,6 +271,7 @@ target_include_directories(fpshud PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
@@ -318,6 +322,9 @@ add_executable(fpshud_test
     src/telemetry/providers/gpu_nvidia.cpp
     src/telemetry/providers/gpu_drm.cpp
     src/telemetry/providers/gpu_levelzero.cpp
+    src/input/backends/evdev_backend.cpp
+    src/input/backends/wayland_backend.cpp
+    src/input/backends/x11_backend.cpp
     src/input/input_manager.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
@@ -336,6 +343,7 @@ target_include_directories(fpshud_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
@@ -533,6 +541,9 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
@@ -584,6 +595,12 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp

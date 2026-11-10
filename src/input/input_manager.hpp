@@ -1,13 +1,14 @@
 #pragma once
 
+#include "backends/evdev_backend.hpp"
+#include "backends/wayland_backend.hpp"
+#include "backends/x11_backend.hpp"
 #include "config.hpp"
-#include <atomic>
+
 #include <bitset>
 #include <cstdint>
 #include <cstdlib>
-#include <mutex>
-#include <thread>
-#include <vector>
+#include <memory>
 
 struct ImGuiIO;
 
@@ -23,18 +24,12 @@ enum class KeybindTarget {
   TakeScreenshot,
 };
 
-struct EvdevDevice {
-  int fd = -1;
-  bool is_mouse = false;
-  bool is_grabbed = false;
-};
-
 // Check whether a key event matches a configured keybind given currently pressed keys
 bool matches_keybind(uint32_t code, const Keybind& kb, const std::bitset<512>& keys_down) noexcept;
 
 class InputManager {
 public:
-  InputManager() = default;
+  InputManager();
   ~InputManager();
 
   // Attach and detach Wayland display pointer from game (vkCreateWaylandSurfaceKHR / EGL)
@@ -70,30 +65,39 @@ public:
 
   float cursor_x() const noexcept { return cursor_x_; }
   float cursor_y() const noexcept { return cursor_y_; }
+  void set_cursor_pos(float x, float y) noexcept {
+    cursor_x_ = x;
+    cursor_y_ = y;
+  }
   bool is_mouse_button_down(int btn) const noexcept {
     return (btn >= 0 && btn < 3) ? mouse_buttons_[btn] : false;
   }
   bool is_pending_ungrab() const noexcept { return pending_ungrab_; }
+  void set_pending_ungrab(bool pending) noexcept { pending_ungrab_ = pending; }
   bool is_mouse_grabbed() const noexcept;
 
+  // Active frame context cached during update_for_frame
+  ImGuiIO* active_io() const noexcept { return active_io_; }
+  HudConfig* active_config() const noexcept { return active_cfg_; }
+  float display_width() const noexcept { return display_width_; }
+  float display_height() const noexcept { return display_height_; }
+
+  // Modular backend accessors
+  EvdevBackend& evdev() noexcept { return *evdev_backend_; }
+  const EvdevBackend& evdev() const noexcept { return *evdev_backend_; }
+  WaylandBackend& wayland() noexcept { return *wayland_backend_; }
+  const WaylandBackend& wayland() const noexcept { return *wayland_backend_; }
+  X11Backend& x11() noexcept { return *x11_backend_; }
+  const X11Backend& x11() const noexcept { return *x11_backend_; }
+
 private:
-  void scan_evdev_devices();
-  void close_evdev_devices();
   void set_mouse_grab(bool grab);
   void set_x11_grab(bool grab);
-  void poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width, float display_height);
 
-  void init_x11_fallback();
-  void poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_width, float display_height);
+  std::unique_ptr<EvdevBackend> evdev_backend_;
+  std::unique_ptr<WaylandBackend> wayland_backend_;
+  std::unique_ptr<X11Backend> x11_backend_;
 
-  // Wayland in-process client hooking
-  void init_wayland_client_api() noexcept;
-  void teardown_wayland_locked() noexcept;
-  void poll_wayland(ImGuiIO& io, HudConfig& cfg, float display_width,
-                    float display_height) noexcept;
-
-  std::vector<EvdevDevice> evdev_devices_;
-  bool evdev_scanned_ = false;
   bool prev_gui_open_ = false;
   bool pending_ungrab_ = false;
 
@@ -105,51 +109,10 @@ private:
   KeybindTarget capture_target_ = KeybindTarget::None;
   uint32_t capture_mod_key_ = 0;
 
-  // Dynamic X11 fallback state & asynchronous worker thread
-  void* x11_lib_ = nullptr;
-  void* x11_display_ = nullptr;
-  bool x11_attempted_ = false;
-  char prev_x11_keymap_[32] = {0};
-
-  using PFN_XQueryKeymap = int (*)(void*, char[32]);
-  using PFN_XDefaultRootWindow = unsigned long (*)(void*);
-  using PFN_XQueryPointer = int (*)(void*, unsigned long, unsigned long*, unsigned long*, int*,
-                                    int*, int*, int*, unsigned int*);
-  using PFN_XCloseDisplay = int (*)(void*);
-
-  PFN_XQueryKeymap fn_xquery_keymap_ = nullptr;
-  PFN_XDefaultRootWindow fn_xdefault_root_ = nullptr;
-  PFN_XQueryPointer fn_xquery_pointer_ = nullptr;
-  PFN_XCloseDisplay fn_xclose_display_ = nullptr;
-
-  struct PendingKeyEvent {
-    uint32_t code = 0;
-    bool down = false;
-  };
-  std::atomic<bool> x11_worker_running_{false};
-  std::thread x11_worker_thread_;
-  mutable std::mutex x11_dpy_mutex_;
-  mutable std::mutex x11_event_mutex_;
-  std::vector<PendingKeyEvent> pending_key_events_;
-  std::atomic<float> x11_cursor_x_{-1.0f};
-  std::atomic<float> x11_cursor_y_{-1.0f};
-  std::atomic<bool> x11_mouse_down_[3]{false, false, false};
-  std::atomic<bool> x11_gui_active_{false};
-
-  void x11_worker_loop();
-  void stop_x11_worker();
-
-  // Dynamic Wayland client state (100% sudo-free in-process)
-  mutable std::recursive_mutex wayland_mutex_;
-  void* wayland_lib_ = nullptr;
-  void* wayland_display_ = nullptr;
-  void* wayland_queue_ = nullptr;
-  void* wayland_registry_ = nullptr;
-  void* wayland_seat_ = nullptr;
-  void* wayland_keyboard_ = nullptr;
-  void* wayland_pointer_ = nullptr;
-  bool wayland_attempted_ = false;
-  bool wayland_attached_ = false;
+  ImGuiIO* active_io_ = nullptr;
+  HudConfig* active_cfg_ = nullptr;
+  float display_width_ = 0.0f;
+  float display_height_ = 0.0f;
 };
 
 InputManager& get_input_manager();
