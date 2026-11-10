@@ -9,18 +9,20 @@ namespace fpshud::vk {
 struct VulkanPlayerState {
   VkDevice device = VK_NULL_HANDLE;
   DeviceData* dd = nullptr;
+  SwapchainData* owner_sd = nullptr;
   VkImage image = VK_NULL_HANDLE;
   VkDeviceMemory image_memory = VK_NULL_HANDLE;
   VkImageView image_view = VK_NULL_HANDLE;
   VkSampler sampler = VK_NULL_HANDLE;
   VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
 
-  static constexpr size_t kStagingRingCount = 2;
+  static constexpr size_t kStagingRingCount = 4;
   struct StagingBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     void* mapped = nullptr;
     VkDeviceSize size = 0;
+    bool is_coherent = false;
   };
   StagingBuffer staging[kStagingRingCount];
   size_t current_staging_idx = 0;
@@ -34,7 +36,7 @@ struct VulkanPlayerState {
   size_t copy_staging_idx = 0;
 };
 
-VulkanPlayerState& get_player_vk_state();
+extern VulkanPlayerState g_player_vk_state;
 void set_current_rendering_swapchain(SwapchainData* sd);
 
 void vulkan_player_release(DeviceData* dd, VulkanPlayerState& state);

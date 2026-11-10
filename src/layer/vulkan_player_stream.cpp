@@ -8,12 +8,10 @@
 
 namespace fpshud::vk {
 
-namespace {
 VulkanPlayerState g_player_vk_state;
+namespace {
 SwapchainData* g_current_rendering_sd = nullptr;
 }  // namespace
-
-VulkanPlayerState& get_player_vk_state() { return g_player_vk_state; }
 
 void set_current_rendering_swapchain(SwapchainData* sd) { g_current_rendering_sd = sd; }
 
@@ -59,6 +57,7 @@ void vulkan_player_release(DeviceData* dd, VulkanPlayerState& state) {
       state.staging[i].memory = VK_NULL_HANDLE;
     }
     state.staging[i].size = 0;
+    state.staging[i].is_coherent = false;
   }
   state.width = 0;
   state.height = 0;
@@ -67,6 +66,7 @@ void vulkan_player_release(DeviceData* dd, VulkanPlayerState& state) {
   state.image_initialized = false;
   state.device = VK_NULL_HANDLE;
   state.dd = nullptr;
+  state.owner_sd = nullptr;
 }
 
 void cleanup_player_texture(DeviceData* dd) { vulkan_player_release(dd, g_player_vk_state); }
@@ -97,6 +97,7 @@ ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint
 
     state.device = dd->device;
     state.dd = dd;
+    state.owner_sd = g_current_rendering_sd;
     state.width = w;
     state.height = h;
 
@@ -115,12 +116,14 @@ ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint
 
       VkMemoryRequirements breq{};
       dd->GetBufferMemoryRequirements(dd->device, state.staging[i].buffer, &breq);
+      bool is_coherent = true;
       uint32_t host_mem_type = find_memory_type_index(
           dd, breq.memoryTypeBits,
           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
       if (host_mem_type == 0xFFFFFFFF) {
         host_mem_type =
             find_memory_type_index(dd, breq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+        is_coherent = false;
       }
       if (host_mem_type == 0xFFFFFFFF) {
         vulkan_player_release(dd, state);
@@ -140,6 +143,7 @@ ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint
       dd->MapMemory(dd->device, state.staging[i].memory, 0, VK_WHOLE_SIZE, 0,
                     &state.staging[i].mapped);
       state.staging[i].size = required_bytes;
+      state.staging[i].is_coherent = is_coherent;
     }
 
     VkImageCreateInfo img_info{};
@@ -221,7 +225,7 @@ ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint
     auto& st = state.staging[state.current_staging_idx];
     if (st.mapped) {
       std::memcpy(st.mapped, rgba, static_cast<size_t>(w) * h * 4);
-      if (dd->FlushMappedMemoryRanges) {
+      if (!st.is_coherent && dd->FlushMappedMemoryRanges) {
         VkMappedMemoryRange range{};
         range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         range.memory = st.memory;

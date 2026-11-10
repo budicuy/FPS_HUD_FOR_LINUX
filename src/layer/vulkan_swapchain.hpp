@@ -53,6 +53,7 @@ struct FrameResources {
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
   void* mapped_ptr = nullptr;
   VkDeviceSize buffer_size = 0;
+  bool is_coherent = false;
   bool has_valid_capture = false;
   bool has_valid_screenshot = false;
 };

@@ -118,9 +118,12 @@ void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
   }
 
   if (sd->imgui_context) {
+    std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);
     ImGui::SetCurrentContext(sd->imgui_context);
-    cleanup_player_texture(dd);
     if (sd->imgui_initialized) {
+      if (g_player_vk_state.owner_sd == sd.get()) {
+        cleanup_player_texture(dd);
+      }
       ImGui_ImplVulkan_Shutdown();
       sd->imgui_initialized = false;
     }
@@ -206,7 +209,8 @@ bool init_swapchain_overlay(SwapchainData* sd) {
   // Ingress: wait for external color attachment output before drawing HUD
   dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
   dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].srcStageMask =
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
   dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   dependencies[0].srcAccessMask = 0;
   dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -305,31 +309,34 @@ bool init_swapchain_overlay(SwapchainData* sd) {
     }
   }
 
-  sd->imgui_context = ImGui::CreateContext();
-  ImGui::SetCurrentContext(sd->imgui_context);
-  ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;
-  io.LogFilename = nullptr;
-  ImGui::StyleColorsDark();
-  fpshud::setup_overlay_font(io);
+  {
+    std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);
+    sd->imgui_context = ImGui::CreateContext();
+    ImGui::SetCurrentContext(sd->imgui_context);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    ImGui::StyleColorsDark();
+    fpshud::setup_overlay_font(io);
 
-  ImGui_ImplVulkan_LoadFunctions(&imgui_vk_loader, dd);
+    ImGui_ImplVulkan_LoadFunctions(&imgui_vk_loader, dd);
 
-  ImGui_ImplVulkan_InitInfo init_info{};
-  init_info.Instance = dd->instance_data->instance;
-  init_info.PhysicalDevice = dd->physical_device;
-  init_info.Device = dd->device;
-  init_info.QueueFamily = dd->graphics_queue_family;
-  init_info.Queue = dd->graphics_queue;
-  init_info.RenderPass = sd->render_pass;
-  init_info.MinImageCount = img_count >= 2 ? img_count : 2;
-  init_info.ImageCount = img_count >= 2 ? img_count : 2;
-  init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-  init_info.DescriptorPoolSize = 16;
+    ImGui_ImplVulkan_InitInfo init_info{};
+    init_info.Instance = dd->instance_data->instance;
+    init_info.PhysicalDevice = dd->physical_device;
+    init_info.Device = dd->device;
+    init_info.QueueFamily = dd->graphics_queue_family;
+    init_info.Queue = dd->graphics_queue;
+    init_info.RenderPass = sd->render_pass;
+    init_info.MinImageCount = img_count >= 2 ? img_count : 2;
+    init_info.ImageCount = img_count >= 2 ? img_count : 2;
+    init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init_info.DescriptorPoolSize = 16;
 
-  sd->imgui_initialized = ImGui_ImplVulkan_Init(&init_info);
-  if (sd->imgui_initialized) {
-    register_vulkan_player_texture_backend();
+    sd->imgui_initialized = ImGui_ImplVulkan_Init(&init_info);
+    if (sd->imgui_initialized) {
+      register_vulkan_player_texture_backend();
+    }
   }
   return sd->imgui_initialized;
 }
@@ -447,7 +454,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit(VkQueue queue, uint32_t submitCo
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
     if (!dd) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      if (!g_device_map.empty()) {
+      if (g_device_map.size() == 1) {
         dd = g_device_map.begin()->second;
       }
     }
@@ -467,7 +474,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit2(VkQueue queue, uint32_t submitC
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
     if (!dd) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      if (!g_device_map.empty()) {
+      if (g_device_map.size() == 1) {
         dd = g_device_map.begin()->second;
       }
     }
@@ -494,7 +501,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit2KHR(VkQueue queue, uint32_t subm
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
     if (!dd) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      if (!g_device_map.empty()) {
+      if (g_device_map.size() == 1) {
         dd = g_device_map.begin()->second;
       }
     }
@@ -519,7 +526,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueWaitIdle(VkQueue queue) {
     DeviceData* dd = find_device_data(get_dispatch_key(queue));
     if (!dd) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      if (!g_device_map.empty()) {
+      if (g_device_map.size() == 1) {
         dd = g_device_map.begin()->second;
       }
     }

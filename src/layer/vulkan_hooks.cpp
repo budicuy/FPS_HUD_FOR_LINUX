@@ -2,9 +2,11 @@
 
 #include "config.hpp"
 #include "input_manager.hpp"
+#include "logger.hpp"
 #include "telemetry.hpp"
 
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace fpshud::vk {
@@ -41,7 +43,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* p
       return res;
     }
 
-    auto* id = new InstanceData();
+    auto id = std::make_unique<InstanceData>();
     id->instance = *pInstance;
     id->GetInstanceProcAddr = fpGetInstanceProcAddr;
     id->DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
@@ -75,7 +77,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* p
     }
 
     std::lock_guard<std::mutex> lock(g_map_mutex);
-    g_instance_map[get_dispatch_key(*pInstance)] = id;
+    g_instance_map[get_dispatch_key(*pInstance)] = id.release();
     return VK_SUCCESS;
   } catch (...) {
     return VK_ERROR_INITIALIZATION_FAILED;
@@ -221,7 +223,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
       return res;
     }
 
-    auto* dd = new DeviceData();
+    auto dd = std::make_unique<DeviceData>();
     dd->device = *pDevice;
     dd->physical_device = physicalDevice;
     dd->GetDeviceProcAddr = fpGetDeviceProcAddr;
@@ -319,6 +321,7 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
 
     uint32_t chosen_family = 0;
     VkDeviceQueueCreateFlags queue_flags = 0;
+    bool found_graphics_queue = false;
     if (dd->instance_data && dd->instance_data->GetPhysicalDeviceQueueFamilyProperties) {
       uint32_t qf_count = 0;
       dd->instance_data->GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qf_count, nullptr);
@@ -331,37 +334,43 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
         if (fam < qf_count && (qf_props[fam].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
           chosen_family = fam;
           queue_flags = pCreateInfo->pQueueCreateInfos[i].flags;
+          found_graphics_queue = true;
           break;
         }
       }
     } else if (pCreateInfo->queueCreateInfoCount > 0) {
       chosen_family = pCreateInfo->pQueueCreateInfos[0].queueFamilyIndex;
       queue_flags = pCreateInfo->pQueueCreateInfos[0].flags;
+      found_graphics_queue = true;
     }
 
     dd->graphics_queue_family = chosen_family;
-    if (queue_flags != 0 && dd->GetDeviceQueue2) {
-      VkDeviceQueueInfo2 qinfo{};
-      qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
-      qinfo.flags = queue_flags;
-      qinfo.queueFamilyIndex = dd->graphics_queue_family;
-      qinfo.queueIndex = 0;
-      dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
-    } else if (dd->GetDeviceQueue) {
-      dd->GetDeviceQueue(*pDevice, dd->graphics_queue_family, 0, &dd->graphics_queue);
-    }
+    if (found_graphics_queue) {
+      if (queue_flags != 0 && dd->GetDeviceQueue2) {
+        VkDeviceQueueInfo2 qinfo{};
+        qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+        qinfo.flags = queue_flags;
+        qinfo.queueFamilyIndex = dd->graphics_queue_family;
+        qinfo.queueIndex = 0;
+        dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
+      } else if (dd->GetDeviceQueue) {
+        dd->GetDeviceQueue(*pDevice, dd->graphics_queue_family, 0, &dd->graphics_queue);
+      }
 
-    if (!dd->graphics_queue && dd->GetDeviceQueue2) {
-      VkDeviceQueueInfo2 qinfo{};
-      qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
-      qinfo.flags = queue_flags;
-      qinfo.queueFamilyIndex = dd->graphics_queue_family;
-      qinfo.queueIndex = 0;
-      dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
-    }
+      if (!dd->graphics_queue && dd->GetDeviceQueue2) {
+        VkDeviceQueueInfo2 qinfo{};
+        qinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+        qinfo.flags = queue_flags;
+        qinfo.queueFamilyIndex = dd->graphics_queue_family;
+        qinfo.queueIndex = 0;
+        dd->GetDeviceQueue2(*pDevice, &qinfo, &dd->graphics_queue);
+      }
 
-    if (dd->graphics_queue) {
-      copy_dispatch_key(dd->graphics_queue, *pDevice);
+      if (dd->graphics_queue) {
+        copy_dispatch_key(dd->graphics_queue, *pDevice);
+      }
+    } else {
+      dd->graphics_queue = VK_NULL_HANDLE;
     }
 
     // Bind Active GPU to Telemetry only if layer is enabled (prioritize Discrete GPU over iGPU
@@ -416,12 +425,18 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     }
     dd->last_vram_update = std::chrono::steady_clock::now();
 
+    FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Vulkan,
+                     "Device created: dev=%p, graphics_queue_found=%d, family=%u", *pDevice,
+                     found_graphics_queue ? 1 : 0, chosen_family);
+
     {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      g_device_map[get_dispatch_key(*pDevice)] = dd;
+      void* dev_key = get_dispatch_key(*pDevice);
+      g_device_map[dev_key] = dd.get();
       if (dd->graphics_queue) {
-        g_device_map[get_dispatch_key(dd->graphics_queue)] = dd;
+        g_device_map[get_dispatch_key(dd->graphics_queue)] = dd.get();
       }
+      dd.release();
     }
 
     return VK_SUCCESS;
@@ -588,10 +603,6 @@ vkGetDeviceProcAddr(VkDevice device, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_CreateSwapchainKHR);
     if (std::strcmp(pName, "vkDestroySwapchainKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_DestroySwapchainKHR);
-    if (std::strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
-      return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_CreateWaylandSurfaceKHR);
-    if (std::strcmp(pName, "vkDestroySurfaceKHR") == 0)
-      return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_QueuePresentKHR);
     if (std::strcmp(pName, "vkQueueSubmit") == 0)

@@ -6,6 +6,7 @@
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 #include "vulkan_hooks.hpp"
+#include "vulkan_player_stream.hpp"
 #include "vulkan_swapchain.hpp"
 
 #include <algorithm>
@@ -240,6 +241,8 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkGetDeviceQueue2") != nullptr);
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkQueuePresentKHR") != nullptr);
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkDestroyDevice") != nullptr);
+        CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkCreateWaylandSurfaceKHR") == nullptr);
+        CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkDestroySurfaceKHR") == nullptr);
         CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkNonExistentFunctionXYZ") == nullptr);
       }
 
@@ -390,9 +393,15 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
     CHECK(fr.staging_buffer == VK_NULL_HANDLE);
     CHECK(fr.mapped_ptr == nullptr);
     CHECK(fr.buffer_size == 0);
+    CHECK(!fr.is_coherent);
     CHECK(!fr.has_valid_capture);
     CHECK(!fr.has_valid_screenshot);
     CHECK(alignof(FrameResources) >= alignof(void*));
+
+    CHECK(fpshud::vk::VulkanPlayerState::kStagingRingCount == 4);
+    fpshud::vk::VulkanPlayerState ps;
+    CHECK(ps.owner_sd == nullptr);
+    CHECK(!ps.staging[0].is_coherent);
 
     // 16.3 Vulkan C ABI Exception Isolation Boundaries & Thread-Safety Invariants
     fs::path repo_root = find_repo_root();
@@ -415,6 +424,39 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
       CHECK_MESSAGE(cs_ok,
                     "Hook_CreateSwapchainKHR must be enclosed in try/catch exception boundary");
       CHECK_MESSAGE(cd_ok, "Hook_CreateDevice must be enclosed in try/catch exception boundary");
+
+      bool qp_imgui_mutex_ok =
+          (vk_src.find("std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);") !=
+               std::string::npos &&
+           vk_src.find("ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), "
+                       "frame.command_buffer);") != std::string::npos);
+      CHECK_MESSAGE(qp_imgui_mutex_ok,
+                    "ImGui_ImplVulkan_RenderDrawData must be protected by g_vulkan_imgui_mutex");
+
+      bool swap_multi_dev_ok = (swap_src.find("g_device_map.size() == 1") != std::string::npos &&
+                                swap_src.find("!g_device_map.empty()") == std::string::npos);
+      CHECK_MESSAGE(swap_multi_dev_ok,
+                    "Queue submission fallback must only apply when exactly one device is active");
+
+      bool compute_queue_ok =
+          (hooks_src.find("found_graphics_queue") != std::string::npos &&
+           hooks_src.find("dd->graphics_queue = VK_NULL_HANDLE;") != std::string::npos);
+      CHECK_MESSAGE(compute_queue_ok,
+                    "Compute-only devices must leave graphics_queue as VK_NULL_HANDLE");
+
+      bool multi_swap_ok = (vk_src.find("modified_present.waitSemaphoreCount = orig_count + 1;") !=
+                                std::string::npos &&
+                            vk_src.find("pPresentInfo->swapchainCount > 1") != std::string::npos);
+      CHECK_MESSAGE(multi_swap_ok,
+                    "Multi-swapchain QueuePresent must preserve original wait semaphores");
+
+      std::string gl_src = read_text_file(repo_root / "src" / "layer" / "opengl_hook.cpp");
+      bool gl_abandon_ok = (gl_src.find("abandon_context()") != std::string::npos);
+      CHECK_MESSAGE(gl_abandon_ok, "OpenGL context switch must call abandon_context() on PBO ring");
+      bool gl_unpack_unbind_ok =
+          (gl_src.find("glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)") != std::string::npos);
+      CHECK_MESSAGE(gl_unpack_unbind_ok,
+                    "opengl_player_texture_provider must unbind GL_PIXEL_UNPACK_BUFFER to 0");
 
       bool vk_shared_swapchain_ok =
           (swap_src.find("std::shared_ptr<SwapchainData>") != std::string::npos &&

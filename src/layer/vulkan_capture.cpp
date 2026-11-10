@@ -54,6 +54,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
 
   uint32_t mem_type = 0;
   bool found = false;
+  bool is_coherent = false;
   if (dd->instance_data && dd->instance_data->GetPhysicalDeviceMemoryProperties) {
     VkPhysicalDeviceMemoryProperties mem_props{};
     dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
@@ -68,6 +69,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
                VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
         mem_type = i;
         found = true;
+        is_coherent = true;
         break;
       }
     }
@@ -81,6 +83,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
                 (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
           mem_type = i;
           found = true;
+          is_coherent = false;
           break;
         }
       }
@@ -95,6 +98,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
                 (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
           mem_type = i;
           found = true;
+          is_coherent = true;
           break;
         }
       }
@@ -107,6 +111,8 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
             (mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
           mem_type = i;
           found = true;
+          is_coherent =
+              (mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
           break;
         }
       }
@@ -149,6 +155,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
   }
 
   frame.buffer_size = mem_req.size;
+  frame.is_coherent = is_coherent;
   return true;
 }
 
@@ -215,7 +222,7 @@ void process_frame_capture_readback(DeviceData* dd, SwapchainData* sd, FrameReso
     return;
   }
 
-  if (dd->InvalidateMappedMemoryRanges) {
+  if (!frame.is_coherent && dd->InvalidateMappedMemoryRanges) {
     VkMappedMemoryRange range{};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
     range.memory = frame.staging_memory;

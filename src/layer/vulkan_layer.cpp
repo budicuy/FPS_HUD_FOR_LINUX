@@ -7,7 +7,6 @@
 #if FPSHUD_ENABLE_EXPERIMENTAL
 #include "adaptive_vfr.hpp"
 #endif
-#include "gui_menu.hpp"
 #include "input_manager.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
@@ -108,6 +107,22 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     float w = static_cast<float>(sd->extent.width);
     float h = static_cast<float>(sd->extent.height);
 
+    bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request() &&
+                     sd->supports_transfer_src;
+    bool clean_shot_recorded = false;
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    dd->BeginCommandBuffer(frame.command_buffer, &begin_info);
+
+    // Clean Game Screenshot (Tanpa HUD): copy swapchain image BEFORE ImGui render pass!
+    if (take_shot && !cfg.screenshot_with_hud && ensure_frame_capture_buffer(dd, sd.get(), frame)) {
+      record_image_copy_to_staging(dd, sd.get(), frame);
+      frame.has_valid_screenshot = true;
+      clean_shot_recorded = true;
+    }
+
     {
       std::lock_guard<std::mutex> imgui_lock(g_vulkan_imgui_mutex);
       set_current_rendering_swapchain(sd.get());
@@ -129,38 +144,23 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
 
         ImGui::Render();
       }
+
+      // Copy pending video playback frame from staging buffer to optimal VkImage
+      record_player_texture_upload(dd, frame.command_buffer);
+
+      VkRenderPassBeginInfo rp_begin{};
+      rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+      rp_begin.renderPass = sd->render_pass;
+      rp_begin.framebuffer = frame.framebuffer;
+      rp_begin.renderArea.extent = sd->extent;
+      dd->CmdBeginRenderPass(frame.command_buffer, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+
+      ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.command_buffer);
+
+      dd->CmdEndRenderPass(frame.command_buffer);
+
       set_current_rendering_swapchain(nullptr);
     }
-
-    bool take_shot = fpshud::RecorderController::instance().consume_screenshot_request() &&
-                     sd->supports_transfer_src;
-    bool clean_shot_recorded = false;
-
-    VkCommandBufferBeginInfo begin_info{};
-    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    dd->BeginCommandBuffer(frame.command_buffer, &begin_info);
-
-    // Clean Game Screenshot (Tanpa HUD): copy swapchain image BEFORE ImGui render pass!
-    if (take_shot && !cfg.screenshot_with_hud && ensure_frame_capture_buffer(dd, sd.get(), frame)) {
-      record_image_copy_to_staging(dd, sd.get(), frame);
-      frame.has_valid_screenshot = true;
-      clean_shot_recorded = true;
-    }
-
-    // Copy pending video playback frame from staging buffer to optimal VkImage
-    record_player_texture_upload(dd, frame.command_buffer);
-
-    VkRenderPassBeginInfo rp_begin{};
-    rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp_begin.renderPass = sd->render_pass;
-    rp_begin.framebuffer = frame.framebuffer;
-    rp_begin.renderArea.extent = sd->extent;
-    dd->CmdBeginRenderPass(frame.command_buffer, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
-
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.command_buffer);
-
-    dd->CmdEndRenderPass(frame.command_buffer);
 
     // Record GPU copy of swapchain image to staging buffer if recording/replay is active (with
     // jitter-resilient pacing / adaptive VFR) or if Screenshot With HUD was requested
@@ -240,9 +240,27 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
       VkResult sub_res = dd->QueueSubmit(target_queue, 1, &submit_info, frame.fence);
       if (sub_res == VK_SUCCESS) {
         VkPresentInfoKHR modified_present = *pPresentInfo;
-        modified_present.waitSemaphoreCount = 1;
-        modified_present.pWaitSemaphores = &frame.semaphore;
-        pres_res = dd->QueuePresentKHR(queue, &modified_present);
+        if (pPresentInfo->swapchainCount > 1) {
+          uint32_t orig_count = pPresentInfo->waitSemaphoreCount;
+          VkSemaphore stack_semaphores[16];
+          std::vector<VkSemaphore> dyn_semaphores;
+          VkSemaphore* sem_ptr = stack_semaphores;
+          if (orig_count + 1 > 16) {
+            dyn_semaphores.resize(orig_count + 1);
+            sem_ptr = dyn_semaphores.data();
+          }
+          sem_ptr[0] = frame.semaphore;
+          for (uint32_t i = 0; i < orig_count; ++i) {
+            sem_ptr[1 + i] = pPresentInfo->pWaitSemaphores[i];
+          }
+          modified_present.waitSemaphoreCount = orig_count + 1;
+          modified_present.pWaitSemaphores = sem_ptr;
+          pres_res = dd->QueuePresentKHR(queue, &modified_present);
+        } else {
+          modified_present.waitSemaphoreCount = 1;
+          modified_present.pWaitSemaphores = &frame.semaphore;
+          pres_res = dd->QueuePresentKHR(queue, &modified_present);
+        }
       } else {
         // QueueSubmit failed: frame.fence was reset and remains unsignaled.
         // Submit an empty batch or recreate in signaled state so future frames do not deadlock
