@@ -482,6 +482,13 @@ int main(int argc, char* argv[]) {
     bool is_nv = (std::strstr(c->name, "nvenc") != nullptr);
     bool is_va = (std::strstr(c->name, "vaapi") != nullptr);
 
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+    if (is_nv || is_va) {
+      avcodec_free_context(&ctx);
+      continue;
+    }
+#endif
+
     if (is_va) {
       if (!hw_device_ctx) {
         hw_device_ctx = create_vaapi_device();

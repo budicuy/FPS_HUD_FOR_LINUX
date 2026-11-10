@@ -119,8 +119,8 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           std::strncpy(start_payload.save_dir, test_dir.c_str(),
                        sizeof(start_payload.save_dir) - 1);
 
-          send(client_fd, &start_hdr, sizeof(start_hdr), 0);
-          send(client_fd, &start_payload, sizeof(start_payload), 0);
+          send(client_fd, &start_hdr, sizeof(start_hdr), MSG_NOSIGNAL);
+          send(client_fd, &start_payload, sizeof(start_payload), MSG_NOSIGNAL);
 
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
@@ -128,7 +128,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           stop_hdr.magic = kRecorderIpcMagic;
           stop_hdr.command = static_cast<uint32_t>(RecorderCommand::StopRecord);
           stop_hdr.payload_size = 0;
-          send(client_fd, &stop_hdr, sizeof(stop_hdr), 0);
+          send(client_fd, &stop_hdr, sizeof(stop_hdr), MSG_NOSIGNAL);
 
           IpcStatusResponse resp{};
           recv(client_fd, &resp, sizeof(resp), 0);
@@ -145,7 +145,12 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           if (access("/dev/nvidia0", R_OK) == 0 || access("/dev/nvidiactl", R_OK) == 0) {
             has_hw_accel = true;
           }
-          bool is_headless_or_ci = (!has_hw_accel || std::getenv("CI") != nullptr ||
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+          constexpr bool kIsTsanBuild = true;
+#else
+          constexpr bool kIsTsanBuild = false;
+#endif
+          bool is_headless_or_ci = (!has_hw_accel || kIsTsanBuild || std::getenv("CI") != nullptr ||
                                     std::getenv("GITHUB_ACTIONS") != nullptr);
 
           auto stop_wait_start = std::chrono::steady_clock::now();

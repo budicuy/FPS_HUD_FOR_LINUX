@@ -109,6 +109,16 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(FPSHUD_MEMORY_SAFETY_WARNINGS
+        -Wall
+        -Wextra
+        -Werror=return-stack-address
+        -Werror=dangling
+        -Werror=dangling-gsl
+        -Werror=self-move
+        -Werror=uninitialized
+        -Werror=sometimes-uninitialized
+    )
     if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO (Extreme Release)")
         add_compile_options(
@@ -120,10 +130,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -ffunction-sections
             -fdata-sections
             -fstack-protector-strong
+            -ftrivial-auto-var-init=zero
             -fno-math-errno
             -fno-trapping-math
-            -Wall
-            -Wextra
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
         add_link_options(
             -fuse-ld=lld
@@ -135,25 +145,36 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -static-libgcc
         )
     elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
-        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build]")
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
         add_compile_options(
             -O0
             -g3
-            -Wall
-            -Wextra
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
     else()
-        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
         add_compile_options(
             -O1
             -g
             -fno-omit-frame-pointer
             -fno-optimize-sibling-calls
-            -Wall
-            -Wextra
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
     endif()
 else()
+    set(FPSHUD_MEMORY_SAFETY_WARNINGS
+        -Wall
+        -Wextra
+        -Werror=return-local-addr
+        -Werror=dangling-pointer
+        -Werror=use-after-free
+        -Werror=self-move
+        -Werror=uninitialized
+    )
     if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
@@ -163,10 +184,10 @@ else()
             -ffunction-sections
             -fdata-sections
             -fstack-protector-strong
+            -ftrivial-auto-var-init=zero
             -fno-math-errno
             -fno-trapping-math
-            -Wall
-            -Wextra
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
         add_link_options(
             -Wl,--gc-sections
@@ -176,22 +197,24 @@ else()
             -static-libgcc
         )
     elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build]")
+        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
         add_compile_options(
             -O0
             -g3
-            -Wall
-            -Wextra
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
     else()
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
+        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
         add_compile_options(
             -O1
             -g
             -fno-omit-frame-pointer
             -fno-optimize-sibling-calls
-            -Wall
-            -Wextra
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
     endif()
 endif()
@@ -203,14 +226,14 @@ if(ENABLE_ASAN)
 endif()
 
 if(ENABLE_UBSAN)
-    message(STATUS "  -> UndefinedBehaviorSanitizer (Strict + Float-Div-By-Zero): ENABLED")
-    add_compile_options(-fsanitize=undefined -fsanitize=float-divide-by-zero -fno-sanitize-recover=all)
-    add_link_options(-fsanitize=undefined -fsanitize=float-divide-by-zero)
+    message(STATUS "  -> UndefinedBehaviorSanitizer (Strict + Bounds + Float-Div-By-Zero): ENABLED")
+    add_compile_options(-fsanitize=undefined -fsanitize=bounds -fsanitize=float-divide-by-zero -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=undefined -fsanitize=bounds -fsanitize=float-divide-by-zero)
 endif()
 
 if(ENABLE_TSAN)
-    message(STATUS "  -> ThreadSanitizer: ENABLED")
-    add_compile_options(-fsanitize=thread)
+    message(STATUS "  -> ThreadSanitizer (Strict Data-Race Detection): ENABLED")
+    add_compile_options(-fsanitize=thread -fno-sanitize-recover=all)
     add_link_options(-fsanitize=thread)
 endif()
 
