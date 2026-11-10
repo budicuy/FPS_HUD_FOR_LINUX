@@ -23,6 +23,26 @@ inline void write_mock_file(const fs::path& p, const std::string& content) {
   f << content << "\n";
 }
 
+/// Read entire text file to string
+inline std::string read_text_file(const fs::path& p) {
+  std::ifstream f(p);
+  if (!f.is_open()) return "";
+  return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+/// Find repository root by searching upward for scripts/install.sh
+inline fs::path find_repo_root() {
+  char exe_buf[4096] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+  if (len > 0) {
+    fs::path p = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+    if (fs::exists(p / "scripts" / "install.sh")) return p;
+    if (fs::exists(p / ".." / "scripts" / "install.sh")) return (p / "..").lexically_normal();
+  }
+  if (fs::exists("./scripts/install.sh")) return ".";
+  return {};
+}
+
 /// Compatibility shim bridging monolithic check_cond() to doctest CHECK_MESSAGE()
 inline void check_cond(bool ok, std::string_view label, std::string_view detail = "") {
   if (!detail.empty()) {
