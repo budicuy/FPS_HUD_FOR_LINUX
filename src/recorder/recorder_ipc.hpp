@@ -23,19 +23,11 @@ constexpr uint32_t kRecorderIpcMagic = 0x46505352;  // "FPSR"
 enum class RecorderCommand : uint32_t {
   StartRecord = 1,
   StopRecord = 2,
-  QueryStatus = 3,
   SendFrame = 4,
-  Ping = 5,
   SaveReplay = 6
 };
 
-enum class RecorderStatus : uint32_t {
-  Idle = 0,
-  Starting = 1,
-  Recording = 2,
-  Stopping = 3,
-  Error = 4
-};
+enum class RecorderStatus : uint32_t { Idle = 0, Recording = 2 };
 
 struct IpcPacketHeader {
   uint32_t magic = kRecorderIpcMagic;
@@ -91,12 +83,10 @@ struct ShmFrameHeader {
   uint32_t magic;  // kShmFrameMagic
   uint32_t width;
   uint32_t height;
-  uint32_t format;  // 0 = BGRA, 1 = RGBA, 2 = X2BGR10LE, 3 = X2RGB10LE
-  uint32_t flip_y;  // 0 = normal (Vulkan), 1 = flipped (OpenGL)
-  uint32_t slot_size;
+  uint32_t format;                      // 0 = BGRA, 1 = RGBA, 2 = X2BGR10LE, 3 = X2RGB10LE
+  uint32_t flip_y;                      // 0 = normal (Vulkan), 1 = flipped (OpenGL)
   std::atomic<uint32_t> write_slot{0};  // 0, 1, or 2 (Triple-buffering)
-  std::atomic<uint64_t> sequence{0};
-  uint32_t offset[3];  // Slot 0, Slot 1, Slot 2
+  uint32_t offset[3];                   // Slot 0, Slot 1, Slot 2
 };
 
 struct IpcFrameNotify {
@@ -153,8 +143,6 @@ public:
   bool is_replay_active() const noexcept;
   bool is_capturing_frames() const noexcept;
   float get_recording_duration() const;
-  uint32_t get_recorded_frames() const;
-  std::string get_last_saved_path() const;
 
   // Instant Replay lifecycle & on-demand save
   void sync_replay_state(const HudConfig& cfg, float display_w, float display_h);
@@ -205,6 +193,7 @@ private:
   std::atomic<bool> is_saving_replay_{false};
   std::atomic<bool> screenshot_requested_{false};
   std::thread screenshot_thread_;
+  std::atomic<bool> is_taking_screenshot_{false};
 
   // Shared Memory state
   std::string shm_path_;
@@ -258,8 +247,6 @@ public:
   [[nodiscard]] bool is_active() const noexcept;
   [[nodiscard]] const PlaybackShmHeader* header() const noexcept;
   [[nodiscard]] const uint8_t* frame_pixels() const noexcept;
-  [[nodiscard]] uint64_t last_consumed_seq() const noexcept;
-  void mark_seq_consumed(uint64_t seq) noexcept;
 
 private:
   void send_action(IpcPlaybackAction action, float value);
@@ -272,7 +259,6 @@ private:
   size_t shm_size_{0};
   std::string shm_name_;
   std::string socket_path_;
-  uint64_t last_consumed_seq_{0};
 };
 
 }  // namespace fpshud

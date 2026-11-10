@@ -239,7 +239,7 @@ static void render_video_player_modal(float scale, float display_width, float di
     }
 
     const uint8_t* pixels = g_player_controller.frame_pixels();
-    uint64_t seq = hdr->frame_seq.load(std::memory_order_relaxed);
+    uint64_t seq = hdr->frame_seq.load(std::memory_order_acquire);
     ImTextureID tex = get_or_update_player_texture(pixels, vw, vh, seq);
     if (tex != 0) {
       ImGui::Image(tex, ImVec2(canvas_w, canvas_h));

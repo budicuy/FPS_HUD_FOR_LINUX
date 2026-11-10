@@ -706,6 +706,10 @@ int main(int argc, char* argv[]) {
       if (oc->pb && !(oc->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc->pb);
       avformat_free_context(oc);
     }
+    if (shm_base && shm_base != MAP_FAILED) {
+      munmap(shm_base, shm_size);
+      shm_base = nullptr;
+    }
     if (client_fd >= 0) close(client_fd);
     if (server_fd >= 0) close(server_fd);
     if (!socket_path.empty()) unlink(socket_path.c_str());
@@ -842,6 +846,8 @@ int main(int argc, char* argv[]) {
     constexpr int kAudioSamplesPerFrame = 1024;
     std::vector<int16_t> pcm_ring;
     std::vector<int16_t> mic_ring;
+    size_t pcm_read_offset = 0;
+    size_t mic_read_offset = 0;
     pcm_ring.reserve(kAudioSamplesPerFrame * 8);
     if (has_mic) mic_ring.reserve(kAudioSamplesPerFrame * 8);
     int64_t audio_pts = 0;
@@ -877,6 +883,10 @@ int main(int argc, char* argv[]) {
       const void* data = nullptr;
       size_t nbytes = 0;
       if (pa_stream_peek(pulse.stream, &data, &nbytes) == 0 && nbytes > 0) {
+        if (pcm_read_offset >= 4096) {
+          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+          pcm_read_offset = 0;
+        }
         if (data == nullptr) {
           // Hole in stream: inject silence (zeros)
           size_t samples_to_inject = nbytes / sizeof(int16_t);
@@ -893,6 +903,10 @@ int main(int argc, char* argv[]) {
         const void* mdata = nullptr;
         size_t mnbytes = 0;
         if (pa_stream_peek(pulse_mic.stream, &mdata, &mnbytes) == 0 && mnbytes > 0) {
+          if (mic_read_offset >= 4096) {
+            mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mic_read_offset);
+            mic_read_offset = 0;
+          }
           if (mdata == nullptr) {
             mic_ring.insert(mic_ring.end(), mnbytes / sizeof(int16_t), 0);
           } else {
@@ -907,25 +921,39 @@ int main(int argc, char* argv[]) {
       // arrives so audio starts in exact lockstep with video PTS at 0.0s
       if (!g_has_received_game_frame.load(std::memory_order_relaxed)) {
         pcm_ring.clear();
+        pcm_read_offset = 0;
         mic_ring.clear();
+        mic_read_offset = 0;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
       }
 
-      while (pcm_ring.size() >= static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
-        if (has_mic && !mic_ring.empty()) {
-          size_t mix_n = std::min<size_t>(kAudioSamplesPerFrame * 2, mic_ring.size());
+      while ((pcm_ring.size() - pcm_read_offset) >=
+             static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
+        if (has_mic && (mic_ring.size() - mic_read_offset) > 0) {
+          size_t mic_avail = mic_ring.size() - mic_read_offset;
+          size_t mix_n = std::min<size_t>(kAudioSamplesPerFrame * 2, mic_avail);
           for (size_t i = 0; i < mix_n; ++i) {
-            int mixed = static_cast<int>(pcm_ring[i]) + static_cast<int>(mic_ring[i]);
-            pcm_ring[i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
+            int mixed = static_cast<int>(pcm_ring[pcm_read_offset + i]) +
+                        static_cast<int>(mic_ring[mic_read_offset + i]);
+            pcm_ring[pcm_read_offset + i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
           }
-          mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mix_n);
+          mic_read_offset += mix_n;
+          if (mic_read_offset >= 4096) {
+            mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mic_read_offset);
+            mic_read_offset = 0;
+          }
         }
         if (av_frame_make_writable(aframe) < 0) {
-          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+          pcm_read_offset += (kAudioSamplesPerFrame * 2);
+          if (pcm_read_offset >= 4096) {
+            pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+            pcm_read_offset = 0;
+          }
           continue;
         }
-        const uint8_t* in_data[1] = {reinterpret_cast<const uint8_t*>(pcm_ring.data())};
+        const uint8_t* in_data[1] = {
+            reinterpret_cast<const uint8_t*>(pcm_ring.data() + pcm_read_offset)};
         if (swr) {
           swr_convert(swr, aframe->data, kAudioSamplesPerFrame, in_data, kAudioSamplesPerFrame);
         }
@@ -940,7 +968,20 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+        pcm_read_offset += (kAudioSamplesPerFrame * 2);
+        if (pcm_read_offset >= 4096) {
+          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+          pcm_read_offset = 0;
+        }
+      }
+
+      if (pcm_read_offset >= pcm_ring.size()) {
+        pcm_ring.clear();
+        pcm_read_offset = 0;
+      }
+      if (mic_read_offset >= mic_ring.size()) {
+        mic_ring.clear();
+        mic_read_offset = 0;
       }
 
       if (nbytes == 0) {
@@ -1303,15 +1344,6 @@ int main(int argc, char* argv[]) {
             }
           }
           send(client_fd, &save_resp, sizeof(save_resp), 0);
-        } else if (cmd == fpshud::RecorderCommand::QueryStatus) {
-          fpshud::IpcStatusResponse status_resp{};
-          status_resp.magic = fpshud::kRecorderIpcMagic;
-          status_resp.status = static_cast<uint32_t>(fpshud::RecorderStatus::Recording);
-          status_resp.frame_count =
-              static_cast<uint32_t>(video_frame_idx.load(std::memory_order_relaxed));
-          auto now = std::chrono::steady_clock::now();
-          status_resp.elapsed_sec = std::chrono::duration<float>(now - session_start).count();
-          send(client_fd, &status_resp, sizeof(status_resp), 0);
         }
       }
     }

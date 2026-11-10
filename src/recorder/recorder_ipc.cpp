@@ -1,5 +1,6 @@
 #include "recorder_ipc.hpp"
 #include "config.hpp"
+#include "logger.hpp"
 #include "png_writer.hpp"
 
 #include <ctime>
@@ -65,7 +66,23 @@ std::string get_helper_binary_path() {
   return "fpshud_recorder";
 }
 
-namespace {}  // namespace
+namespace {
+void reap_helper_process(pid_t pid) {
+  if (pid <= 0) return;
+  kill(pid, SIGTERM);
+  for (int i = 0; i < 10; ++i) {
+    int status = 0;
+    pid_t res = ::waitpid(pid, &status, WNOHANG);
+    if (res == pid || (res < 0 && errno == ECHILD)) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  kill(pid, SIGKILL);
+  int status = 0;
+  ::waitpid(pid, &status, WNOHANG);
+}
+}  // namespace
 
 std::string get_secure_runtime_dir() {
   const char* xdg = std::getenv("XDG_RUNTIME_DIR");
@@ -164,15 +181,6 @@ float RecorderController::get_recording_duration() const {
   return std::chrono::duration<float>(now - record_start_time_).count();
 }
 
-uint32_t RecorderController::get_recorded_frames() const {
-  return recorded_frames_.load(std::memory_order_relaxed);
-}
-
-std::string RecorderController::get_last_saved_path() const {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  return last_saved_file_;
-}
-
 void RecorderController::set_toast(const std::string& msg) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   toast_msg_ = msg;
@@ -266,12 +274,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
   connect_socket();
   if (socket_fd_ < 0) {
     if (helper_pid_ > 0) {
-      pid_t pid = helper_pid_;
-      kill(pid, SIGTERM);
-      std::thread([pid]() {
-        int status = 0;
-        ::waitpid(pid, &status, 0);
-      }).detach();
+      reap_helper_process(helper_pid_);
       helper_pid_ = -1;
     }
     cleanup_shm();
@@ -672,9 +675,7 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
   hdr->height = height;
   hdr->format = 0;
   hdr->flip_y = 0;
-  hdr->slot_size = slot_sz;
   hdr->write_slot.store(0, std::memory_order_relaxed);
-  hdr->sequence.store(0, std::memory_order_relaxed);
   hdr->offset[0] = 4096;
   hdr->offset[1] = 4096 + slot_sz;
   hdr->offset[2] = 4096 + slot_sz * 2;
@@ -735,9 +736,7 @@ void RecorderController::submit_frame(const void* pixels, uint32_t width, uint32
   hdr->format = format;
   hdr->flip_y = flip_y ? 1 : 0;
   hdr->write_slot.store(next_slot, std::memory_order_release);
-  uint64_t s = hdr->sequence.fetch_add(1, std::memory_order_release) + 1;
-
-  recorded_frames_.fetch_add(1, std::memory_order_relaxed);
+  uint64_t s = recorded_frames_.fetch_add(1, std::memory_order_relaxed) + 1;
 
   if (socket_fd_ >= 0) {
     IpcFrameNotify notify{};
@@ -810,15 +809,12 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     if (helper_pid_ > 0) {
       pid_t rpid = helper_pid_;
       helper_pid_ = -1;
-      kill(rpid, SIGTERM);
       if (cfg.replay_enabled) {
+        kill(rpid, SIGTERM);
         int status = 0;
         ::waitpid(rpid, &status, 0);
       } else {
-        std::thread([rpid]() {
-          int status = 0;
-          ::waitpid(rpid, &status, 0);
-        }).detach();
+        reap_helper_process(rpid);
       }
     }
     if (!socket_path_.empty()) {
@@ -840,13 +836,8 @@ void RecorderController::sync_replay_state(const HudConfig& cfg, float display_w
     connect_socket();
     if (socket_fd_ < 0) {
       if (helper_pid_ > 0) {
-        pid_t rpid = helper_pid_;
+        reap_helper_process(helper_pid_);
         helper_pid_ = -1;
-        kill(rpid, SIGTERM);
-        std::thread([rpid]() {
-          int status = 0;
-          ::waitpid(rpid, &status, 0);
-        }).detach();
       }
       cleanup_shm();
       return;
@@ -948,6 +939,11 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
     return;
   }
 
+  // Non-blocking: if screenshot worker is already active, return immediately
+  if (is_taking_screenshot_.load(std::memory_order_acquire)) {
+    return;
+  }
+
   size_t total_bytes = static_cast<size_t>(width) * height * 4;
   std::vector<uint8_t> raw_copy(total_bytes);
   std::memcpy(raw_copy.data(), pixels, total_bytes);
@@ -958,42 +954,51 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
     target_dir = get_effective_record_dir(def_cfg);
   }
 
-  std::thread prev_thread;
   {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (screenshot_thread_.joinable()) {
-      prev_thread = std::move(screenshot_thread_);
+      screenshot_thread_.join();
     }
   }
-  if (prev_thread.joinable()) {
-    prev_thread.join();
-  }
+
+  is_taking_screenshot_.store(true, std::memory_order_release);
 
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  screenshot_thread_ =
-      std::thread([this, buf = std::move(raw_copy), width, height, format, flip_y, target_dir]() {
-        std::error_code ec;
-        fs::create_directories(target_dir, ec);
+  screenshot_thread_ = std::thread([this, buf = std::move(raw_copy), width, height, format, flip_y,
+                                    target_dir]() {
+    std::error_code ec;
+    fs::create_directories(target_dir, ec);
 
-        std::time_t now_t = std::time(nullptr);
-        struct tm tm_buf{};
-        localtime_r(&now_t, &tm_buf);
-        char ts[64] = {0};
-        std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &tm_buf);
+    auto now_sys = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now_sys);
+    auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now_sys.time_since_epoch()).count() %
+        1000;
+    struct tm tm_buf{};
+    localtime_r(&now_c, &tm_buf);
+    char filename[128] = {0};
+    std::snprintf(filename, sizeof(filename), "Screenshot_%04d%02d%02d_%02d%02d%02d_%03d.png",
+                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday, tm_buf.tm_hour,
+                  tm_buf.tm_min, tm_buf.tm_sec, static_cast<int>(ms));
 
-        std::string out_path = target_dir + "/Screenshot_" + ts + ".png";
-        bool ok = write_rgba_to_png(out_path, buf.data(), width, height, format, flip_y);
+    std::string out_path = target_dir + "/" + filename;
+    FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::Recorder, "Saving screenshot: %s", out_path.c_str());
 
-        std::lock_guard<std::recursive_mutex> lk(this->mutex_);
-        if (ok) {
-          this->last_saved_file_ = out_path;
-          this->toast_msg_ = "[✓] Screenshot saved: " + out_path;
-        } else {
-          this->toast_msg_ = "[!] Failed to save PNG screenshot.";
-        }
-        this->toast_time_ = std::chrono::steady_clock::now();
-        this->has_active_toast_.store(true, std::memory_order_release);
-      });
+    bool ok = write_rgba_to_png(out_path, buf.data(), width, height, format, flip_y);
+
+    {
+      std::lock_guard<std::recursive_mutex> lk(this->mutex_);
+      if (ok) {
+        this->last_saved_file_ = out_path;
+        this->toast_msg_ = "[✓] Screenshot saved: " + out_path;
+      } else {
+        this->toast_msg_ = "[!] Failed to save PNG screenshot.";
+      }
+      this->toast_time_ = std::chrono::steady_clock::now();
+      this->has_active_toast_.store(true, std::memory_order_release);
+    }
+    this->is_taking_screenshot_.store(false, std::memory_order_release);
+  });
 }
 
 // ----------------------------------------------------------------------------
@@ -1016,9 +1021,9 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
 
-  shm_name_ =
-      std::string(kPlaybackShmPrefix) + std::to_string(my_pid) + "_" + std::to_string(now_us);
   std::string runtime_dir = get_secure_runtime_dir();
+  shm_name_ = runtime_dir + "/" + kPlaybackShmPrefix + std::to_string(my_pid) + "_" +
+              std::to_string(now_us);
   socket_path_ = runtime_dir + "/" + kPlaybackSocketPrefix + std::to_string(my_pid) + "_" +
                  std::to_string(now_us) + ".sock";
 
@@ -1089,7 +1094,11 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
     }
 
     if (shm_fd_ < 0) {
-      shm_fd_ = ::shm_open(shm_name_.c_str(), O_RDWR, 0600);
+      if (shm_name_.find('/') != std::string::npos) {
+        shm_fd_ = ::open(shm_name_.c_str(), O_RDWR, 0600);
+      } else {
+        shm_fd_ = ::shm_open(shm_name_.c_str(), O_RDWR, 0600);
+      }
     }
     if (shm_fd_ >= 0) {
       struct stat st{};
@@ -1100,9 +1109,15 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
         if (ptr != MAP_FAILED) {
           shm_header_ = reinterpret_cast<PlaybackShmHeader*>(ptr);
           if (shm_header_->magic == kPlaybackShmMagic) {
-            shm_pixels_ = reinterpret_cast<uint8_t*>(ptr) + sizeof(PlaybackShmHeader);
-            shm_ready = true;
-            break;
+            size_t pixel_bytes = static_cast<size_t>(shm_header_->width) * shm_header_->height * 4;
+            if (shm_size_ >= sizeof(PlaybackShmHeader) + 2 * pixel_bytes) {
+              shm_pixels_ = reinterpret_cast<uint8_t*>(ptr) + sizeof(PlaybackShmHeader);
+              shm_ready = true;
+              break;
+            } else {
+              ::munmap(ptr, shm_size_);
+              shm_header_ = nullptr;
+            }
           } else {
             ::munmap(ptr, shm_size_);
             shm_header_ = nullptr;
@@ -1138,7 +1153,6 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
     }
   }
 
-  last_consumed_seq_ = 0;
   return true;
 }
 
@@ -1186,12 +1200,15 @@ void VideoPlayerController::close() {
     shm_fd_ = -1;
   }
   if (!shm_name_.empty()) {
-    ::shm_unlink(shm_name_.c_str());
+    if (shm_name_.find('/') != std::string::npos) {
+      ::unlink(shm_name_.c_str());
+    } else {
+      ::shm_unlink(shm_name_.c_str());
+    }
     shm_name_.clear();
   }
 
   shm_size_ = 0;
-  last_consumed_seq_ = 0;
 }
 
 void VideoPlayerController::play() { send_action(IpcPlaybackAction::Play, 0.0f); }
@@ -1209,12 +1226,11 @@ const PlaybackShmHeader* VideoPlayerController::header() const noexcept {
 }
 
 const uint8_t* VideoPlayerController::frame_pixels() const noexcept {
-  return is_active() ? shm_pixels_ : nullptr;
+  if (!is_active() || !shm_pixels_ || !shm_header_) return nullptr;
+  uint32_t slot = shm_header_->write_index.load(std::memory_order_acquire) & 1u;
+  size_t slot_bytes = static_cast<size_t>(shm_header_->width) * shm_header_->height * 4;
+  return shm_pixels_ + slot * slot_bytes;
 }
-
-uint64_t VideoPlayerController::last_consumed_seq() const noexcept { return last_consumed_seq_; }
-
-void VideoPlayerController::mark_seq_consumed(uint64_t seq) noexcept { last_consumed_seq_ = seq; }
 
 void VideoPlayerController::send_action(IpcPlaybackAction action, float value) {
   if (sock_fd_ >= 0) {

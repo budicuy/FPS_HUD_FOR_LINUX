@@ -3,6 +3,7 @@
 
 #include "config.hpp"
 #include "gui_menu.hpp"
+#include "png_writer.hpp"
 #include "recorder_ipc.hpp"
 #include "recorder_playback_protocol.hpp"
 #include "recorder_player.hpp"
@@ -550,5 +551,120 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
     CHECK_MESSAGE(
         esc_f_handling_ok,
         "10.28 Escape and F key routing, fullscreen demotion, and modal lifecycle verified");
+  }
+
+  SUBCASE("Lossless PNG Writer & Millisecond Screenshots") {
+    ScopedTempDir tmp_png("fpshud_test_png_");
+    const uint32_t w = 8;
+    const uint32_t h = 8;
+    std::vector<uint32_t> test_pixels(w * h);
+
+    // Format 0: 8-bit BGRA
+    for (size_t i = 0; i < test_pixels.size(); ++i) {
+      uint8_t b = 255, g = 128, r = 64, a = 255;
+      test_pixels[i] = static_cast<uint32_t>(b) | (static_cast<uint32_t>(g) << 8) |
+                       (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(a) << 24);
+    }
+    fs::path p0 = tmp_png.path / "test_bgra.png";
+    CHECK(fpshud::write_rgba_to_png(
+        p0.string(), reinterpret_cast<const uint8_t*>(test_pixels.data()), w, h, 0, false));
+    CHECK(fs::exists(p0));
+    {
+      std::ifstream f0(p0, std::ios::binary);
+      char sig0[8] = {0};
+      f0.read(sig0, 8);
+      CHECK(std::memcmp(sig0, "\x89PNG\r\n\x1a\n", 8) == 0);
+    }
+
+    // Format 1: 8-bit RGBA
+    for (size_t i = 0; i < test_pixels.size(); ++i) {
+      uint8_t r = 255, g = 128, b = 64, a = 255;
+      test_pixels[i] = static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+                       (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24);
+    }
+    fs::path p1 = tmp_png.path / "test_rgba.png";
+    CHECK(fpshud::write_rgba_to_png(
+        p1.string(), reinterpret_cast<const uint8_t*>(test_pixels.data()), w, h, 1, false));
+    CHECK(fs::exists(p1));
+    {
+      std::ifstream f1(p1, std::ios::binary);
+      char sig1[8] = {0};
+      f1.read(sig1, 8);
+      CHECK(std::memcmp(sig1, "\x89PNG\r\n\x1a\n", 8) == 0);
+    }
+
+    // Format 2: 10-bit A2B10G10R10 / X2BGR10LE
+    for (size_t i = 0; i < test_pixels.size(); ++i) {
+      uint32_t r10 = 1023, g10 = 512, b10 = 256, a2 = 3;
+      test_pixels[i] =
+          (r10 & 0x3FF) | ((g10 & 0x3FF) << 10) | ((b10 & 0x3FF) << 20) | ((a2 & 3) << 30);
+    }
+    fs::path p2 = tmp_png.path / "test_bgr10.png";
+    CHECK(fpshud::write_rgba_to_png(
+        p2.string(), reinterpret_cast<const uint8_t*>(test_pixels.data()), w, h, 2, false));
+    CHECK(fs::exists(p2));
+    {
+      std::ifstream f2(p2, std::ios::binary);
+      char sig2[8] = {0};
+      f2.read(sig2, 8);
+      CHECK(std::memcmp(sig2, "\x89PNG\r\n\x1a\n", 8) == 0);
+    }
+
+    // Format 3: 10-bit A2R10G10B10 / X2RGB10LE
+    for (size_t i = 0; i < test_pixels.size(); ++i) {
+      uint32_t b10 = 1023, g10 = 512, r10 = 256, a2 = 3;
+      test_pixels[i] =
+          (b10 & 0x3FF) | ((g10 & 0x3FF) << 10) | ((r10 & 0x3FF) << 20) | ((a2 & 3) << 30);
+    }
+    fs::path p3 = tmp_png.path / "test_rgb10.png";
+    CHECK(fpshud::write_rgba_to_png(
+        p3.string(), reinterpret_cast<const uint8_t*>(test_pixels.data()), w, h, 3, false));
+    CHECK(fs::exists(p3));
+    {
+      std::ifstream f3(p3, std::ios::binary);
+      char sig3[8] = {0};
+      f3.read(sig3, 8);
+      CHECK(std::memcmp(sig3, "\x89PNG\r\n\x1a\n", 8) == 0);
+    }
+
+    // Millisecond Screenshot Filename Verification
+    auto& rec = RecorderController::instance();
+    rec.submit_screenshot(test_pixels.data(), w, h, 1, false, tmp_png.path.string());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::string saved_file;
+    for (const auto& entry : fs::directory_iterator(tmp_png.path)) {
+      std::string fname = entry.path().filename().string();
+      if (fname.rfind("Screenshot_", 0) == 0) {
+        saved_file = fname;
+        break;
+      }
+    }
+    CHECK(!saved_file.empty());
+    int y = 0, m = 0, d = 0, hh = 0, mm = 0, ss = 0, mmm = -1;
+    int matched = std::sscanf(saved_file.c_str(), "Screenshot_%4d%2d%2d_%2d%2d%2d_%3d.png", &y, &m,
+                              &d, &hh, &mm, &ss, &mmm);
+    CHECK(matched == 7);
+    CHECK(mmm >= 0);
+  }
+
+  SUBCASE("Player Socket and SHM Cleanup on Early Failure") {
+    fs::path rec_bin = find_recorder_bin_path();
+    if (!rec_bin.empty()) {
+      ScopedTempDir tmp_player("fpshud_player_fail_");
+      fs::path fail_sock = tmp_player.path / "failed_player.sock";
+      fs::path fail_shm = tmp_player.path / "failed_player_shm";
+      {
+        std::ofstream f(fail_sock);
+        f << "stray_socket_marker";
+      }
+      CHECK(fs::exists(fail_sock));
+
+      std::string cmd = "\"" + rec_bin.string() + "\" --player \"" + fail_shm.string() + "\" \"" +
+                        fail_sock.string() + "\" \"/nonexistent/file_12345.mp4\" 2>&1";
+      int status = std::system(cmd.c_str());
+      int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+      CHECK(exit_code == 1);
+      CHECK(!fs::exists(fail_sock));
+    }
   }
 }
