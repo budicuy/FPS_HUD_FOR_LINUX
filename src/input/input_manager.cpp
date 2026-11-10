@@ -13,7 +13,9 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <pthread.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -302,6 +304,7 @@ struct wl_pointer_listener g_pointer_listener = {
 InputManager::~InputManager() {
   set_mouse_grab(false);
   close_evdev_devices();
+  stop_x11_worker();
   {
     std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
     teardown_wayland_locked();
@@ -310,11 +313,12 @@ InputManager::~InputManager() {
       wayland_lib_ = nullptr;
     }
   }
-  if (x11_display_ && x11_lib_) {
-    using PFN_XCloseDisplay = int (*)(Display*);
-    auto fn = reinterpret_cast<PFN_XCloseDisplay>(dlsym(x11_lib_, "XCloseDisplay"));
-    if (fn) fn(static_cast<Display*>(x11_display_));
-    x11_display_ = nullptr;
+  {
+    std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
+    if (x11_display_ && fn_xclose_display_) {
+      fn_xclose_display_(x11_display_);
+      x11_display_ = nullptr;
+    }
   }
   if (x11_lib_) {
     dlclose(x11_lib_);
@@ -885,6 +889,7 @@ void InputManager::set_x11_grab(bool grab) {
   auto* dpy = static_cast<Display*>(x11_display_);
   auto fnFlush = reinterpret_cast<PFN_XFlush>(dlsym(x11_lib_, "XFlush"));
 
+  std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
   if (grab) {
     auto fnDefaultRoot =
         reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
@@ -949,61 +954,135 @@ void InputManager::init_x11_fallback() {
   if (!x11_lib_) return;
 
   using PFN_XOpenDisplay = Display* (*)(const char*);
+  using PFN_XInitThreads = int (*)();
+  auto fnInitThreads = reinterpret_cast<PFN_XInitThreads>(dlsym(x11_lib_, "XInitThreads"));
+  if (fnInitThreads) {
+    fnInitThreads();
+  }
+
   auto fnOpen = reinterpret_cast<PFN_XOpenDisplay>(dlsym(x11_lib_, "XOpenDisplay"));
+  fn_xclose_display_ = reinterpret_cast<PFN_XCloseDisplay>(dlsym(x11_lib_, "XCloseDisplay"));
+  fn_xquery_keymap_ = reinterpret_cast<PFN_XQueryKeymap>(dlsym(x11_lib_, "XQueryKeymap"));
+  fn_xdefault_root_ =
+      reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
+  fn_xquery_pointer_ = reinterpret_cast<PFN_XQueryPointer>(dlsym(x11_lib_, "XQueryPointer"));
+
   if (fnOpen) {
     x11_display_ = fnOpen(nullptr);
+  }
+
+  if (x11_display_ && fn_xquery_keymap_) {
+    x11_worker_running_.store(true, std::memory_order_release);
+    x11_worker_thread_ = std::thread(&InputManager::x11_worker_loop, this);
+  }
+}
+
+void InputManager::stop_x11_worker() {
+  if (x11_worker_running_.exchange(false, std::memory_order_acq_rel)) {
+    if (x11_worker_thread_.joinable()) {
+      x11_worker_thread_.join();
+    }
+  }
+}
+
+void InputManager::x11_worker_loop() {
+#if defined(__linux__)
+  pthread_setname_np(pthread_self(), "fpshud_x11");
+  setpriority(PRIO_PROCESS, 0, 10);
+#endif
+  while (x11_worker_running_.load(std::memory_order_relaxed)) {
+    if (!x11_display_) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+
+    auto* dpy = static_cast<Display*>(x11_display_);
+
+    // 1. Poll keys via background worker thread (zero render thread stalling)
+    if (fn_xquery_keymap_) {
+      char keys[32] = {0};
+      {
+        std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
+        fn_xquery_keymap_(dpy, keys);
+      }
+
+      std::vector<PendingKeyEvent> batch;
+      for (unsigned int xkc = 8; xkc < 256; ++xkc) {
+        bool down = (keys[xkc >> 3] & (1 << (xkc & 7))) != 0;
+        bool prev_down = (prev_x11_keymap_[xkc >> 3] & (1 << (xkc & 7))) != 0;
+        if (down != prev_down) {
+          batch.push_back({xkc - 8, down});
+        }
+      }
+      std::memcpy(prev_x11_keymap_, keys, sizeof(prev_x11_keymap_));
+
+      if (!batch.empty()) {
+        std::lock_guard<std::mutex> lock(x11_event_mutex_);
+        pending_key_events_.insert(pending_key_events_.end(), batch.begin(), batch.end());
+      }
+    }
+
+    // 2. Poll pointer coordinates and mouse buttons if HUD GUI is active
+    if (x11_gui_active_.load(std::memory_order_relaxed) && fn_xdefault_root_ &&
+        fn_xquery_pointer_) {
+      Window root = 0;
+      Window ret_root = 0, ret_child = 0;
+      int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
+      unsigned int mask = 0;
+      int ok = 0;
+      {
+        std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
+        root = fn_xdefault_root_(dpy);
+        ok = fn_xquery_pointer_(dpy, root, &ret_root, &ret_child, &root_x, &root_y, &win_x, &win_y,
+                                &mask);
+      }
+      if (ok) {
+        x11_cursor_x_.store(static_cast<float>(root_x), std::memory_order_relaxed);
+        x11_cursor_y_.store(static_cast<float>(root_y), std::memory_order_relaxed);
+        x11_mouse_down_[0].store((mask & Button1Mask) != 0, std::memory_order_relaxed);
+        x11_mouse_down_[1].store((mask & Button3Mask) != 0, std::memory_order_relaxed);
+        x11_mouse_down_[2].store((mask & Button2Mask) != 0, std::memory_order_relaxed);
+      }
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
   }
 }
 
 void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_width,
                                      float display_height) {
+  if (!evdev_devices_.empty()) return;
   init_x11_fallback();
-  if (!x11_display_ || !x11_lib_) return;
+  if (!x11_worker_running_.load(std::memory_order_relaxed)) return;
 
-  using PFN_XQueryKeymap = int (*)(Display*, char[32]);
-  using PFN_XDefaultRootWindow = Window (*)(Display*);
-  using PFN_XQueryPointer =
-      Bool (*)(Display*, Window, Window*, Window*, int*, int*, int*, int*, unsigned int*);
+  x11_gui_active_.store(cfg.gui_open, std::memory_order_relaxed);
 
-  auto fnQueryKeymap = reinterpret_cast<PFN_XQueryKeymap>(dlsym(x11_lib_, "XQueryKeymap"));
-  auto fnDefaultRoot =
-      reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
-  auto fnQueryPointer = reinterpret_cast<PFN_XQueryPointer>(dlsym(x11_lib_, "XQueryPointer"));
-
-  auto* dpy = static_cast<Display*>(x11_display_);
-  if (fnQueryKeymap && evdev_devices_.empty()) {
-    char keys[32] = {0};
-    fnQueryKeymap(dpy, keys);
-
-    // On Linux X11/Xwayland (evdev XKB), X11 KeyCode == Linux evdev code + 8.
-    // Forward any key state transitions through handle_key_event so custom 1/2-key
-    // shortcuts and interactive keybind capture work identically on X11 fallback.
-    for (unsigned int xkc = 8; xkc < 256; ++xkc) {
-      bool down = (keys[xkc >> 3] & (1 << (xkc & 7))) != 0;
-      bool prev_down = (prev_x11_keymap_[xkc >> 3] & (1 << (xkc & 7))) != 0;
-      if (down != prev_down) {
-        uint32_t evdev_code = xkc - 8;
-        handle_key_event(evdev_code, down, cfg, display_width, display_height, &io);
-      }
+  std::vector<PendingKeyEvent> local_events;
+  {
+    std::lock_guard<std::mutex> lock(x11_event_mutex_);
+    if (!pending_key_events_.empty()) {
+      local_events.swap(pending_key_events_);
     }
-    std::memcpy(prev_x11_keymap_, keys, sizeof(prev_x11_keymap_));
   }
 
-  if (cfg.gui_open && fnDefaultRoot && fnQueryPointer && evdev_devices_.empty() &&
-      display_width > 0.0f && display_height > 0.0f) {
-    Window root = fnDefaultRoot(dpy);
-    Window ret_root, ret_child;
-    int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
-    unsigned int mask = 0;
-    if (fnQueryPointer(dpy, root, &ret_root, &ret_child, &root_x, &root_y, &win_x, &win_y, &mask)) {
+  for (const auto& ev : local_events) {
+    handle_key_event(ev.code, ev.down, cfg, display_width, display_height, &io);
+  }
+
+  if (cfg.gui_open && display_width > 0.0f && display_height > 0.0f) {
+    float raw_x = x11_cursor_x_.load(std::memory_order_relaxed);
+    float raw_y = x11_cursor_y_.load(std::memory_order_relaxed);
+    if (raw_x >= 0.0f && raw_y >= 0.0f) {
       int dw = static_cast<int>(display_width);
       int dh = static_cast<int>(display_height);
-      cursor_x_ = std::clamp(static_cast<float>(dw > 0 ? (root_x % dw) : 0), 0.0f, display_width);
-      cursor_y_ = std::clamp(static_cast<float>(dh > 0 ? (root_y % dh) : 0), 0.0f, display_height);
+      cursor_x_ = std::clamp(static_cast<float>(dw > 0 ? (static_cast<int>(raw_x) % dw) : 0), 0.0f,
+                             display_width);
+      cursor_y_ = std::clamp(static_cast<float>(dh > 0 ? (static_cast<int>(raw_y) % dh) : 0), 0.0f,
+                             display_height);
       io.AddMousePosEvent(cursor_x_, cursor_y_);
-      io.AddMouseButtonEvent(0, (mask & Button1Mask) != 0);
-      io.AddMouseButtonEvent(1, (mask & Button3Mask) != 0);
-      io.AddMouseButtonEvent(2, (mask & Button2Mask) != 0);
+      io.AddMouseButtonEvent(0, x11_mouse_down_[0].load(std::memory_order_relaxed));
+      io.AddMouseButtonEvent(1, x11_mouse_down_[1].load(std::memory_order_relaxed));
+      io.AddMouseButtonEvent(2, x11_mouse_down_[2].load(std::memory_order_relaxed));
     }
   }
 }

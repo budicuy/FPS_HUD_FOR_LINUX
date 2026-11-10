@@ -224,6 +224,10 @@ case "$1" in
         show_help
         exit 0
         ;;
+    --version|-v|version)
+        echo "FPSHUD v1.3.0 (ISO C++26 Low-Overhead Vulkan/OpenGL Overlay)"
+        exit 0
+        ;;
     --status|-c|status|check)
         check_status
         exit 0

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "config.hpp"
+#include <atomic>
 #include <bitset>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 struct ImGuiIO;
@@ -103,11 +105,39 @@ private:
   KeybindTarget capture_target_ = KeybindTarget::None;
   uint32_t capture_mod_key_ = 0;
 
-  // Dynamic X11 fallback state
+  // Dynamic X11 fallback state & asynchronous worker thread
   void* x11_lib_ = nullptr;
   void* x11_display_ = nullptr;
   bool x11_attempted_ = false;
   char prev_x11_keymap_[32] = {0};
+
+  using PFN_XQueryKeymap = int (*)(void*, char[32]);
+  using PFN_XDefaultRootWindow = unsigned long (*)(void*);
+  using PFN_XQueryPointer = int (*)(void*, unsigned long, unsigned long*, unsigned long*, int*,
+                                    int*, int*, int*, unsigned int*);
+  using PFN_XCloseDisplay = int (*)(void*);
+
+  PFN_XQueryKeymap fn_xquery_keymap_ = nullptr;
+  PFN_XDefaultRootWindow fn_xdefault_root_ = nullptr;
+  PFN_XQueryPointer fn_xquery_pointer_ = nullptr;
+  PFN_XCloseDisplay fn_xclose_display_ = nullptr;
+
+  struct PendingKeyEvent {
+    uint32_t code = 0;
+    bool down = false;
+  };
+  std::atomic<bool> x11_worker_running_{false};
+  std::thread x11_worker_thread_;
+  mutable std::mutex x11_dpy_mutex_;
+  mutable std::mutex x11_event_mutex_;
+  std::vector<PendingKeyEvent> pending_key_events_;
+  std::atomic<float> x11_cursor_x_{-1.0f};
+  std::atomic<float> x11_cursor_y_{-1.0f};
+  std::atomic<bool> x11_mouse_down_[3]{false, false, false};
+  std::atomic<bool> x11_gui_active_{false};
+
+  void x11_worker_loop();
+  void stop_x11_worker();
 
   // Dynamic Wayland client state (100% sudo-free in-process)
   mutable std::recursive_mutex wayland_mutex_;

@@ -244,6 +244,10 @@ public:
   // Active GPU binding & rendering API VRAM reporting
   void notify_active_gpu(uint32_t vendor_id, uint32_t device_id);
   void update_api_vram_info(uint64_t used_bytes, uint64_t total_bytes) noexcept;
+  [[nodiscard]] bool needs_api_vram_query() const noexcept {
+    uint32_t idx = active_hw_buf_.load(std::memory_order_relaxed);
+    return hw_buffers_[idx].gpu_vram_total_gb <= 0.0f;
+  }
 
 private:
   void worker_loop();
@@ -419,9 +423,10 @@ private:
   float bench_max_cpu_power_w_ = 0.0f;
   BenchmarkSummary last_bench_summary_{};
 
-  // Hardware telemetry state (updated by background thread every 500ms)
-  mutable std::mutex data_mutex_;
-  TelemetryData hw_data_{};
+  // Lock-free double-buffered hardware telemetry snapshot (zero render-thread mutex contention)
+  std::array<TelemetryData, 2> hw_buffers_{};
+  std::atomic<uint32_t> active_hw_buf_{0};
+  TelemetryData staging_hw_data_{};
 
   std::atomic<bool> running_{false};
   std::thread worker_thread_;

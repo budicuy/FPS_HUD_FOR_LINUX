@@ -82,6 +82,10 @@ struct DeviceData {
   PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR = nullptr;
   PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
   PFN_vkQueueSubmit QueueSubmit = nullptr;
+  PFN_vkQueueSubmit2 QueueSubmit2 = nullptr;
+  PFN_vkQueueSubmit2KHR QueueSubmit2KHR = nullptr;
+  std::mutex queue_mutex;
+  PFN_vkQueueWaitIdle QueueWaitIdle = nullptr;
   PFN_vkDeviceWaitIdle DeviceWaitIdle = nullptr;
 
   PFN_vkCreateRenderPass CreateRenderPass = nullptr;
@@ -1100,6 +1104,9 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     LOAD_DEV_FN(GetSwapchainImagesKHR);
     LOAD_DEV_FN(QueuePresentKHR);
     LOAD_DEV_FN(QueueSubmit);
+    LOAD_DEV_FN(QueueSubmit2);
+    LOAD_DEV_FN(QueueSubmit2KHR);
+    LOAD_DEV_FN(QueueWaitIdle);
     LOAD_DEV_FN(DeviceWaitIdle);
     LOAD_DEV_FN(CreateRenderPass);
     LOAD_DEV_FN(DestroyRenderPass);
@@ -1528,6 +1535,98 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(VkDevice device, VkSwapchain
   }
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit(VkQueue queue, uint32_t submitCount,
+                                                const VkSubmitInfo* pSubmits, VkFence fence) {
+  try {
+    if (!queue) return VK_ERROR_INITIALIZATION_FAILED;
+    DeviceData* dd = find_device_data(get_dispatch_key(queue));
+    if (!dd) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      if (!g_device_map.empty()) {
+        dd = g_device_map.begin()->second;
+      }
+    }
+    if (!dd || !dd->QueueSubmit) return VK_ERROR_INITIALIZATION_FAILED;
+
+    std::lock_guard<std::mutex> lock(dd->queue_mutex);
+    return dd->QueueSubmit(queue, submitCount, pSubmits, fence);
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit2(VkQueue queue, uint32_t submitCount,
+                                                 const VkSubmitInfo2* pSubmits, VkFence fence) {
+  try {
+    if (!queue) return VK_ERROR_INITIALIZATION_FAILED;
+    DeviceData* dd = find_device_data(get_dispatch_key(queue));
+    if (!dd) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      if (!g_device_map.empty()) {
+        dd = g_device_map.begin()->second;
+      }
+    }
+    if (!dd) return VK_ERROR_INITIALIZATION_FAILED;
+
+    std::lock_guard<std::mutex> lock(dd->queue_mutex);
+    if (dd->QueueSubmit2) {
+      return dd->QueueSubmit2(queue, submitCount, pSubmits, fence);
+    }
+    if (dd->QueueSubmit2KHR) {
+      return dd->QueueSubmit2KHR(queue, submitCount, pSubmits, fence);
+    }
+    return VK_ERROR_INITIALIZATION_FAILED;
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueSubmit2KHR(VkQueue queue, uint32_t submitCount,
+                                                    const VkSubmitInfo2KHR* pSubmits,
+                                                    VkFence fence) {
+  try {
+    if (!queue) return VK_ERROR_INITIALIZATION_FAILED;
+    DeviceData* dd = find_device_data(get_dispatch_key(queue));
+    if (!dd) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      if (!g_device_map.empty()) {
+        dd = g_device_map.begin()->second;
+      }
+    }
+    if (!dd) return VK_ERROR_INITIALIZATION_FAILED;
+
+    std::lock_guard<std::mutex> lock(dd->queue_mutex);
+    if (dd->QueueSubmit2KHR) {
+      return dd->QueueSubmit2KHR(queue, submitCount, pSubmits, fence);
+    }
+    if (dd->QueueSubmit2) {
+      return dd->QueueSubmit2(queue, submitCount, pSubmits, fence);
+    }
+    return VK_ERROR_INITIALIZATION_FAILED;
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Hook_QueueWaitIdle(VkQueue queue) {
+  try {
+    if (!queue) return VK_ERROR_INITIALIZATION_FAILED;
+    DeviceData* dd = find_device_data(get_dispatch_key(queue));
+    if (!dd) {
+      std::lock_guard<std::mutex> lock(g_map_mutex);
+      if (!g_device_map.empty()) {
+        dd = g_device_map.begin()->second;
+      }
+    }
+    if (!dd || !dd->QueueWaitIdle) return VK_ERROR_INITIALIZATION_FAILED;
+
+    std::lock_guard<std::mutex> lock(dd->queue_mutex);
+    return dd->QueueWaitIdle(queue);
+  } catch (...) {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
                                                     const VkPresentInfoKHR* pPresentInfo) {
   try {
@@ -1554,9 +1653,11 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
     telemetry.set_render_api("VULKAN");
     telemetry.on_frame();
 
-    // Periodic ~500 ms VRAM usage query (zero runtime heap allocation)
+    // Periodic ~500 ms VRAM usage query (only when needed by telemetry, zero render-thread driver
+    // lock stalls)
     auto now_vram = std::chrono::steady_clock::now();
-    if (now_vram - dd->last_vram_update >= std::chrono::milliseconds(500)) {
+    if (telemetry.needs_api_vram_query() &&
+        (now_vram - dd->last_vram_update >= std::chrono::milliseconds(500))) {
       dd->last_vram_update = now_vram;
       uint64_t total_vram = 0;
       uint64_t used_vram = 0;
@@ -1899,24 +2000,28 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue,
 
     VkQueue target_queue = dd->graphics_queue ? dd->graphics_queue : queue;
     VkResult pres_res = VK_SUCCESS;
-    if (dd->QueueSubmit(target_queue, 1, &submit_info, frame.fence) == VK_SUCCESS) {
-      VkPresentInfoKHR modified_present = *pPresentInfo;
-      modified_present.waitSemaphoreCount = 1;
-      modified_present.pWaitSemaphores = &frame.semaphore;
-      pres_res = dd->QueuePresentKHR(queue, &modified_present);
-    } else {
-      // QueueSubmit failed: frame.fence was reset and remains unsignaled.
-      // Submit an empty batch or recreate in signaled state so future frames do not deadlock
-      VkSubmitInfo empty_sub{};
-      empty_sub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-      if (dd->QueueSubmit(target_queue, 1, &empty_sub, frame.fence) != VK_SUCCESS) {
-        dd->DestroyFence(dd->device, frame.fence, nullptr);
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        dd->CreateFence(dd->device, &fence_info, nullptr, &frame.fence);
+    {
+      std::lock_guard<std::mutex> qlock(dd->queue_mutex);
+      VkResult sub_res = dd->QueueSubmit(target_queue, 1, &submit_info, frame.fence);
+      if (sub_res == VK_SUCCESS) {
+        VkPresentInfoKHR modified_present = *pPresentInfo;
+        modified_present.waitSemaphoreCount = 1;
+        modified_present.pWaitSemaphores = &frame.semaphore;
+        pres_res = dd->QueuePresentKHR(queue, &modified_present);
+      } else {
+        // QueueSubmit failed: frame.fence was reset and remains unsignaled.
+        // Submit an empty batch or recreate in signaled state so future frames do not deadlock
+        VkSubmitInfo empty_sub{};
+        empty_sub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        if (dd->QueueSubmit(target_queue, 1, &empty_sub, frame.fence) != VK_SUCCESS) {
+          dd->DestroyFence(dd->device, frame.fence, nullptr);
+          VkFenceCreateInfo fence_info{};
+          fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+          fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+          dd->CreateFence(dd->device, &fence_info, nullptr, &frame.fence);
+        }
+        pres_res = dd->QueuePresentKHR(queue, pPresentInfo);
       }
-      pres_res = dd->QueuePresentKHR(queue, pPresentInfo);
     }
 
     fpshud::RecorderController::instance().sync_replay_state(cfg, w, h);
@@ -1960,6 +2065,14 @@ vkGetDeviceProcAddr(VkDevice device, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
+    if (std::strcmp(pName, "vkQueueSubmit") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit);
+    if (std::strcmp(pName, "vkQueueSubmit2") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit2);
+    if (std::strcmp(pName, "vkQueueSubmit2KHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit2KHR);
+    if (std::strcmp(pName, "vkQueueWaitIdle") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueWaitIdle);
 
     if (!device) return nullptr;
 
@@ -2009,6 +2122,14 @@ vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueuePresentKHR);
+    if (std::strcmp(pName, "vkQueueSubmit") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit);
+    if (std::strcmp(pName, "vkQueueSubmit2") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit2);
+    if (std::strcmp(pName, "vkQueueSubmit2KHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueSubmit2KHR);
+    if (std::strcmp(pName, "vkQueueWaitIdle") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&Hook_QueueWaitIdle);
 
     if (!instance) return nullptr;
 

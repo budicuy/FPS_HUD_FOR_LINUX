@@ -3,6 +3,8 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -42,8 +44,6 @@ struct NvmlMemory {
 constexpr int NVML_TEMPERATURE_GPU = 0;
 constexpr int NVML_CLOCK_GRAPHICS = 0;
 constexpr int NVML_CLOCK_MEM = 2;
-constexpr int NVML_PCIE_UTIL_TX_BYTES = 0;
-constexpr int NVML_PCIE_UTIL_RX_BYTES = 1;
 
 #ifndef SYS_getdents64
 #ifdef __NR_getdents64
@@ -362,11 +362,11 @@ bool TelemetryCollector::init_intel_level_zero() {
 
   gpu_backend_ = GpuBackendType::IntelLevelZero;
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.gpu_available = true;
-    std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "Intel");
-    std::snprintf(hw_data_.gpu_name, sizeof(hw_data_.gpu_name), "Intel Arc / Xe Graphics");
-    std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version),
+    staging_hw_data_.gpu_available = true;
+    std::snprintf(staging_hw_data_.gpu_vendor, sizeof(staging_hw_data_.gpu_vendor), "Intel");
+    std::snprintf(staging_hw_data_.gpu_name, sizeof(staging_hw_data_.gpu_name),
+                  "Intel Arc / Xe Graphics");
+    std::snprintf(staging_hw_data_.gpu_driver_version, sizeof(staging_hw_data_.gpu_driver_version),
                   "Level Zero Sysman");
 
     if (ze_dispatch_.zesDeviceGetProperties) {
@@ -374,11 +374,12 @@ bool TelemetryCollector::init_intel_level_zero() {
       props.stype = 0x1;
       if (ze_dispatch_.zesDeviceGetProperties(ze_device_, &props) == intel_ze::ZE_RESULT_SUCCESS) {
         if (props.modelName[0] != '\0') {
-          clean_hardware_name(props.modelName, hw_data_.gpu_name, sizeof(hw_data_.gpu_name));
+          clean_hardware_name(props.modelName, staging_hw_data_.gpu_name,
+                              sizeof(staging_hw_data_.gpu_name));
         }
         if (props.driverVersion[0] != '\0') {
-          std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s",
-                        props.driverVersion);
+          std::snprintf(staging_hw_data_.gpu_driver_version,
+                        sizeof(staging_hw_data_.gpu_driver_version), "%s", props.driverVersion);
         }
       }
     }
@@ -394,8 +395,7 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
   if (ze_freq_ && ze_dispatch_.zesFrequencyGetState) {
     intel_ze::zes_freq_state_t fstate{};
     if (ze_dispatch_.zesFrequencyGetState(ze_freq_, &fstate) == intel_ze::ZE_RESULT_SUCCESS) {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      hw_data_.gpu_clock_mhz = static_cast<int>(fstate.actual);
+      staging_hw_data_.gpu_clock_mhz = static_cast<int>(fstate.actual);
     }
   }
 
@@ -403,8 +403,7 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
   if (ze_temp_ && ze_dispatch_.zesTemperatureGetState) {
     double temp_val = 0.0;
     if (ze_dispatch_.zesTemperatureGetState(ze_temp_, &temp_val) == intel_ze::ZE_RESULT_SUCCESS) {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      hw_data_.gpu_temp_c = static_cast<int>(temp_val + 0.5);
+      staging_hw_data_.gpu_temp_c = static_cast<int>(temp_val + 0.5);
     }
   }
 
@@ -417,9 +416,8 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
       float total_gb = static_cast<float>(mstate.size) * kBytesToGb;
       uint64_t used_bytes = (mstate.size > mstate.free) ? (mstate.size - mstate.free) : 0;
       float used_gb = static_cast<float>(used_bytes) * kBytesToGb;
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      hw_data_.gpu_vram_total_gb = total_gb;
-      hw_data_.gpu_vram_used_gb = used_gb;
+      staging_hw_data_.gpu_vram_total_gb = total_gb;
+      staging_hw_data_.gpu_vram_used_gb = used_gb;
     }
   }
 
@@ -432,8 +430,7 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
         uint64_t d_time = pwr.timestamp - prev_ze_pwr_ts_;     // microseconds
         if (d_time > 0) {
           float watts = static_cast<float>(d_energy) / static_cast<float>(d_time);
-          std::lock_guard<std::mutex> lock(data_mutex_);
-          hw_data_.gpu_power_w = std::clamp(watts, 0.0f, 1000.0f);
+          staging_hw_data_.gpu_power_w = std::clamp(watts, 0.0f, 1000.0f);
         }
       }
       prev_ze_pwr_energy_ = pwr.energy;
@@ -450,8 +447,7 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
         uint64_t d_time = stats.timestamp - prev_ze_eng_ts_;
         if (d_time > 0) {
           float load = 100.0f * static_cast<float>(d_active) / static_cast<float>(d_time);
-          std::lock_guard<std::mutex> lock(data_mutex_);
-          hw_data_.gpu_load_pct = std::clamp(load, 0.0f, 100.0f);
+          staging_hw_data_.gpu_load_pct = std::clamp(load, 0.0f, 100.0f);
         }
       }
       prev_ze_eng_active_ = stats.activeTime;
@@ -480,25 +476,25 @@ void TelemetryCollector::poll_intel_level_zero_gpu() {
     }
   }
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (mclk_mhz > 0) hw_data_.gpu_vram_clock_mhz = mclk_mhz;
-    if (fan_pct >= 0) hw_data_.gpu_fan_pct = fan_pct;
-    int eff_clk =
-        (hw_data_.gpu_vram_clock_mhz > 0) ? hw_data_.gpu_vram_clock_mhz : hw_data_.gpu_clock_mhz;
+    if (mclk_mhz > 0) staging_hw_data_.gpu_vram_clock_mhz = mclk_mhz;
+    if (fan_pct >= 0) staging_hw_data_.gpu_fan_pct = fan_pct;
+    int eff_clk = (staging_hw_data_.gpu_vram_clock_mhz > 0) ? staging_hw_data_.gpu_vram_clock_mhz
+                                                            : staging_hw_data_.gpu_clock_mhz;
     if (eff_clk > 0) {
-      float bus_bytes = (hw_data_.gpu_vram_total_gb >= 14.5f)
+      float bus_bytes = (staging_hw_data_.gpu_vram_total_gb >= 14.5f)
                             ? 32.0f
-                            : ((hw_data_.gpu_vram_total_gb >= 10.5f) ? 24.0f : 16.0f);
-      float mult = (hw_data_.gpu_vram_clock_mhz > 0) ? 2.0f : 1.0f;
-      hw_data_.gpu_max_bandwidth_gbs = (static_cast<float>(eff_clk) * mult * bus_bytes) / 1000.0f;
-      float util_ratio =
-          (hw_data_.gpu_load_pct > 0.0f)
-              ? (hw_data_.gpu_load_pct / 100.0f)
-              : ((hw_data_.gpu_vram_total_gb > 0.0f)
-                     ? std::clamp(hw_data_.gpu_vram_used_gb / hw_data_.gpu_vram_total_gb, 0.05f,
-                                  1.0f)
-                     : 0.1f);
-      hw_data_.gpu_bandwidth_gbs = hw_data_.gpu_max_bandwidth_gbs * util_ratio;
+                            : ((staging_hw_data_.gpu_vram_total_gb >= 10.5f) ? 24.0f : 16.0f);
+      float mult = (staging_hw_data_.gpu_vram_clock_mhz > 0) ? 2.0f : 1.0f;
+      staging_hw_data_.gpu_max_bandwidth_gbs =
+          (static_cast<float>(eff_clk) * mult * bus_bytes) / 1000.0f;
+      float util_ratio = (staging_hw_data_.gpu_load_pct > 0.0f)
+                             ? (staging_hw_data_.gpu_load_pct / 100.0f)
+                             : ((staging_hw_data_.gpu_vram_total_gb > 0.0f)
+                                    ? std::clamp(staging_hw_data_.gpu_vram_used_gb /
+                                                     staging_hw_data_.gpu_vram_total_gb,
+                                                 0.05f, 1.0f)
+                                    : 0.1f);
+      staging_hw_data_.gpu_bandwidth_gbs = staging_hw_data_.gpu_max_bandwidth_gbs * util_ratio;
     }
   }
 }
@@ -542,8 +538,8 @@ void TelemetryCollector::init_cpu_sensors() {
           auto colon = line.find(':');
           if (colon != std::string::npos) {
             std::string raw_name = line.substr(colon + 1);
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            clean_hardware_name(raw_name.c_str(), hw_data_.cpu_name, sizeof(hw_data_.cpu_name));
+            clean_hardware_name(raw_name.c_str(), staging_hw_data_.cpu_name,
+                                sizeof(staging_hw_data_.cpu_name));
             break;
           }
         }
@@ -835,21 +831,21 @@ void TelemetryCollector::init_gpu_sensors_locked() {
         nvml_device_ = best_handle;
         if (nvml_device_) {
           gpu_backend_ = GpuBackendType::NvidiaNvml;
-          std::lock_guard<std::mutex> lock(data_mutex_);
-          hw_data_.gpu_available = true;
-          std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "NVIDIA");
+          staging_hw_data_.gpu_available = true;
+          std::snprintf(staging_hw_data_.gpu_vendor, sizeof(staging_hw_data_.gpu_vendor), "NVIDIA");
 
           if (pfn_nvmlDeviceGetName_) {
             char raw_gpu[96] = {0};
             if (pfn_nvmlDeviceGetName_(nvml_device_, raw_gpu, sizeof(raw_gpu)) == NVML_SUCCESS) {
-              clean_hardware_name(raw_gpu, hw_data_.gpu_name, sizeof(hw_data_.gpu_name));
+              clean_hardware_name(raw_gpu, staging_hw_data_.gpu_name,
+                                  sizeof(staging_hw_data_.gpu_name));
             }
           }
           if (pfn_nvmlSystemGetDriverVersion_) {
             char drv[32] = {0};
             if (pfn_nvmlSystemGetDriverVersion_(drv, sizeof(drv)) == NVML_SUCCESS) {
-              std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s",
-                            drv);
+              std::snprintf(staging_hw_data_.gpu_driver_version,
+                            sizeof(staging_hw_data_.gpu_driver_version), "%s", drv);
             }
           }
           unsigned int bw_bits = 0;
@@ -963,24 +959,24 @@ void TelemetryCollector::init_gpu_sensors_locked() {
     gpu_backend_ = GpuBackendType::AmdSysfs;  // generic DRM sysfs for Nouveau
 
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.gpu_available = true;
-    std::snprintf(hw_data_.gpu_vendor, sizeof(hw_data_.gpu_vendor), "%s",
+    staging_hw_data_.gpu_available = true;
+    std::snprintf(staging_hw_data_.gpu_vendor, sizeof(staging_hw_data_.gpu_vendor), "%s",
                   is_amd ? "AMD" : (is_intel ? "Intel" : (is_nvidia ? "NVIDIA" : "Unknown")));
-    std::snprintf(hw_data_.gpu_name, sizeof(hw_data_.gpu_name), "%s",
+    std::snprintf(staging_hw_data_.gpu_name, sizeof(staging_hw_data_.gpu_name), "%s",
                   is_amd
                       ? "Radeon GPU"
                       : (is_intel ? "Intel Graphics" : (is_nvidia ? "NVIDIA GPU" : "Generic GPU")));
-    std::snprintf(hw_data_.gpu_driver_version, sizeof(hw_data_.gpu_driver_version), "%s",
+    std::snprintf(staging_hw_data_.gpu_driver_version, sizeof(staging_hw_data_.gpu_driver_version),
+                  "%s",
                   is_amd ? "amdgpu" : (is_intel ? "i915/xe" : (is_nvidia ? "nouveau" : "drm")));
 
     // 1. Check sysfs product_name first
     if (read_sysfs_buf((dev_dir / "product_name").c_str(), buf, sizeof(buf)) && buf[0] != '\0') {
-      clean_hardware_name(buf, hw_data_.gpu_name, sizeof(hw_data_.gpu_name));
+      clean_hardware_name(buf, staging_hw_data_.gpu_name, sizeof(staging_hw_data_.gpu_name));
     } else if (!best_device_id.empty()) {
       // 2. Fallback: Resolve exact marketing name via PCI ID database (/usr/share/hwdata/pci.ids)
-      lookup_pci_device_name(best_vendor_id.c_str(), best_device_id.c_str(), hw_data_.gpu_name,
-                             sizeof(hw_data_.gpu_name));
+      lookup_pci_device_name(best_vendor_id.c_str(), best_device_id.c_str(),
+                             staging_hw_data_.gpu_name, sizeof(staging_hw_data_.gpu_name));
     }
   }
 
@@ -1584,8 +1580,10 @@ const char* detect_effective_render_api(const char* base_api, const char* maps_p
     }
     if (contains_icase(line, "dxvk") || contains_icase(line, "d3d11.dll")) {
       has_dx11 = true;
+      break;
     } else if (contains_icase(line, "d3d9.dll")) {
       has_dx9 = true;
+      break;
     }
   }
   std::fclose(fp);
@@ -1599,8 +1597,8 @@ const char* detect_effective_render_api(const char* base_api, const char* maps_p
 TelemetryData TelemetryCollector::get_snapshot() const {
   TelemetryData out;
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    out = hw_data_;
+    uint32_t idx = active_hw_buf_.load(std::memory_order_acquire);
+    out = hw_buffers_[idx];
   }
   const char* base_api = active_api_.load(std::memory_order_relaxed);
   const char* trans_api = translated_api_.load(std::memory_order_relaxed);
@@ -1642,6 +1640,10 @@ void TelemetryCollector::poll_once_sync() {
   poll_disk_temp();
   poll_net_speed();
   poll_local_clock();
+
+  uint32_t next_idx = 1 - active_hw_buf_.load(std::memory_order_relaxed);
+  hw_buffers_[next_idx] = staging_hw_data_;
+  active_hw_buf_.store(next_idx, std::memory_order_release);
 }
 
 void TelemetryCollector::notify_active_gpu(uint32_t vendor_id, uint32_t device_id) {
@@ -1670,6 +1672,11 @@ void TelemetryCollector::update_api_vram_info(uint64_t used_bytes, uint64_t tota
 }
 
 void TelemetryCollector::worker_loop() {
+#if defined(__linux__)
+  pthread_setname_np(pthread_self(), "fpshud_telem");
+  // Set nice +10 to guarantee game engine and render threads take scheduling priority
+  setpriority(PRIO_PROCESS, 0, 10);
+#endif
   while (running_.load(std::memory_order_relaxed)) {
     poll_once_sync();
     for (int i = 0; i < 10 && running_.load(std::memory_order_relaxed); ++i) {
@@ -1685,6 +1692,7 @@ void TelemetryCollector::poll_local_clock() {
   char buf[8];
   std::strftime(buf, sizeof(buf), "%H:%M", &tm_buf);
   if (!translated_api_cached_.load(std::memory_order_relaxed)) {
+    static int s_map_scan_attempts = 0;
     std::string maps_path =
         root_prefix_.empty() ? "/proc/self/maps" : (root_prefix_ + "/proc/self/maps");
     const char* detected = detect_effective_render_api("VULKAN", maps_path.c_str());
@@ -1693,10 +1701,13 @@ void TelemetryCollector::poll_local_clock() {
       translated_api_cached_.store(true, std::memory_order_relaxed);
     } else {
       translated_api_.store("VULKAN", std::memory_order_relaxed);
+      if (++s_map_scan_attempts >= 3) {
+        // After 3 initial attempts (~1.5s), permanently freeze and stop reading /proc/self/maps
+        translated_api_cached_.store(true, std::memory_order_relaxed);
+      }
     }
   }
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  std::memcpy(hw_data_.local_time_str, buf, sizeof(hw_data_.local_time_str));
+  std::memcpy(staging_hw_data_.local_time_str, buf, sizeof(staging_hw_data_.local_time_str));
 }
 
 void TelemetryCollector::init_battery_sensors() {
@@ -1710,8 +1721,7 @@ void TelemetryCollector::init_battery_sensors() {
 
   std::string power_dir = root_prefix_ + "/sys/class/power_supply";
   if (!fs::exists(power_dir, ec)) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.battery_available = false;
+    staging_hw_data_.battery_available = false;
     return;
   }
 
@@ -1758,8 +1768,7 @@ void TelemetryCollector::init_battery_sensors() {
     }
   }
 
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.battery_available = battery_discovered_;
+  staging_hw_data_.battery_available = battery_discovered_;
 }
 
 void TelemetryCollector::poll_battery() {
@@ -1800,12 +1809,12 @@ void TelemetryCollector::poll_battery() {
     }
   }
 
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.battery_available = true;
-  hw_data_.battery_pct = cap_pct;
-  hw_data_.battery_power_w = power_w;
-  hw_data_.battery_charging = is_charging;
-  std::snprintf(hw_data_.battery_status, sizeof(hw_data_.battery_status), "%s", status_str);
+  staging_hw_data_.battery_available = true;
+  staging_hw_data_.battery_pct = cap_pct;
+  staging_hw_data_.battery_power_w = power_w;
+  staging_hw_data_.battery_charging = is_charging;
+  std::snprintf(staging_hw_data_.battery_status, sizeof(staging_hw_data_.battery_status), "%s",
+                status_str);
 }
 
 void TelemetryCollector::init_storage_sensors() {
@@ -1837,8 +1846,7 @@ void TelemetryCollector::init_storage_sensors() {
     }
   }
 
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.disk_temp_available = !disk_temp_path_.empty();
+  staging_hw_data_.disk_temp_available = !disk_temp_path_.empty();
 }
 
 void TelemetryCollector::poll_disk_temp() {
@@ -1849,9 +1857,8 @@ void TelemetryCollector::poll_disk_temp() {
   long millideg = std::strtol(buf, nullptr, 10);
   int temp_c = static_cast<int>((millideg + 500) / 1000);
   if (temp_c > -20 && temp_c < 130) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.disk_temp_available = true;
-    hw_data_.disk_temp_c = temp_c;
+    staging_hw_data_.disk_temp_available = true;
+    staging_hw_data_.disk_temp_c = temp_c;
   }
 }
 
@@ -1934,9 +1941,8 @@ void TelemetryCollector::poll_disk_io() {
   prev_disk_write_sectors_ = total_write_sectors;
   prev_disk_poll_time_ = now;
 
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.disk_read_mbs = read_mbs;
-  hw_data_.disk_write_mbs = write_mbs;
+  staging_hw_data_.disk_read_mbs = read_mbs;
+  staging_hw_data_.disk_write_mbs = write_mbs;
 }
 
 void TelemetryCollector::poll_net_speed() {
@@ -1998,9 +2004,8 @@ void TelemetryCollector::poll_net_speed() {
   prev_net_tx_bytes_ = total_tx;
   prev_net_poll_time_ = now;
 
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.net_rx_mbs = rx_mbs;
-  hw_data_.net_tx_mbs = tx_mbs;
+  staging_hw_data_.net_rx_mbs = rx_mbs;
+  staging_hw_data_.net_tx_mbs = tx_mbs;
 }
 
 void TelemetryCollector::poll_cpu_load() {
@@ -2037,8 +2042,7 @@ void TelemetryCollector::poll_cpu_load() {
             uint64_t busy_d = (total_d > idle_d) ? (total_d - idle_d) : 0;
             float usage = std::clamp(
                 100.0f * static_cast<float>(busy_d) / static_cast<float>(total_d), 0.0f, 100.0f);
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            hw_data_.cpu_load_pct = usage;
+            staging_hw_data_.cpu_load_pct = usage;
           }
           prev_cpu_total_ = total;
           prev_cpu_idle_ = idle_all;
@@ -2080,11 +2084,10 @@ void TelemetryCollector::poll_cpu_load() {
   }
 
   if (max_core_seen > 0) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.cpu_core_count = std::max(hw_data_.cpu_core_count, max_core_seen);
+    staging_hw_data_.cpu_core_count = std::max(staging_hw_data_.cpu_core_count, max_core_seen);
     for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
       if (core_updated.test(i)) {
-        hw_data_.cpu_core_loads_pct[i] = core_loads[i];
+        staging_hw_data_.cpu_core_loads_pct[i] = core_loads[i];
       }
     }
   }
@@ -2095,34 +2098,75 @@ void TelemetryCollector::poll_cpu_clock() {
   int max_core_seen = 0;
   std::array<uint16_t, TelemetryData::kMaxCpuCores> core_clocks{};
   std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
-  char buf[32];
-  char path_buf[512];
-  for (const auto& sensor : cpu_freq_sensors_) {
-    int n_len = std::snprintf(path_buf, sizeof(path_buf),
-                              sensor.use_cpuinfo
-                                  ? "%s/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_cur_freq"
-                                  : "%s/sys/devices/system/cpu/cpu%u/cpufreq/scaling_cur_freq",
-                              root_prefix_.c_str(), static_cast<unsigned>(sensor.cpu_id));
-    if (n_len <= 0 || static_cast<size_t>(n_len) >= sizeof(path_buf)) continue;
-    if (read_sysfs_buf(path_buf, buf, sizeof(buf))) {
-      long khz = std::strtol(buf, nullptr, 10);
-      int mhz = static_cast<int>((khz + 500) / 1000);
-      if (mhz > max_mhz) max_mhz = mhz;
-      if (sensor.cpu_id < TelemetryData::kMaxCpuCores) {
-        core_clocks[sensor.cpu_id] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
-        core_updated.set(sensor.cpu_id);
-        max_core_seen = std::max(max_core_seen, static_cast<int>(sensor.cpu_id) + 1);
+
+  // 1. Fast path: parse /proc/cpuinfo in a single file read (zero IPI interrupts to CPU cores)
+  std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
+  int fd = open(cpuinfo_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    char buf[16384];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n > 0) {
+      buf[n] = '\0';
+      int cur_processor = -1;
+      const char* p = buf;
+      while (*p) {
+        if (std::strncmp(p, "processor", 9) == 0) {
+          const char* colon = std::strchr(p, ':');
+          if (colon) {
+            cur_processor = std::atoi(colon + 1);
+          }
+        } else if (std::strncmp(p, "cpu MHz", 7) == 0 && cur_processor >= 0) {
+          const char* colon = std::strchr(p, ':');
+          if (colon) {
+            float mhz_f = std::strtof(colon + 1, nullptr);
+            int mhz = static_cast<int>(mhz_f + 0.5f);
+            if (mhz > max_mhz) max_mhz = mhz;
+            if (cur_processor < static_cast<int>(TelemetryData::kMaxCpuCores)) {
+              core_clocks[cur_processor] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
+              core_updated.set(cur_processor);
+              max_core_seen = std::max(max_core_seen, cur_processor + 1);
+            }
+          }
+        }
+        const char* next = std::strchr(p, '\n');
+        if (!next) break;
+        p = next + 1;
+      }
+    }
+  }
+
+  // 2. Fallback to sysfs if cpu MHz was not in /proc/cpuinfo (e.g. mock directories or
+  // architectures)
+  if (max_mhz <= 0 && max_core_seen <= 0) {
+    char buf[32];
+    char path_buf[512];
+    for (const auto& sensor : cpu_freq_sensors_) {
+      int n_len = std::snprintf(path_buf, sizeof(path_buf),
+                                sensor.use_cpuinfo
+                                    ? "%s/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_cur_freq"
+                                    : "%s/sys/devices/system/cpu/cpu%u/cpufreq/scaling_cur_freq",
+                                root_prefix_.c_str(), static_cast<unsigned>(sensor.cpu_id));
+      if (n_len <= 0 || static_cast<size_t>(n_len) >= sizeof(path_buf)) continue;
+      if (read_sysfs_buf(path_buf, buf, sizeof(buf))) {
+        long khz = std::strtol(buf, nullptr, 10);
+        int mhz = static_cast<int>((khz + 500) / 1000);
+        if (mhz > max_mhz) max_mhz = mhz;
+        if (sensor.cpu_id < TelemetryData::kMaxCpuCores) {
+          core_clocks[sensor.cpu_id] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
+          core_updated.set(sensor.cpu_id);
+          max_core_seen = std::max(max_core_seen, static_cast<int>(sensor.cpu_id) + 1);
+        }
       }
     }
   }
 
   if (max_mhz > 0 || max_core_seen > 0) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (max_mhz > 0) hw_data_.cpu_clock_mhz = max_mhz;
-    hw_data_.cpu_core_count = std::max(hw_data_.cpu_core_count, max_core_seen);
+    if (max_mhz > 0) staging_hw_data_.cpu_clock_mhz = max_mhz;
+    staging_hw_data_.cpu_core_count = std::max(staging_hw_data_.cpu_core_count, max_core_seen);
     for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
       if (core_updated.test(i)) {
-        hw_data_.cpu_core_clocks_mhz[i] = core_clocks[i];
+        staging_hw_data_.cpu_core_clocks_mhz[i] = core_clocks[i];
       }
     }
   }
@@ -2135,10 +2179,7 @@ void TelemetryCollector::poll_cpu_temp() {
 
   long millideg = std::strtol(buf, nullptr, 10);
   int temp_c = static_cast<int>((millideg + 500) / 1000);
-  {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.cpu_temp_c = temp_c;
-  }
+  staging_hw_data_.cpu_temp_c = temp_c;
   if (bench_active_.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> block(bench_mutex_);
     if (temp_c > bench_max_cpu_temp_c_) bench_max_cpu_temp_c_ = temp_c;
@@ -2183,13 +2224,8 @@ void TelemetryCollector::poll_cpu_power() {
   // Active when RAPL energy_uj is locked (0400) and no hwmon power counter exists (e.g. Intel
   // coretemp)
   if (watts < 0.0f && energy_path.empty() && cpu_hwmon_power_uw_path_.empty()) {
-    float load_ratio = 0.0f;
-    int cur_mhz = 0;
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      load_ratio = std::clamp(hw_data_.cpu_load_pct / 100.0f, 0.0f, 1.0f);
-      cur_mhz = hw_data_.cpu_clock_mhz;
-    }
+    float load_ratio = std::clamp(staging_hw_data_.cpu_load_pct / 100.0f, 0.0f, 1.0f);
+    int cur_mhz = staging_hw_data_.cpu_clock_mhz;
     float freq_ratio = 1.0f;
     if (cur_mhz > 0 && cpu_max_freq_mhz_ > 0) {
       freq_ratio = std::clamp(static_cast<float>(cur_mhz) / static_cast<float>(cpu_max_freq_mhz_),
@@ -2201,10 +2237,7 @@ void TelemetryCollector::poll_cpu_power() {
   }
 
   if (watts >= 0.0f && watts < 500.0f) {
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      hw_data_.cpu_power_w = watts;
-    }
+    staging_hw_data_.cpu_power_w = watts;
     if (bench_active_.load(std::memory_order_relaxed)) {
       std::lock_guard<std::mutex> block(bench_mutex_);
       if (watts > bench_max_cpu_power_w_) bench_max_cpu_power_w_ = watts;
@@ -2244,30 +2277,43 @@ void TelemetryCollector::poll_ram() {
     uint64_t used_kb = (mem_total_kb > mem_avail_kb) ? (mem_total_kb - mem_avail_kb) : 0;
     uint64_t swap_used_kb = (swap_total_kb > swap_free_kb) ? (swap_total_kb - swap_free_kb) : 0;
     constexpr float kKbPerGb = 1024.0f * 1024.0f;
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.ram_total_gb = static_cast<float>(mem_total_kb) / kKbPerGb;
-    hw_data_.ram_used_gb = static_cast<float>(used_kb) / kKbPerGb;
-    hw_data_.ram_used_pct = 100.0f * static_cast<float>(used_kb) / static_cast<float>(mem_total_kb);
-    hw_data_.swap_total_gb = static_cast<float>(swap_total_kb) / kKbPerGb;
-    hw_data_.swap_used_gb = static_cast<float>(swap_used_kb) / kKbPerGb;
+    staging_hw_data_.ram_total_gb = static_cast<float>(mem_total_kb) / kKbPerGb;
+    staging_hw_data_.ram_used_gb = static_cast<float>(used_kb) / kKbPerGb;
+    staging_hw_data_.ram_used_pct =
+        100.0f * static_cast<float>(used_kb) / static_cast<float>(mem_total_kb);
+    staging_hw_data_.swap_total_gb = static_cast<float>(swap_total_kb) / kKbPerGb;
+    staging_hw_data_.swap_used_gb = static_cast<float>(swap_used_kb) / kKbPerGb;
   }
 }
 
 void TelemetryCollector::poll_game_ram() {
-  // /proc/self/status of the hooked game process (VmRSS = resident physical memory)
+  // Fast path: /proc/self/statm (single line: size resident shared text lib data dirty)
+  std::string statm_path = root_prefix_ + "/proc/self/statm";
+  char buf[128];
+  if (read_sysfs_buf(statm_path.c_str(), buf, sizeof(buf))) {
+    unsigned long size = 0;
+    unsigned long resident = 0;
+    if (std::sscanf(buf, "%lu %lu", &size, &resident) == 2) {
+      static const long s_page_size = sysconf(_SC_PAGESIZE);
+      double bytes = static_cast<double>(resident) * (s_page_size > 0 ? s_page_size : 4096);
+      staging_hw_data_.game_ram_gb = static_cast<float>(bytes / (1024.0 * 1024.0 * 1024.0));
+      return;
+    }
+  }
+
+  // Fallback: /proc/self/status VmRSS
   std::string status_path = root_prefix_ + "/proc/self/status";
   int fd = open(status_path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return;
-  char buf[4096];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  char sbuf[4096];
+  ssize_t n = read(fd, sbuf, sizeof(sbuf) - 1);
   close(fd);
   if (n <= 0) return;
-  buf[n] = '\0';
+  sbuf[n] = '\0';
 
-  if (const char* p = std::strstr(buf, "VmRSS:")) {
+  if (const char* p = std::strstr(sbuf, "VmRSS:")) {
     uint64_t rss_kb = std::strtoull(p + 6, nullptr, 10);
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.game_ram_gb = static_cast<float>(rss_kb) / (1024.0f * 1024.0f);
+    staging_hw_data_.game_ram_gb = static_cast<float>(rss_kb) / (1024.0f * 1024.0f);
   }
 }
 
@@ -2282,8 +2328,7 @@ void TelemetryCollector::poll_mem_pressure() {
       some_avg10 = std::clamp(v, 0.0f, 100.0f);
     }
   }
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  hw_data_.mem_psi_some_pct = some_avg10;
+  staging_hw_data_.mem_psi_some_pct = some_avg10;
 }
 
 void TelemetryCollector::poll_gpu() {
@@ -2308,8 +2353,6 @@ void TelemetryCollector::poll_nvidia_gpu() {
   unsigned int power_mw = 0;
   unsigned int gr_clock_mhz = 0;
   unsigned int mem_clock_mhz = 0;
-  unsigned int pcie_tx_kb = 0;
-  unsigned int pcie_rx_kb = 0;
 
   bool ok_util = pfn_nvmlDeviceGetUtilizationRates_ &&
                  (pfn_nvmlDeviceGetUtilizationRates_(nvml_device_, &util) == NVML_SUCCESS);
@@ -2329,44 +2372,39 @@ void TelemetryCollector::poll_nvidia_gpu() {
       pfn_nvmlDeviceGetClockInfo_ &&
       (pfn_nvmlDeviceGetClockInfo_(nvml_device_, NVML_CLOCK_MEM, &mem_clock_mhz) == NVML_SUCCESS);
 
-  if (pfn_nvmlDeviceGetPcieThroughput_) {
-    pfn_nvmlDeviceGetPcieThroughput_(nvml_device_, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx_kb);
-    pfn_nvmlDeviceGetPcieThroughput_(nvml_device_, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx_kb);
-  }
-
   float watts = static_cast<float>(power_mw) / 1000.0f;
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.gpu_available = true;
+    staging_hw_data_.gpu_available = true;
     if (ok_util) {
-      hw_data_.gpu_load_pct = static_cast<float>(util.gpu);
+      staging_hw_data_.gpu_load_pct = static_cast<float>(util.gpu);
     }
     if (ok_gr_clk) {
-      hw_data_.gpu_clock_mhz = static_cast<int>(gr_clock_mhz);
+      staging_hw_data_.gpu_clock_mhz = static_cast<int>(gr_clock_mhz);
     }
     if (ok_mem) {
-      hw_data_.gpu_vram_used_gb = static_cast<float>(mem.used) / (1024.0f * 1024.0f * 1024.0f);
-      hw_data_.gpu_vram_total_gb = static_cast<float>(mem.total) / (1024.0f * 1024.0f * 1024.0f);
+      staging_hw_data_.gpu_vram_used_gb =
+          static_cast<float>(mem.used) / (1024.0f * 1024.0f * 1024.0f);
+      staging_hw_data_.gpu_vram_total_gb =
+          static_cast<float>(mem.total) / (1024.0f * 1024.0f * 1024.0f);
     }
     if (ok_mem_clk) {
-      hw_data_.gpu_vram_clock_mhz = static_cast<int>(mem_clock_mhz);
+      staging_hw_data_.gpu_vram_clock_mhz = static_cast<int>(mem_clock_mhz);
       float max_bw_gbs = (static_cast<float>(mem_clock_mhz) * 2.0f *
                           (static_cast<float>(gpu_bus_width_bits_) / 8.0f)) /
                          1000.0f;
-      hw_data_.gpu_max_bandwidth_gbs = max_bw_gbs;
+      staging_hw_data_.gpu_max_bandwidth_gbs = max_bw_gbs;
       float used_vram_bw =
           max_bw_gbs * (ok_util ? (static_cast<float>(util.memory) / 100.0f) : 0.0f);
-      float pcie_bw_gbs = static_cast<float>(pcie_tx_kb + pcie_rx_kb) / (1024.0f * 1024.0f);
-      hw_data_.gpu_bandwidth_gbs = used_vram_bw + pcie_bw_gbs;
+      staging_hw_data_.gpu_bandwidth_gbs = used_vram_bw;
     }
     if (ok_temp) {
-      hw_data_.gpu_temp_c = static_cast<int>(temp_c);
+      staging_hw_data_.gpu_temp_c = static_cast<int>(temp_c);
     }
     if (ok_fan) {
-      hw_data_.gpu_fan_pct = static_cast<int>(fan_pct);
+      staging_hw_data_.gpu_fan_pct = static_cast<int>(fan_pct);
     }
     if (ok_pwr) {
-      hw_data_.gpu_power_w = watts;
+      staging_hw_data_.gpu_power_w = watts;
     }
   }
 
@@ -2536,13 +2574,8 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
       vram_total_gb = static_cast<float>(api_tot) / (1024.0f * 1024.0f * 1024.0f);
       vram_used_gb = static_cast<float>(api_usd) / (1024.0f * 1024.0f * 1024.0f);
     } else {
-      float sys_ram_total = 0.0f;
-      float sys_game_ram = 0.0f;
-      {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        sys_ram_total = hw_data_.ram_total_gb;
-        sys_game_ram = hw_data_.game_ram_gb;
-      }
+      float sys_ram_total = staging_hw_data_.ram_total_gb;
+      float sys_game_ram = staging_hw_data_.game_ram_gb;
       if (sys_ram_total <= 0.0f) {
         char meminfo_path[256];
         if (root_prefix_.empty()) {
@@ -2674,21 +2707,20 @@ void TelemetryCollector::poll_drm_sysfs_gpu() {
 
   int eff_temp = 0;
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    hw_data_.gpu_available = true;
-    hw_data_.gpu_load_pct = load_pct;
-    hw_data_.gpu_clock_mhz = clock_mhz;
-    hw_data_.gpu_vram_clock_mhz = mclk_mhz;
-    hw_data_.gpu_vram_used_gb = vram_used_gb;
-    hw_data_.gpu_vram_total_gb = vram_total_gb;
-    hw_data_.gpu_bandwidth_gbs = bw_gbs;
-    hw_data_.gpu_max_bandwidth_gbs = max_bw_gbs;
+    staging_hw_data_.gpu_available = true;
+    staging_hw_data_.gpu_load_pct = load_pct;
+    staging_hw_data_.gpu_clock_mhz = clock_mhz;
+    staging_hw_data_.gpu_vram_clock_mhz = mclk_mhz;
+    staging_hw_data_.gpu_vram_used_gb = vram_used_gb;
+    staging_hw_data_.gpu_vram_total_gb = vram_total_gb;
+    staging_hw_data_.gpu_bandwidth_gbs = bw_gbs;
+    staging_hw_data_.gpu_max_bandwidth_gbs = max_bw_gbs;
     // On integrated GPUs (same silicon die as CPU), fallback to CPU die temperature if GPU hwmon
     // temp is absent
-    eff_temp = (temp_c > 0) ? temp_c : hw_data_.cpu_temp_c;
-    hw_data_.gpu_temp_c = eff_temp;
-    hw_data_.gpu_fan_pct = fan_pct;
-    hw_data_.gpu_power_w = watts;
+    eff_temp = (temp_c > 0) ? temp_c : staging_hw_data_.cpu_temp_c;
+    staging_hw_data_.gpu_temp_c = eff_temp;
+    staging_hw_data_.gpu_fan_pct = fan_pct;
+    staging_hw_data_.gpu_power_w = watts;
   }
 
   if (bench_active_.load(std::memory_order_relaxed)) {
