@@ -370,6 +370,8 @@ add_executable(fpshud_test_smoke
     tests/suites/test_telemetry_hardware.cpp
     tests/suites/test_telemetry_analytics.cpp
     tests/suites/test_layer_abi.cpp
+    tests/suites/test_recorder_player.cpp
+    tests/suites/test_input.cpp
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
@@ -698,6 +700,8 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_hardware.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_analytics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_layer_abi.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_recorder_player.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_input.cpp
     )
 
     add_custom_target(format
