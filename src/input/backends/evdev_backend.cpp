@@ -43,6 +43,7 @@ void EvdevBackend::shutdown() noexcept {
 
 void EvdevBackend::scan_devices() {
   close_devices();
+  scanned_ = true;
   std::error_code ec;
   if (!fs::exists("/dev/input", ec)) return;
 

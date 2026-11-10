@@ -438,8 +438,10 @@ void wl_kbd_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*
                 uint32_t /*time*/, uint32_t key, uint32_t state) {
   auto* self = static_cast<WaylandBackend*>(data);
   if (!self || !self->input_manager()) return;
-  HudConfig& cfg = get_mutable_config();
-  self->input_manager()->handle_key_event(key, state == 1, cfg, 0.0f, 0.0f, nullptr);
+  auto* mgr = self->input_manager();
+  HudConfig& cfg = mgr->active_config() ? *mgr->active_config() : get_mutable_config();
+  mgr->handle_key_event(key, state == 1, cfg, mgr->display_width(), mgr->display_height(),
+                        mgr->active_io());
 }
 
 void wl_kbd_modifiers(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
@@ -459,16 +461,20 @@ void wl_ptr_motion(void* data, struct wl_pointer* /*pointer*/, uint32_t /*time*/
                    int32_t sy) {
   auto* self = static_cast<WaylandBackend*>(data);
   if (!self || !self->input_manager()) return;
+  auto* mgr = self->input_manager();
   float x = static_cast<float>(sx) / 256.0f;
   float y = static_cast<float>(sy) / 256.0f;
-  self->input_manager()->handle_pointer_motion(x, y, get_global_config(), nullptr);
+  const HudConfig& cfg = mgr->active_config() ? *mgr->active_config() : get_global_config();
+  mgr->handle_pointer_motion(x, y, cfg, mgr->active_io());
 }
 
 void wl_ptr_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
                    uint32_t /*time*/, uint32_t button, uint32_t state) {
   auto* self = static_cast<WaylandBackend*>(data);
   if (!self || !self->input_manager()) return;
-  self->input_manager()->handle_pointer_button(button, state == 1, get_global_config(), nullptr);
+  auto* mgr = self->input_manager();
+  const HudConfig& cfg = mgr->active_config() ? *mgr->active_config() : get_global_config();
+  mgr->handle_pointer_button(button, state == 1, cfg, mgr->active_io());
 }
 
 void wl_ptr_axis(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,
