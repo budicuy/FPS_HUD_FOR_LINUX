@@ -20,84 +20,13 @@
 #include <vector>
 
 #include "providers/cpu_provider.hpp"
+#include "providers/gpu_drm.hpp"
+#include "providers/gpu_levelzero.hpp"
+#include "providers/gpu_nvidia.hpp"
 #include "providers/ram_provider.hpp"
+#include "sysfs_util.hpp"
 
 namespace fpshud {
-
-enum class GpuBackendType { None = 0, NvidiaNvml, AmdSysfs, IntelSysfs, IntelLevelZero };
-
-namespace intel_ze {
-
-constexpr int ZE_RESULT_SUCCESS = 0;
-
-struct zes_device_properties_t {
-  uint32_t stype = 0;
-  void* pNext = nullptr;
-  uint32_t type = 0;
-  uint32_t flags = 0;
-  uint32_t deviceId = 0;
-  uint32_t vendorId = 0;
-  char name[256] = {0};
-  char serialNumber[32] = {0};
-  char boardNumber[32] = {0};
-  char brandName[256] = {0};
-  char modelName[256] = {0};
-  char vendorName[256] = {0};
-  char driverVersion[256] = {0};
-};
-
-struct zes_freq_state_t {
-  uint32_t stype = 0;
-  const void* pNext = nullptr;
-  double currentVal = 0.0;
-  double request = 0.0;
-  double tdp = 0.0;
-  double efficient = 0.0;
-  double actual = 0.0;
-  uint32_t throttleReasons = 0;
-};
-
-struct zes_mem_state_t {
-  uint32_t stype = 0;
-  const void* pNext = nullptr;
-  uint32_t health = 0;
-  uint64_t free = 0;
-  uint64_t size = 0;
-};
-
-struct zes_power_energy_counter_t {
-  uint64_t energy = 0;     // in microjoules
-  uint64_t timestamp = 0;  // in microseconds
-};
-
-struct zes_engine_stats_t {
-  uint64_t activeTime = 0;  // in microseconds
-  uint64_t timestamp = 0;   // in microseconds
-};
-
-}  // namespace intel_ze
-
-struct LevelZeroDispatch {
-  int (*zeInit)(uint32_t flags) = nullptr;
-  int (*zesInit)(uint32_t flags) = nullptr;
-  int (*zesDriverGet)(uint32_t* count, void** phDrivers) = nullptr;
-  int (*zesDeviceGet)(void* hDriver, uint32_t* count, void** phDevices) = nullptr;
-  int (*zesDeviceGetProperties)(void* hDevice,
-                                intel_ze::zes_device_properties_t* pProperties) = nullptr;
-  int (*zesDeviceEnumFrequencyDomains)(void* hDevice, uint32_t* count,
-                                       void** phFrequency) = nullptr;
-  int (*zesFrequencyGetState)(void* hFrequency, intel_ze::zes_freq_state_t* pState) = nullptr;
-  int (*zesDeviceEnumTemperatureSensors)(void* hDevice, uint32_t* count,
-                                         void** phTemperature) = nullptr;
-  int (*zesTemperatureGetState)(void* hTemperature, double* pTemperature) = nullptr;
-  int (*zesDeviceEnumPowerDomains)(void* hDevice, uint32_t* count, void** phPower) = nullptr;
-  int (*zesPowerGetEnergyCounter)(void* hPower,
-                                  intel_ze::zes_power_energy_counter_t* pEnergy) = nullptr;
-  int (*zesDeviceEnumMemoryModules)(void* hDevice, uint32_t* count, void** phMemory) = nullptr;
-  int (*zesMemoryGetState)(void* hMemory, intel_ze::zes_mem_state_t* pState) = nullptr;
-  int (*zesDeviceEnumEngineGroups)(void* hDevice, uint32_t* count, void** phEngine) = nullptr;
-  int (*zesEngineGetActivity)(void* hEngine, intel_ze::zes_engine_stats_t* pStats) = nullptr;
-};
 
 struct BenchmarkSummary {
   bool has_result = false;
@@ -203,84 +132,6 @@ struct TelemetryData {
 
 using HardwareTelemetryData = TelemetryData;
 
-// Fast zero-allocation sysfs reader using stack buffer
-inline bool read_sysfs_buf(const char* path, char* buf, size_t buf_size) noexcept {
-  if (!path || !*path || buf_size == 0) return false;
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return false;
-  ssize_t n = read(fd, buf, buf_size - 1);
-  close(fd);
-  if (n <= 0) {
-    buf[0] = '\0';
-    return false;
-  }
-  buf[n] = '\0';
-  for (ssize_t i = 0; i < n; ++i) {
-    if (buf[i] == '\n' || buf[i] == '\r') {
-      buf[i] = '\0';
-      break;
-    }
-  }
-  return true;
-}
-
-inline bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
-  char buf[64]{};
-  if (!read_sysfs_buf(path, buf, sizeof(buf))) return false;
-  char* end = nullptr;
-  unsigned long long val = std::strtoull(buf, &end, 10);
-  if (end == buf) return false;
-  out = static_cast<uint64_t>(val);
-  return true;
-}
-
-inline bool is_sysfs_readable(const char* path) noexcept {
-  if (!path || !*path) return false;
-  struct stat st{};
-  if (::stat(path, &st) != 0) return false;
-  if ((st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) == 0) return false;
-  return ::access(path, R_OK) == 0;
-}
-
-// Shortens verbose CPU/GPU marketing strings so they fit cleanly in the GUI header
-inline void clean_hardware_name(const char* raw, char* out, size_t out_size) noexcept {
-  if (!raw || !*raw || out_size == 0) return;
-  std::string s(raw);
-
-  const char* strip_tokens[] = {
-      "(R)",       "(TM)",      "(tm)",      "CPU",       "Processor",
-      "12th Gen ", "13th Gen ", "14th Gen ", "11th Gen ", "10th Gen ",
-      "Intel ",    "NVIDIA ",   "GeForce ",  "AMD ",      "Advanced Micro Devices, Inc. "};
-  for (const char* tok : strip_tokens) {
-    size_t pos = 0;
-    size_t len = std::strlen(tok);
-    while ((pos = s.find(tok, pos)) != std::string::npos) {
-      s.erase(pos, len);
-    }
-  }
-  // Strip trailing "@ 2.50GHz" or "with Radeon Graphics"
-  if (size_t at = s.find('@'); at != std::string::npos) {
-    s.erase(at);
-  }
-  if (size_t w = s.find("with "); w != std::string::npos) {
-    s.erase(w);
-  }
-  // Collapse multiple spaces and trim
-  std::string compact;
-  bool prev_space = true;
-  for (char c : s) {
-    if (c == ' ' || c == '\t') {
-      if (!prev_space) compact.push_back(' ');
-      prev_space = true;
-    } else {
-      compact.push_back(c);
-      prev_space = false;
-    }
-  }
-  while (!compact.empty() && compact.back() == ' ') compact.pop_back();
-  std::snprintf(out, out_size, "%s", compact.empty() ? raw : compact.c_str());
-}
-
 class TelemetryCollector {
 public:
   static constexpr size_t kFrameWindowSize = 512;
@@ -345,7 +196,6 @@ private:
   void init_cpu_sensors();
   void init_gpu_sensors();
   void init_gpu_sensors_locked();
-  bool init_intel_level_zero();
   void init_battery_sensors();
   void init_storage_sensors();
   void shutdown_sensors();
@@ -377,65 +227,13 @@ private:
   std::atomic<uint64_t> api_vram_used_bytes_{0};
   std::atomic<uint64_t> api_vram_total_bytes_{0};
 
-  // Dynamic NVML state (NVIDIA GPUs)
-  void* nvml_lib_ = nullptr;
-  void* nvml_device_ = nullptr;
-  bool nvml_initialized_ = false;
-  unsigned int gpu_bus_width_bits_ = 192;
-
-  int (*pfn_nvmlInit_v2_)() = nullptr;
-  int (*pfn_nvmlShutdown_)() = nullptr;
-  int (*pfn_nvmlSystemGetDriverVersion_)(char*, unsigned int) = nullptr;
-  int (*pfn_nvmlDeviceGetCount_v2_)(unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetHandleByIndex_v2_)(unsigned int, void**) = nullptr;
-  int (*pfn_nvmlDeviceGetName_)(void*, char*, unsigned int) = nullptr;
-  int (*pfn_nvmlDeviceGetUtilizationRates_)(void*, void*) = nullptr;
-  int (*pfn_nvmlDeviceGetMemoryInfo_)(void*, void*) = nullptr;
-  int (*pfn_nvmlDeviceGetTemperature_)(void*, int, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetFanSpeed_)(void*, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetPowerUsage_)(void*, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetClockInfo_)(void*, int, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetMemoryBusWidth_)(void*, unsigned int*) = nullptr;
-  int (*pfn_nvmlDeviceGetPcieThroughput_)(void*, int, unsigned int*) = nullptr;
-
-  // Intel Level Zero / Sysman state & function pointers
   bool disable_level_zero_ = false;
   bool has_mock_ze_ = false;
   LevelZeroDispatch mock_ze_dispatch_{};
-  void* ze_lib_ = nullptr;
-  void* ze_driver_ = nullptr;
-  void* ze_device_ = nullptr;
-  void* ze_freq_ = nullptr;
-  void* ze_temp_ = nullptr;
-  void* ze_pwr_ = nullptr;
-  void* ze_mem_ = nullptr;
-  void* ze_eng_ = nullptr;
-  LevelZeroDispatch ze_dispatch_{};
-  uint64_t prev_ze_eng_active_ = 0;
-  uint64_t prev_ze_eng_ts_ = 0;
-  uint64_t prev_ze_pwr_energy_ = 0;
-  uint64_t prev_ze_pwr_ts_ = 0;
 
-  // Universal DRM / sysfs GPU paths (AMD amdgpu & Intel i915 / xe)
-  std::string drm_gpu_busy_path_;
-  std::string drm_vram_used_path_;
-  std::string drm_vram_total_path_;
-  std::string drm_gtt_used_path_;     // AMD APU shared GTT memory used
-  std::string drm_gtt_total_path_;    // AMD APU shared GTT memory total
-  std::string drm_mem_busy_path_;     // AMD mem_busy_percent (0..100)
-  std::string drm_sclk_freq_path_;    // hwmon/freq1_input (Hz) or gt_cur_freq_mhz (MHz)
-  std::string drm_mclk_freq_path_;    // hwmon/freq2_input (Hz, AMD VRAM clock)
-  std::string drm_max_freq_path_;     // gt_max_freq_mhz or rps_max_freq_mhz (Intel i915)
-  std::string drm_pp_dpm_sclk_path_;  // AMD fallback: device/pp_dpm_sclk ("1: 2400Mhz *")
-  std::string drm_pp_dpm_mclk_path_;  // AMD fallback: device/pp_dpm_mclk ("1: 1200Mhz *")
-  bool drm_sclk_in_hz_ = true;
-  std::string drm_temp_path_;           // hwmon/temp1_input (millidegrees C)
-  std::string drm_temp_fallback_path_;  // fallback edge temp if junction temp2_input used
-  std::string drm_fan_pwm_path_;        // hwmon/pwm1 (0..255)
-  std::string drm_fan_rpm_path_;        // hwmon/fan1_input
-  std::string drm_fan_max_path_;        // hwmon/fan1_max
-  std::string drm_power_uw_path_;       // hwmon/power1_average or power1_input (microwatts)
-  std::string drm_energy_uj_path_;      // hwmon/energy1_input (microjoules)
+  NvidiaGpuProvider nvidia_provider_;
+  DrmGpuProvider drm_provider_;
+  LevelZeroGpuProvider levelzero_provider_;
 
   CpuProvider cpu_provider_;
   RamProvider ram_provider_;
@@ -456,12 +254,6 @@ private:
   uint64_t prev_net_rx_bytes_ = 0;
   uint64_t prev_net_tx_bytes_ = 0;
   std::chrono::steady_clock::time_point prev_net_poll_time_{};
-
-  // Previous counters for delta calculation
-  uint64_t prev_gpu_energy_uj_ = 0;
-  std::chrono::steady_clock::time_point prev_gpu_energy_time_{};
-  uint64_t prev_drm_render_ns_ = 0;
-  std::chrono::steady_clock::time_point prev_drm_render_time_{};
 
   // Frame timing state (exclusively render thread — no mutex needed)
   std::chrono::steady_clock::time_point last_frame_time_{};

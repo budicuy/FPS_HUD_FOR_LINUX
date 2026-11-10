@@ -14,6 +14,9 @@
 #include "logger.hpp"
 #include "providers/cpu_provider.hpp"
 #include "providers/ram_provider.hpp"
+#include "providers/gpu_drm.hpp"
+#include "providers/gpu_nvidia.hpp"
+#include "providers/gpu_levelzero.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -4134,7 +4137,10 @@ void run_all_devices_and_features_suite() {
     // C. Source verification for ZES_ENABLE_SYSMAN, nvmlDeviceGetCount_v2, and Vulkan dGPU lock
     bool gpu_src_ok = rroot.empty();
     if (!rroot.empty()) {
-      std::string tel_src = read_text_file(rroot / "src" / "telemetry" / "telemetry.cpp");
+      std::string tel_src =
+          read_text_file(rroot / "src" / "telemetry" / "telemetry.cpp") +
+          read_text_file(rroot / "src" / "telemetry" / "providers" / "gpu_levelzero.cpp") +
+          read_text_file(rroot / "src" / "telemetry" / "providers" / "gpu_nvidia.cpp");
       std::string vk_src = read_text_file(rroot / "src" / "layer" / "vulkan_layer.cpp");
       gpu_src_ok = (tel_src.find("ZES_ENABLE_SYSMAN") != std::string::npos &&
                     tel_src.find("nvmlDeviceGetCount_v2") != std::string::npos &&
@@ -4606,6 +4612,272 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(prov_suite_passed, "13.1 Modular Telemetry: CPU & RAM Providers",
                prov_detail.c_str());
+  }
+
+  // --- SUITE 14: Modular Telemetry: GPU Providers (NVIDIA, DRM Sysfs, Intel Level Zero) ---
+  {
+    std::printf(
+        "\n--- SUITE 14: Modular Telemetry: GPU Providers (NVIDIA, DRM Sysfs, Intel Level Zero) "
+        "---\n");
+
+    // 14.1 DRM GPU Provider - AMD mock
+    bool amd_drm_passed = false;
+    std::string amd_drm_detail;
+    {
+      char amd_test_dir_tmpl[] = "/tmp/fpshud_test_drm_amd_XXXXXX";
+      char* amd_test_dir = ::mkdtemp(amd_test_dir_tmpl);
+      if (amd_test_dir) {
+        fs::path pdir(amd_test_dir);
+        fs::path dev_dir = pdir / "sys/class/drm/card0/device";
+        fs::path hm_dir = dev_dir / "hwmon/hwmon0";
+        fs::create_directories(hm_dir, ec);
+
+        write_mock_file(dev_dir / "vendor", "0x1002\n");
+        write_mock_file(dev_dir / "device", "0x744c\n");
+        write_mock_file(dev_dir / "product_name", "AMD Radeon RX 7900 XTX\n");
+        write_mock_file(dev_dir / "gpu_busy_percent", "95\n");
+        write_mock_file(dev_dir / "mem_busy_percent", "80\n");
+        write_mock_file(dev_dir / "mem_info_vram_total", "25769803776\n");
+        write_mock_file(dev_dir / "mem_info_vram_used", "12884901888\n");
+        write_mock_file(hm_dir / "freq1_input", "2500000000\n");
+        write_mock_file(hm_dir / "freq2_input", "2500000000\n");
+        write_mock_file(hm_dir / "temp1_input", "62000\n");
+        write_mock_file(hm_dir / "pwm1", "178\n");
+        write_mock_file(hm_dir / "power1_average", "285000000\n");
+
+        fpshud::DrmGpuProvider drm_amd;
+        bool init_ok = drm_amd.init(pdir.string(), 0, 0);
+        fpshud::HardwareTelemetryData hdata{};
+        drm_amd.poll(hdata);
+
+        bool be_ok = (drm_amd.get_backend_type() == fpshud::GpuBackendType::AmdSysfs);
+        bool avail_ok = hdata.gpu_available;
+        bool load_ok = (hdata.gpu_load_pct >= 94.0f && hdata.gpu_load_pct <= 96.0f);
+        bool clk_ok = (hdata.gpu_clock_mhz == 2500);
+        bool mclk_ok = (hdata.gpu_vram_clock_mhz == 2500);
+        bool vram_ok = (hdata.gpu_vram_used_gb >= 11.9f && hdata.gpu_vram_used_gb <= 12.1f &&
+                        hdata.gpu_vram_total_gb >= 23.9f && hdata.gpu_vram_total_gb <= 24.1f);
+        bool temp_ok = (hdata.gpu_temp_c == 62);
+        bool fan_ok = (hdata.gpu_fan_pct == 70);
+        bool pwr_ok = (hdata.gpu_power_w >= 284.0f && hdata.gpu_power_w <= 286.0f);
+        bool bw_ok = (hdata.gpu_bandwidth_gbs > 10.0f);
+
+        amd_drm_passed = init_ok && be_ok && avail_ok && load_ok && clk_ok && mclk_ok && vram_ok &&
+                         temp_ok && fan_ok && pwr_ok && bw_ok;
+        amd_drm_detail =
+            "init=" + std::to_string(init_ok) + ", load=" + std::to_string(hdata.gpu_load_pct) +
+            ", clk=" + std::to_string(hdata.gpu_clock_mhz) +
+            ", vram=" + std::to_string(hdata.gpu_vram_used_gb) + "/" +
+            std::to_string(hdata.gpu_vram_total_gb) + ", temp=" + std::to_string(hdata.gpu_temp_c) +
+            ", pwr=" + std::to_string(hdata.gpu_power_w);
+
+        std::error_code rm_ec;
+        fs::remove_all(pdir, rm_ec);
+      }
+    }
+    check_cond(amd_drm_passed,
+               "14.1 DrmGpuProvider AMD Sysfs (load, clk, VRAM, temp, fan, pwr, bw)",
+               amd_drm_detail.c_str());
+
+    // 14.2 DRM GPU Provider - Intel sysfs mock
+    bool intel_drm_passed = false;
+    std::string intel_drm_detail;
+    {
+      char intel_test_dir_tmpl[] = "/tmp/fpshud_test_drm_intel_XXXXXX";
+      char* intel_test_dir = ::mkdtemp(intel_test_dir_tmpl);
+      if (intel_test_dir) {
+        fs::path pdir(intel_test_dir);
+        fs::path dev_dir = pdir / "sys/class/drm/card0/device";
+        fs::path hm_dir = dev_dir / "hwmon/hwmon1";
+        fs::create_directories(hm_dir, ec);
+        fs::create_directories(dev_dir / "tile0/gt0/freq0", ec);
+
+        write_mock_file(dev_dir / "vendor", "0x8086\n");
+        write_mock_file(dev_dir / "device", "0x56a0\n");
+        write_mock_file(dev_dir / "product_name", "Intel Arc A770 Graphics\n");
+        write_mock_file(dev_dir / "gpu_busy_percent", "75\n");
+        write_mock_file(dev_dir / "lmem_total_bytes", "17179869184\n");
+        write_mock_file(dev_dir / "lmem_used_bytes", "8589934592\n");
+        write_mock_file(dev_dir / "tile0/gt0/freq0/act_freq", "2100\n");
+        write_mock_file(hm_dir / "temp1_input", "58000\n");
+        write_mock_file(hm_dir / "pwm1", "128\n");
+        write_mock_file(hm_dir / "power1_average", "150000000\n");
+
+        fpshud::DrmGpuProvider drm_intel;
+        bool init_ok = drm_intel.init(pdir.string(), 0, 0);
+        fpshud::HardwareTelemetryData hdata{};
+        drm_intel.poll(hdata);
+
+        bool be_ok = (drm_intel.get_backend_type() == fpshud::GpuBackendType::IntelSysfs);
+        bool avail_ok = hdata.gpu_available;
+        bool load_ok = (hdata.gpu_load_pct >= 74.0f && hdata.gpu_load_pct <= 76.0f);
+        bool clk_ok = (hdata.gpu_clock_mhz == 2100);
+        bool vram_ok = (hdata.gpu_vram_used_gb >= 7.9f && hdata.gpu_vram_used_gb <= 8.1f &&
+                        hdata.gpu_vram_total_gb >= 15.9f && hdata.gpu_vram_total_gb <= 16.1f);
+        bool temp_ok = (hdata.gpu_temp_c == 58);
+        bool fan_ok = (hdata.gpu_fan_pct == 50);
+        bool pwr_ok = (hdata.gpu_power_w >= 149.0f && hdata.gpu_power_w <= 151.0f);
+
+        intel_drm_passed = init_ok && be_ok && avail_ok && load_ok && clk_ok && vram_ok &&
+                           temp_ok && fan_ok && pwr_ok;
+        intel_drm_detail =
+            "init=" + std::to_string(init_ok) + ", load=" + std::to_string(hdata.gpu_load_pct) +
+            ", clk=" + std::to_string(hdata.gpu_clock_mhz) +
+            ", vram=" + std::to_string(hdata.gpu_vram_used_gb) + "/" +
+            std::to_string(hdata.gpu_vram_total_gb) + ", temp=" + std::to_string(hdata.gpu_temp_c) +
+            ", pwr=" + std::to_string(hdata.gpu_power_w);
+
+        std::error_code rm_ec;
+        fs::remove_all(pdir, rm_ec);
+      }
+    }
+    check_cond(intel_drm_passed,
+               "14.2 DrmGpuProvider Intel Sysfs (load, clk, LMEM, temp, fan, pwr)",
+               intel_drm_detail.c_str());
+
+    // 14.3 LevelZeroGpuProvider - Mock dispatch
+    bool ze_passed = false;
+    std::string ze_detail;
+    {
+      LevelZeroDispatch ze_test_mock{};
+      ze_test_mock.zesInit = [](uint32_t) -> int { return 0; };
+      ze_test_mock.zesDriverGet = [](uint32_t* count, void** phDrivers) -> int {
+        if (count) *count = 1;
+        if (phDrivers) *phDrivers = reinterpret_cast<void*>(0x1111);
+        return 0;
+      };
+      ze_test_mock.zesDeviceGet = [](void*, uint32_t* count, void** phDevices) -> int {
+        if (count) *count = 1;
+        if (phDevices) *phDevices = reinterpret_cast<void*>(0x2222);
+        return 0;
+      };
+      ze_test_mock.zesDeviceGetProperties = [](void*,
+                                               intel_ze::zes_device_properties_t* pProps) -> int {
+        if (pProps) {
+          std::snprintf(pProps->modelName, sizeof(pProps->modelName), "Intel Arc A770 Graphics");
+          std::snprintf(pProps->driverVersion, sizeof(pProps->driverVersion), "Level Zero 1.14");
+        }
+        return 0;
+      };
+      ze_test_mock.zesDeviceEnumFrequencyDomains = [](void*, uint32_t* count,
+                                                      void** phFreq) -> int {
+        if (count) *count = 1;
+        if (phFreq) *phFreq = reinterpret_cast<void*>(0x3333);
+        return 0;
+      };
+      ze_test_mock.zesFrequencyGetState = [](void*, intel_ze::zes_freq_state_t* pState) -> int {
+        if (pState) pState->actual = 2400.0;
+        return 0;
+      };
+      ze_test_mock.zesDeviceEnumTemperatureSensors = [](void*, uint32_t* count,
+                                                        void** phTemp) -> int {
+        if (count) *count = 1;
+        if (phTemp) *phTemp = reinterpret_cast<void*>(0x4444);
+        return 0;
+      };
+      ze_test_mock.zesTemperatureGetState = [](void*, double* pTemp) -> int {
+        if (pTemp) *pTemp = 65.0;
+        return 0;
+      };
+      ze_test_mock.zesDeviceEnumMemoryModules = [](void*, uint32_t* count, void** phMem) -> int {
+        if (count) *count = 1;
+        if (phMem) *phMem = reinterpret_cast<void*>(0x5555);
+        return 0;
+      };
+      ze_test_mock.zesMemoryGetState = [](void*, intel_ze::zes_mem_state_t* pState) -> int {
+        if (pState) {
+          pState->size = 17179869184ULL;
+          pState->free = 10737418240ULL;
+        }
+        return 0;
+      };
+      static uint64_t s_ze_pwr_ts = 1000000;
+      static uint64_t s_ze_pwr_uj = 10000000;
+      ze_test_mock.zesDeviceEnumPowerDomains = [](void*, uint32_t* count, void** phPower) -> int {
+        if (count) *count = 1;
+        if (phPower) *phPower = reinterpret_cast<void*>(0x6666);
+        return 0;
+      };
+      ze_test_mock.zesPowerGetEnergyCounter =
+          [](void*, intel_ze::zes_power_energy_counter_t* pEnergy) -> int {
+        if (pEnergy) {
+          pEnergy->timestamp = s_ze_pwr_ts;
+          pEnergy->energy = s_ze_pwr_uj;
+        }
+        return 0;
+      };
+      static uint64_t s_ze_eng_ts = 1000000;
+      static uint64_t s_ze_eng_active = 200000;
+      ze_test_mock.zesDeviceEnumEngineGroups = [](void*, uint32_t* count, void** phEngine) -> int {
+        if (count) *count = 1;
+        if (phEngine) *phEngine = reinterpret_cast<void*>(0x7777);
+        return 0;
+      };
+      ze_test_mock.zesEngineGetActivity = [](void*, intel_ze::zes_engine_stats_t* pStats) -> int {
+        if (pStats) {
+          pStats->timestamp = s_ze_eng_ts;
+          pStats->activeTime = s_ze_eng_active;
+        }
+        return 0;
+      };
+
+      fpshud::LevelZeroGpuProvider lz_prov;
+      bool init_ok = lz_prov.init("", &ze_test_mock);
+      fpshud::HardwareTelemetryData hdata{};
+      lz_prov.poll(hdata);  // initial sample
+
+      s_ze_pwr_ts += 1000000;
+      s_ze_pwr_uj += 190000000;  // +190W
+      s_ze_eng_ts += 1000000;
+      s_ze_eng_active += 850000;  // 85% load
+      lz_prov.poll(hdata);        // delta poll
+
+      bool clk_ok = (hdata.gpu_clock_mhz == 2400);
+      bool temp_ok = (hdata.gpu_temp_c == 65);
+      bool vram_ok = (std::fabs(hdata.gpu_vram_used_gb - 6.0f) < 0.1f &&
+                      std::fabs(hdata.gpu_vram_total_gb - 16.0f) < 0.1f);
+      bool pwr_ok = (std::fabs(hdata.gpu_power_w - 190.0f) < 1.0f);
+      bool load_ok = (std::fabs(hdata.gpu_load_pct - 85.0f) < 1.0f);
+      lz_prov.shutdown();
+
+      ze_passed = init_ok && clk_ok && temp_ok && vram_ok && pwr_ok && load_ok;
+      ze_detail =
+          "init=" + std::to_string(init_ok) + ", clk=" + std::to_string(hdata.gpu_clock_mhz) +
+          ", temp=" + std::to_string(hdata.gpu_temp_c) +
+          ", vram=" + std::to_string(hdata.gpu_vram_used_gb) + "/" +
+          std::to_string(hdata.gpu_vram_total_gb) + ", pwr=" + std::to_string(hdata.gpu_power_w) +
+          ", load=" + std::to_string(hdata.gpu_load_pct);
+    }
+    check_cond(ze_passed, "14.3 LevelZeroGpuProvider Mock Dispatch (clk, temp, VRAM, pwr, load)",
+               ze_detail.c_str());
+
+    // 14.4 NvidiaGpuProvider - Init, vendor gating, and shutdown
+    bool nv_passed = false;
+    std::string nv_detail;
+    {
+      fpshud::NvidiaGpuProvider nv_prov;
+      // Should reject non-NVIDIA vendor bindings immediately
+      bool non_nv_rejected = !nv_prov.init("", 0x8086, 0);
+      bool mock_dir_rejected = !nv_prov.init("/nonexistent_mock_dir", 0, 0);
+
+      // On this host (which has NVIDIA GTX 1660 SUPER), test real init and polling if available
+      bool host_init = nv_prov.init("", 0, 0);
+      bool host_polled = false;
+      if (host_init) {
+        fpshud::HardwareTelemetryData hdata{};
+        nv_prov.poll(hdata);
+        host_polled = hdata.gpu_available && (std::strcmp(hdata.gpu_vendor, "NVIDIA") == 0) &&
+                      (hdata.gpu_temp_c > 0);
+        nv_prov.shutdown();
+      }
+
+      nv_passed = non_nv_rejected && mock_dir_rejected && (!host_init || host_polled);
+      nv_detail = "non_nv_rej=" + std::to_string(non_nv_rejected) +
+                  ", mock_rej=" + std::to_string(mock_dir_rejected) +
+                  ", host_init=" + std::to_string(host_init) +
+                  ", host_polled=" + std::to_string(host_polled);
+    }
+    check_cond(nv_passed, "14.4 NvidiaGpuProvider Vendor Gating & Lifecycle", nv_detail.c_str());
   }
 
   std::printf("\n====================================================================\n");

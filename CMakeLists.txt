@@ -239,6 +239,9 @@ add_library(fpshud SHARED
     src/telemetry/telemetry.cpp
     src/telemetry/providers/cpu_provider.cpp
     src/telemetry/providers/ram_provider.cpp
+    src/telemetry/providers/gpu_nvidia.cpp
+    src/telemetry/providers/gpu_drm.cpp
+    src/telemetry/providers/gpu_levelzero.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     src/input/input_manager.cpp
@@ -301,6 +304,9 @@ add_executable(fpshud_test
     src/telemetry/telemetry.cpp
     src/telemetry/providers/cpu_provider.cpp
     src/telemetry/providers/ram_provider.cpp
+    src/telemetry/providers/gpu_nvidia.cpp
+    src/telemetry/providers/gpu_drm.cpp
+    src/telemetry/providers/gpu_levelzero.cpp
     src/input/input_manager.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
@@ -507,6 +513,9 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
@@ -537,12 +546,19 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/sysfs_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
