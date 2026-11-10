@@ -11,6 +11,7 @@
 #include "overlay_ui.hpp"
 #include "gui_menu.hpp"
 #include "imgui.h"
+#include "logger.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -4481,6 +4482,60 @@ void run_all_devices_and_features_suite() {
     }
     check_cond(launch_guidance_present,
                "11.3 Universal fpshud wrapper and Steam Proton input isolation documented");
+
+    // --- SUITE 12: Zero-Cost C++26 Logging Engine ---
+    std::printf("\n--- SUITE 12: Zero-Cost C++26 Logging Engine ---\n");
+
+    // 1. Verify init() executes safely with no environment variable
+    ::unsetenv("FPS_HUD_LOG");
+    fpshud::log::init();
+    bool init_safe = true;
+
+    // 2. Test logging macros: verify FPSHUD_LOG_INFO compiles and does not crash
+    FPSHUD_LOG_INFO(fpshud::log::Subsystem::Core, "Test info %d", 42);
+
+    // 3. Test that fpshud::log::write formats message with timestamp and subsystem tag [CORE]
+    char log_tmp_path[] = "/tmp/fpshud_test_logger_XXXXXX.log";
+    int tmp_fd = ::mkstemps(log_tmp_path, 4);
+    bool write_formatted_ok = false;
+    std::string write_detail;
+    if (tmp_fd >= 0) {
+      ::close(tmp_fd);
+      ::setenv("FPS_HUD_LOG", log_tmp_path, 1);
+      fpshud::log::init();
+
+      FPSHUD_LOG_WARN(fpshud::log::Subsystem::Core, "Test warn %s", "captured");
+      fpshud::log::write(fpshud::log::Level::Info, fpshud::log::Subsystem::Core, "test_cli.cpp",
+                         132, "Logger test payload %d", 999);
+
+      // Reset logger back to stderr so the file descriptor is flushed and closed
+      ::unsetenv("FPS_HUD_LOG");
+      fpshud::log::init();
+
+      std::string logged_content = read_text_file(log_tmp_path);
+      ::unlink(log_tmp_path);
+
+      bool has_tag = (logged_content.find("[CORE]") != std::string::npos);
+      bool has_payload = (logged_content.find("Logger test payload 999") != std::string::npos);
+      bool has_level = (logged_content.find("[INFO]") != std::string::npos);
+      bool has_file_line = (logged_content.find("test_cli.cpp:132") != std::string::npos);
+      bool has_timestamp = (logged_content.find('[') != std::string::npos &&
+                            logged_content.find(':') != std::string::npos &&
+                            logged_content.find('.') != std::string::npos);
+      bool has_warn = (logged_content.find("[WARN]") != std::string::npos &&
+                       logged_content.find("Test warn captured") != std::string::npos);
+
+      write_formatted_ok =
+          (has_tag && has_payload && has_level && has_file_line && has_timestamp && has_warn);
+      write_detail = "tag=" + std::to_string(has_tag) + ", payload=" + std::to_string(has_payload) +
+                     ", level=" + std::to_string(has_level) +
+                     ", loc=" + std::to_string(has_file_line) +
+                     ", ts=" + std::to_string(has_timestamp) + ", warn=" + std::to_string(has_warn);
+    }
+
+    bool logger_suite_passed = init_safe && write_formatted_ok;
+    check_cond(logger_suite_passed, "12.1 Zero-Cost C++26 Logging Engine & POSIX Formatter",
+               write_detail.c_str());
   }
 
   std::printf("\n====================================================================\n");

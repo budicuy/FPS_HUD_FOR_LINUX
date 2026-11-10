@@ -47,6 +47,17 @@ option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(FPSHUD_ENABLE_EXPERIMENTAL "Enable isolated experimental features" ON)
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT ON)
+else()
+    set(FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT OFF)
+endif()
+option(FPSHUD_ENABLE_DEBUG_LOGGING "Enable development and trace/debug logging" ${FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT})
+
+if(FPSHUD_ENABLE_DEBUG_LOGGING)
+    add_compile_definitions(FPSHUD_ENABLE_DEBUG_LOGGING=1)
+endif()
+
 if(FPSHUD_ENABLE_EXPERIMENTAL)
     add_compile_definitions(FPSHUD_ENABLE_EXPERIMENTAL=1)
     set(FPSHUD_EXPERIMENTAL_SOURCES
@@ -224,6 +235,7 @@ set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 add_library(fpshud SHARED
     src/core/config.cpp
+    src/core/logger.cpp
     src/telemetry/telemetry.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
@@ -282,6 +294,7 @@ set_target_properties(fpshud PROPERTIES
 add_executable(fpshud_test
     tests/test_cli.cpp
     src/core/config.cpp
+    src/core/logger.cpp
     src/telemetry/telemetry.cpp
     src/input/input_manager.cpp
     src/recorder/png_writer.cpp
@@ -484,6 +497,7 @@ find_program(CLANG_TIDY_EXE NAMES clang-tidy)
 if(CLANG_TIDY_EXE)
     set(SRC_FILES_FOR_TIDY
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
@@ -512,6 +526,8 @@ if(CLANG_FORMAT_EXE)
     set(FORMAT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
