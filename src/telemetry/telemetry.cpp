@@ -148,7 +148,7 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
   frametime_analyzer_.on_frame(dt_ms, force_display_update);
 
   if (benchmark_recorder_.is_active()) {
-    uint32_t cur_idx = active_hw_buf_.load(std::memory_order_relaxed);
+    uint32_t cur_idx = active_hw_buf_.load(std::memory_order_acquire);
     benchmark_recorder_.on_frame(dt_ms, hw_buffers_[cur_idx]);
   }
 

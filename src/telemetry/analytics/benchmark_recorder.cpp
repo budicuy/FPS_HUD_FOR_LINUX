@@ -52,11 +52,11 @@ void BenchmarkRecorder::start() {
   bench_max_cpu_temp_c_ = 0;
   bench_max_cpu_power_w_ = 0.0f;
   bench_start_time_ = std::chrono::steady_clock::now();
-  bench_active_.store(true, std::memory_order_relaxed);
+  bench_active_.store(true, std::memory_order_release);
 }
 
 void BenchmarkRecorder::stop() {
-  if (!bench_active_.exchange(false, std::memory_order_relaxed)) {
+  if (!bench_active_.exchange(false, std::memory_order_acq_rel)) {
     return;
   }
 
@@ -183,7 +183,7 @@ void BenchmarkRecorder::on_frame(float dt_ms, const TelemetryData& current_snaps
 
 void BenchmarkRecorder::update_peaks(int cpu_temp_c, float cpu_power_w, int gpu_temp_c,
                                      float gpu_power_w) {
-  if (!bench_active_.load(std::memory_order_relaxed)) {
+  if (!bench_active_.load(std::memory_order_acquire)) {
     return;
   }
   std::lock_guard<std::mutex> block(bench_mutex_);
@@ -202,7 +202,7 @@ void BenchmarkRecorder::update_peaks(int cpu_temp_c, float cpu_power_w, int gpu_
 }
 
 float BenchmarkRecorder::get_elapsed_sec() const noexcept {
-  if (!bench_active_.load(std::memory_order_relaxed)) {
+  if (!bench_active_.load(std::memory_order_acquire)) {
     return 0.0f;
   }
   auto now = std::chrono::steady_clock::now();

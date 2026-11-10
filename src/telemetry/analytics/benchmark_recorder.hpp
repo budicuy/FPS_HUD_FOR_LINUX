@@ -37,10 +37,10 @@ public:
   void update_peaks(int cpu_temp_c, float cpu_power_w, int gpu_temp_c, float gpu_power_w);
 
   [[nodiscard]] bool is_active() const noexcept {
-    return bench_active_.load(std::memory_order_relaxed);
+    return bench_active_.load(std::memory_order_acquire);
   }
   [[nodiscard]] bool has_result() const noexcept {
-    return bench_has_result_.load(std::memory_order_relaxed);
+    return bench_has_result_.load(std::memory_order_acquire);
   }
   [[nodiscard]] float get_elapsed_sec() const noexcept;
   [[nodiscard]] BenchmarkSummary get_summary() const;
