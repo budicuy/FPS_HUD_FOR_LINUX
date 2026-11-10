@@ -114,14 +114,12 @@ void open_system_folder(const std::string& path);
 void set_status_message(const std::string& msg);
 
 static VideoPlayerController g_player_controller;
-static std::string g_player_active_file;
 static std::string g_player_active_filename;
 static bool g_player_modal_open_requested = false;
 static bool g_player_modal_active = false;
 static bool g_player_fullscreen = false;
 
 static void open_modal_player(const std::string& filepath, const std::string& filename) {
-  g_player_active_file = filepath;
   g_player_active_filename = filename;
   std::string helper_bin = get_helper_binary_path();
   if (!g_player_controller.open(filepath, helper_bin)) {
@@ -477,12 +475,28 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     if (gui_font) ImGui::PushFont(gui_font);
     if (ImGui::Begin("##FPSHUD_ToastHint", nullptr, toast_flags)) {
       ImGui::SetWindowFontScale(16.0f / base_gui_font_px);
-      std::string g_kb = format_keybind(cfg.bind_toggle_gui);
-      std::string h_kb = format_keybind(cfg.bind_toggle_hud);
-      std::string b_kb = format_keybind(cfg.bind_benchmark);
+      static Keybind s_last_gui_kb{0xFFFFFFFF, 0xFFFFFFFF};
+      static Keybind s_last_hud_kb{0xFFFFFFFF, 0xFFFFFFFF};
+      static Keybind s_last_bench_kb{0xFFFFFFFF, 0xFFFFFFFF};
+      static std::string s_gui_kb;
+      static std::string s_hud_kb;
+      static std::string s_bench_kb;
+
+      if (!(s_last_gui_kb == cfg.bind_toggle_gui)) {
+        s_last_gui_kb = cfg.bind_toggle_gui;
+        s_gui_kb = format_keybind(cfg.bind_toggle_gui);
+      }
+      if (!(s_last_hud_kb == cfg.bind_toggle_hud)) {
+        s_last_hud_kb = cfg.bind_toggle_hud;
+        s_hud_kb = format_keybind(cfg.bind_toggle_hud);
+      }
+      if (!(s_last_bench_kb == cfg.bind_benchmark)) {
+        s_last_bench_kb = cfg.bind_benchmark;
+        s_bench_kb = format_keybind(cfg.bind_benchmark);
+      }
       ImGui::TextColored(ImVec4(0.4f, 0.92f, 1.0f, 1.0f),
                          "FPSHUD Active  |  GUI: %s  |  Hide HUD: %s  |  Benchmark: %s",
-                         g_kb.c_str(), h_kb.c_str(), b_kb.c_str());
+                         s_gui_kb.c_str(), s_hud_kb.c_str(), s_bench_kb.c_str());
     }
     ImGui::End();
     if (gui_font) ImGui::PopFont();
@@ -1287,10 +1301,31 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     float btn_half_w = (btn_row_w - (6.0f * scale)) * 0.50f;
 
     bool is_rec = RecorderController::instance().is_recording();
-    std::string rec_kb_str = format_keybind(cfg.bind_record);
-    std::string bench_kb_str = format_keybind(cfg.bind_benchmark);
-    std::string shot_kb = format_keybind(cfg.bind_screenshot);
-    std::string rep_kb = format_keybind(cfg.bind_save_replay);
+    static Keybind s_last_rec_kb{0xFFFFFFFF, 0xFFFFFFFF};
+    static Keybind s_last_rec_bench_kb{0xFFFFFFFF, 0xFFFFFFFF};
+    static Keybind s_last_shot_kb{0xFFFFFFFF, 0xFFFFFFFF};
+    static Keybind s_last_rep_kb{0xFFFFFFFF, 0xFFFFFFFF};
+    static std::string rec_kb_str;
+    static std::string bench_kb_str;
+    static std::string shot_kb;
+    static std::string rep_kb;
+
+    if (!(s_last_rec_kb == cfg.bind_record)) {
+      s_last_rec_kb = cfg.bind_record;
+      rec_kb_str = format_keybind(cfg.bind_record);
+    }
+    if (!(s_last_rec_bench_kb == cfg.bind_benchmark)) {
+      s_last_rec_bench_kb = cfg.bind_benchmark;
+      bench_kb_str = format_keybind(cfg.bind_benchmark);
+    }
+    if (!(s_last_shot_kb == cfg.bind_screenshot)) {
+      s_last_shot_kb = cfg.bind_screenshot;
+      shot_kb = format_keybind(cfg.bind_screenshot);
+    }
+    if (!(s_last_rep_kb == cfg.bind_save_replay)) {
+      s_last_rep_kb = cfg.bind_save_replay;
+      rep_kb = format_keybind(cfg.bind_save_replay);
+    }
 
     if (!is_rec) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.58f, 0.32f, 1.0f));

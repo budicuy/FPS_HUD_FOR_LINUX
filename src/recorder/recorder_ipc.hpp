@@ -215,6 +215,7 @@ private:
   uint32_t shm_height_ = 0;
 
   // Toast state (lasts 3.5 seconds)
+  mutable std::atomic<bool> has_active_toast_{false};
   std::string toast_msg_;
   std::chrono::steady_clock::time_point toast_time_{};
 };

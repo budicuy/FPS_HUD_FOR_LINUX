@@ -2,6 +2,7 @@
 #include "embedded_fonts.hpp"
 #include "gui_menu.hpp"
 #include "input_manager.hpp"
+#include "logger.hpp"
 #include "recorder_ipc.hpp"
 
 #include "imgui.h"
@@ -304,9 +305,6 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_vram_clock_mhz);
       std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
       return;
-    case MetricType::CpuAllCoreLoad:
-    case MetricType::CpuAllCoreClock:
-      return;
     case MetricType::GpuModel:
       std::snprintf(sv.number, sizeof(sv.number), "%s", d.gpu_name[0] ? d.gpu_name : "GPU");
       return;
@@ -384,6 +382,8 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
         std::snprintf(sv.unit, sizeof(sv.unit), "MB/s");
       }
       return;
+    default:
+      break;
   }
 }
 
@@ -553,14 +553,6 @@ void draw_mini_frametime_graph(const HudConfig& cfg, uint8_t alpha) {
   ImGui::PopStyleColor(2);
 }
 
-ImFont* g_font_gui_small = nullptr;   // 12px
-ImFont* g_font_gui_normal = nullptr;  // 16px
-ImFont* g_font_gui_large = nullptr;   // 24px
-
-ImFont* g_hud_fonts_small[4] = {};   // 14px for each family
-ImFont* g_hud_fonts_normal[4] = {};  // 20px for each family
-ImFont* g_hud_fonts_large[4] = {};   // 32px for each family
-
 ImFont* load_ttf_with_fallback(ImGuiIO& io, const std::vector<std::string>& candidate_paths,
                                const unsigned char* fallback_mem, size_t fallback_size,
                                float size_px) {
@@ -593,31 +585,60 @@ ImFont* load_ttf_with_fallback(ImGuiIO& io, const std::vector<std::string>& cand
 
 }  // namespace
 
+ImFont* get_gui_font(int tier) {
+  if (!ImGui::GetCurrentContext()) return nullptr;
+  auto* atlas = ImGui::GetIO().Fonts;
+  if (!atlas || atlas->Fonts.empty()) return nullptr;
+  int idx = std::clamp(tier, 0, 2);
+  if (idx < atlas->Fonts.Size) {
+    return atlas->Fonts[idx];
+  }
+  return atlas->Fonts[0];
+}
+
 ImFont* get_gui_font(float gui_scale, float& out_base_size) {
-  if (gui_scale <= 0.75f && g_font_gui_small) {
-    out_base_size = 12.0f;
-    return g_font_gui_small;
+  int tier = 1;
+  if (gui_scale <= 0.75f) {
+    tier = 0;
+    out_base_size = 15.0f;
+  } else if (gui_scale > 1.30f) {
+    tier = 2;
+    out_base_size = 20.0f;
+  } else {
+    tier = 1;
+    out_base_size = 17.0f;
   }
-  if (gui_scale > 1.30f && g_font_gui_large) {
-    out_base_size = 24.0f;
-    return g_font_gui_large;
+  ImFont* font = get_gui_font(tier);
+  return font ? font : ImGui::GetFont();
+}
+
+ImFont* get_hud_font(int family, int tier) {
+  if (!ImGui::GetCurrentContext()) return nullptr;
+  auto* atlas = ImGui::GetIO().Fonts;
+  if (!atlas || atlas->Fonts.empty()) return nullptr;
+  int base_idx = (family == 0) ? 3 : 6;
+  int clamped_tier = std::clamp(tier, 0, 2);
+  int idx = base_idx + clamped_tier;
+  if (idx < atlas->Fonts.Size) {
+    return atlas->Fonts[idx];
   }
-  out_base_size = 16.0f;
-  return g_font_gui_normal ? g_font_gui_normal : ImGui::GetFont();
+  return atlas->Fonts[0];
 }
 
 ImFont* get_hud_font(FontFamily family, float font_size_px, float& out_base_size) {
-  int idx = std::clamp(static_cast<int>(family), 0, 3);
-  if (font_size_px <= 15.0f && g_hud_fonts_small[idx]) {
+  int tier = 1;
+  if (font_size_px <= 15.0f) {
+    tier = 0;
     out_base_size = 14.0f;
-    return g_hud_fonts_small[idx];
-  }
-  if (font_size_px >= 26.0f && g_hud_fonts_large[idx]) {
+  } else if (font_size_px >= 26.0f) {
+    tier = 2;
     out_base_size = 32.0f;
-    return g_hud_fonts_large[idx];
+  } else {
+    tier = 1;
+    out_base_size = 20.0f;
   }
-  out_base_size = 20.0f;
-  return g_hud_fonts_normal[idx] ? g_hud_fonts_normal[idx] : ImGui::GetFont();
+  ImFont* font = get_hud_font(static_cast<int>(family), tier);
+  return font ? font : ImGui::GetFont();
 }
 
 void compute_clamped_hud_pos(const HudConfig& cfg, float display_w, float display_h, float hud_w,
@@ -644,54 +665,39 @@ void setup_overlay_font(ImGuiIO& io) {
                                               "/run/host/usr/share/fonts/TTF/OpenSans-Bold.ttf",
                                               "/usr/share/fonts/TTF/OpenSans-Bold.ttf"};
 
-  std::vector<std::string> dejavu_paths = {home_fonts + "DejaVuSansMono-Bold.ttf",
-                                           "/run/host/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
-                                           "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf"};
+  std::vector<std::string> mono_paths = {home_fonts + "DejaVuSansMono-Bold.ttf",
+                                         "/run/host/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
+                                         "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
+                                         home_fonts + "AdwaitaMono-Bold.ttf",
+                                         "/run/host/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf",
+                                         "/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf"};
 
-  std::vector<std::string> adwaita_paths = {
-      home_fonts + "AdwaitaMono-Bold.ttf", "/run/host/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf",
-      "/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf"};
+  // Index 0..2: Dedicated GUI Menu Fonts (Small 15px, Normal 17px, Large 20px)
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 15.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 17.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
 
-  // 1. Dedicated GUI Menu Fonts (Crisp OpenSans at 12px, 16px, 24px)
-  g_font_gui_small = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                            sizeof(kEmbeddedOpenSansBoldTTF), 12.0f);
-  g_font_gui_normal = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                             sizeof(kEmbeddedOpenSansBoldTTF), 16.0f);
-  g_font_gui_large = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                            sizeof(kEmbeddedOpenSansBoldTTF), 24.0f);
+  // Index 3..5: HUD Sans-Serif Fonts (Small 14px, Normal 20px, Large 32px)
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 14.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 32.0f);
 
-  // 2. Multi-tier HUD Fonts for each of the 4 FontFamily choices
-  // Slot 0: SansBold
-  g_hud_fonts_small[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                sizeof(kEmbeddedOpenSansBoldTTF), 14.0f);
-  g_hud_fonts_normal[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                 sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
-  g_hud_fonts_large[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                sizeof(kEmbeddedOpenSansBoldTTF), 32.0f);
+  // Index 6..8: HUD Monospace Fonts (Small 14px, Normal 20px, Large 32px)
+  // Rasterized once per size tier instead of 3 duplicate times across families!
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         14.0f);
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         20.0f);
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         32.0f);
 
-  // Slot 1: MonoBold
-  g_hud_fonts_small[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
-
-  // Slot 2: VeraMono
-  g_hud_fonts_small[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
-
-  // Slot 3: AdwaitaMono
-  g_hud_fonts_small[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
+  FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::UI, "Initialized 9-font overlay atlas");
 }
 
 void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_width,

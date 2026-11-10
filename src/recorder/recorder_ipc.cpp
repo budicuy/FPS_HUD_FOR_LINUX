@@ -177,17 +177,25 @@ void RecorderController::set_toast(const std::string& msg) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   toast_msg_ = msg;
   toast_time_ = std::chrono::steady_clock::now();
+  has_active_toast_.store(!msg.empty(), std::memory_order_release);
 }
 
 bool RecorderController::get_recent_toast(std::string& out_msg) const {
+  if (!has_active_toast_.load(std::memory_order_acquire)) {
+    return false;
+  }
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (toast_msg_.empty()) return false;
+  if (toast_msg_.empty()) {
+    has_active_toast_.store(false, std::memory_order_release);
+    return false;
+  }
   auto now = std::chrono::steady_clock::now();
   double sec = std::chrono::duration<double>(now - toast_time_).count();
   if (sec <= 3.8) {
     out_msg = toast_msg_;
     return true;
   }
+  has_active_toast_.store(false, std::memory_order_release);
   return false;
 }
 
@@ -300,6 +308,7 @@ void RecorderController::start_recording(const HudConfig& cfg, float display_w, 
 
   toast_msg_ = "[REC] Recording started (Press F7 to stop)";
   toast_time_ = std::chrono::steady_clock::now();
+  has_active_toast_.store(true, std::memory_order_release);
 }
 
 void RecorderController::stop_recording() {
@@ -335,6 +344,7 @@ void RecorderController::stop_recording() {
   // Show immediate non-blocking toast indicating background save in progress
   toast_msg_ = "[REC] Saving video in background...";
   toast_time_ = std::chrono::steady_clock::now();
+  has_active_toast_.store(true, std::memory_order_release);
 
   // Offload final socket communication, disk remuxing wait, child process reaping,
   // and shared memory cleanup to background thread so game render thread never freezes or drops
@@ -381,6 +391,7 @@ void RecorderController::stop_recording() {
         this->last_saved_file_ = saved_path;
         this->toast_msg_ = "[✓] Video saved: " + saved_path;
         this->toast_time_ = std::chrono::steady_clock::now();
+        this->has_active_toast_.store(true, std::memory_order_release);
       }
       this->is_finalizing_.store(false, std::memory_order_relaxed);
     }
@@ -981,6 +992,7 @@ void RecorderController::submit_screenshot(const void* pixels, uint32_t width, u
           this->toast_msg_ = "[!] Failed to save PNG screenshot.";
         }
         this->toast_time_ = std::chrono::steady_clock::now();
+        this->has_active_toast_.store(true, std::memory_order_release);
       });
 }
 

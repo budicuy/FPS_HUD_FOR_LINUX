@@ -873,18 +873,21 @@ std::string format_keybind(const Keybind& kb) {
 }
 
 std::string get_default_record_dir() {
-  if (const char* xdg_vid = std::getenv("XDG_VIDEOS_DIR"); xdg_vid && *xdg_vid) {
-    return std::string(xdg_vid) + "/FPSHUD";
-  }
-  if (const char* home = std::getenv("HOME"); home && *home) {
-    std::error_code ec;
-    fs::path p_id = fs::path(home) / "Video" / "FPSHUD";
-    if (fs::exists(fs::path(home) / "Video", ec)) {
-      return p_id.string();
+  static const std::string cached_dir = []() -> std::string {
+    if (const char* xdg_vid = std::getenv("XDG_VIDEOS_DIR"); xdg_vid && *xdg_vid) {
+      return std::string(xdg_vid) + "/FPSHUD";
     }
-    return (fs::path(home) / "Videos" / "FPSHUD").string();
-  }
-  return "/tmp/FPSHUD";
+    if (const char* home = std::getenv("HOME"); home && *home) {
+      std::error_code ec;
+      fs::path p_id = fs::path(home) / "Video" / "FPSHUD";
+      if (fs::exists(fs::path(home) / "Video", ec)) {
+        return p_id.string();
+      }
+      return (fs::path(home) / "Videos" / "FPSHUD").string();
+    }
+    return "/tmp/FPSHUD";
+  }();
+  return cached_dir;
 }
 
 std::string get_effective_record_dir(const HudConfig& cfg) {

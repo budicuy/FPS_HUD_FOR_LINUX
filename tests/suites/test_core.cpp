@@ -8,6 +8,7 @@
 #include "input_manager.hpp"
 #include "logger.hpp"
 #include "overlay_ui.hpp"
+#include "imgui.h"
 #include "pack_indexing.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
@@ -522,6 +523,32 @@ TEST_CASE("Core: GUI Presets, INI Persistence & Video Encoders") {
     std::string ini_content = read_text_file(test_ini_path);
     CHECK(ini_content.find("\ninjected_key=1\n") == std::string::npos);
     CHECK(ini_content.find("\nrogue_key=pwned\n") == std::string::npos);
+  }
+
+  SUBCASE("ImGui Multi-Context Font Lifecycle Safety") {
+    ImGuiContext* ctx_a = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx_a);
+    fpshud::setup_overlay_font(ImGui::GetIO());
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    ImGuiContext* ctx_b = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx_b);
+    fpshud::setup_overlay_font(ImGui::GetIO());
+    ImGui::DestroyContext(ctx_b);
+
+    ImGui::SetCurrentContext(ctx_a);
+    ImGui::GetIO().DisplaySize = ImVec2(1280.0f, 720.0f);
+    ImGui::NewFrame();
+    fpshud::TelemetryData td{};
+    fpshud::HudConfig cfg = fpshud::get_global_config();
+    cfg.enabled = true;
+    cfg.hud_visible = true;
+    fpshud::render_overlay_ui(cfg, td, 1280.0f, 720.0f);
+    ImGui::Render();
+    CHECK(ImGui::GetDrawData() != nullptr);
+    ImGui::DestroyContext(ctx_a);
   }
 }
 
