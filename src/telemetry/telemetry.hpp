@@ -2,15 +2,25 @@
 
 #include <inplace_vector>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bitset>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "providers/cpu_provider.hpp"
+#include "providers/ram_provider.hpp"
 
 namespace fpshud {
 
@@ -191,6 +201,86 @@ struct TelemetryData {
   BenchmarkSummary last_benchmark{};
 };
 
+using HardwareTelemetryData = TelemetryData;
+
+// Fast zero-allocation sysfs reader using stack buffer
+inline bool read_sysfs_buf(const char* path, char* buf, size_t buf_size) noexcept {
+  if (!path || !*path || buf_size == 0) return false;
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  ssize_t n = read(fd, buf, buf_size - 1);
+  close(fd);
+  if (n <= 0) {
+    buf[0] = '\0';
+    return false;
+  }
+  buf[n] = '\0';
+  for (ssize_t i = 0; i < n; ++i) {
+    if (buf[i] == '\n' || buf[i] == '\r') {
+      buf[i] = '\0';
+      break;
+    }
+  }
+  return true;
+}
+
+inline bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
+  char buf[64]{};
+  if (!read_sysfs_buf(path, buf, sizeof(buf))) return false;
+  char* end = nullptr;
+  unsigned long long val = std::strtoull(buf, &end, 10);
+  if (end == buf) return false;
+  out = static_cast<uint64_t>(val);
+  return true;
+}
+
+inline bool is_sysfs_readable(const char* path) noexcept {
+  if (!path || !*path) return false;
+  struct stat st{};
+  if (::stat(path, &st) != 0) return false;
+  if ((st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) == 0) return false;
+  return ::access(path, R_OK) == 0;
+}
+
+// Shortens verbose CPU/GPU marketing strings so they fit cleanly in the GUI header
+inline void clean_hardware_name(const char* raw, char* out, size_t out_size) noexcept {
+  if (!raw || !*raw || out_size == 0) return;
+  std::string s(raw);
+
+  const char* strip_tokens[] = {
+      "(R)",       "(TM)",      "(tm)",      "CPU",       "Processor",
+      "12th Gen ", "13th Gen ", "14th Gen ", "11th Gen ", "10th Gen ",
+      "Intel ",    "NVIDIA ",   "GeForce ",  "AMD ",      "Advanced Micro Devices, Inc. "};
+  for (const char* tok : strip_tokens) {
+    size_t pos = 0;
+    size_t len = std::strlen(tok);
+    while ((pos = s.find(tok, pos)) != std::string::npos) {
+      s.erase(pos, len);
+    }
+  }
+  // Strip trailing "@ 2.50GHz" or "with Radeon Graphics"
+  if (size_t at = s.find('@'); at != std::string::npos) {
+    s.erase(at);
+  }
+  if (size_t w = s.find("with "); w != std::string::npos) {
+    s.erase(w);
+  }
+  // Collapse multiple spaces and trim
+  std::string compact;
+  bool prev_space = true;
+  for (char c : s) {
+    if (c == ' ' || c == '\t') {
+      if (!prev_space) compact.push_back(' ');
+      prev_space = true;
+    } else {
+      compact.push_back(c);
+      prev_space = false;
+    }
+  }
+  while (!compact.empty() && compact.back() == ' ') compact.pop_back();
+  std::snprintf(out, out_size, "%s", compact.empty() ? raw : compact.c_str());
+}
+
 class TelemetryCollector {
 public:
   static constexpr size_t kFrameWindowSize = 512;
@@ -347,19 +437,8 @@ private:
   std::string drm_power_uw_path_;       // hwmon/power1_average or power1_input (microwatts)
   std::string drm_energy_uj_path_;      // hwmon/energy1_input (microjoules)
 
-  // CPU Sensor descriptors discovered at init (Intel & AMD, zero-heap trivial inline storage)
-  struct CpuFreqSensor {
-    uint16_t cpu_id = 0;
-    bool use_cpuinfo = false;
-  };
-  std::inplace_vector<CpuFreqSensor, 512> cpu_freq_sensors_;
-  std::string cpu_temp_path_;
-  std::string rapl_energy_path_;
-  uint64_t rapl_max_range_uj_ = 0;
-  float cpu_tdp_watts_ = 65.0f;
-  int cpu_max_freq_mhz_ = 0;
-  std::string cpu_hwmon_power_uw_path_;   // Fallback direct microwatt sensor (AMD zenpower/k10temp)
-  std::string cpu_hwmon_energy_uj_path_;  // Fallback microjoule counter (amd_energy)
+  CpuProvider cpu_provider_;
+  RamProvider ram_provider_;
 
   // Battery paths
   std::string battery_capacity_path_;
@@ -379,12 +458,6 @@ private:
   std::chrono::steady_clock::time_point prev_net_poll_time_{};
 
   // Previous counters for delta calculation
-  uint64_t prev_cpu_total_ = 0;
-  uint64_t prev_cpu_idle_ = 0;
-  std::array<uint64_t, TelemetryData::kMaxCpuCores> prev_core_total_{};
-  std::array<uint64_t, TelemetryData::kMaxCpuCores> prev_core_idle_{};
-  uint64_t prev_rapl_uj_ = 0;
-  std::chrono::steady_clock::time_point prev_rapl_time_{};
   uint64_t prev_gpu_energy_uj_ = 0;
   std::chrono::steady_clock::time_point prev_gpu_energy_time_{};
   uint64_t prev_drm_render_ns_ = 0;

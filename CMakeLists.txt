@@ -237,6 +237,8 @@ add_library(fpshud SHARED
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
+    src/telemetry/providers/cpu_provider.cpp
+    src/telemetry/providers/ram_provider.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
     src/input/input_manager.cpp
@@ -253,6 +255,7 @@ target_include_directories(fpshud PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
@@ -296,6 +299,8 @@ add_executable(fpshud_test
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
+    src/telemetry/providers/cpu_provider.cpp
+    src/telemetry/providers/ram_provider.cpp
     src/input/input_manager.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
@@ -311,6 +316,7 @@ target_include_directories(fpshud_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
@@ -499,6 +505,8 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
@@ -531,6 +539,10 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp

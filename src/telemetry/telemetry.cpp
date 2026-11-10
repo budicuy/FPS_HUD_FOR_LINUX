@@ -60,84 +60,6 @@ struct LinuxDirent64 {
 };
 constexpr int NVML_SUCCESS = 0;
 
-// Fast zero-allocation sysfs reader using stack buffer
-bool read_sysfs_buf(const char* path, char* buf, size_t buf_size) noexcept {
-  if (!path || !*path || buf_size == 0) return false;
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return false;
-  ssize_t n = read(fd, buf, buf_size - 1);
-  close(fd);
-  if (n <= 0) {
-    buf[0] = '\0';
-    return false;
-  }
-  buf[n] = '\0';
-  for (ssize_t i = 0; i < n; ++i) {
-    if (buf[i] == '\n' || buf[i] == '\r') {
-      buf[i] = '\0';
-      break;
-    }
-  }
-  return true;
-}
-
-bool read_sysfs_u64(const char* path, uint64_t& out) noexcept {
-  char buf[64]{};
-  if (!read_sysfs_buf(path, buf, sizeof(buf))) return false;
-  char* end = nullptr;
-  unsigned long long val = std::strtoull(buf, &end, 10);
-  if (end == buf) return false;
-  out = static_cast<uint64_t>(val);
-  return true;
-}
-
-bool is_sysfs_readable(const char* path) noexcept {
-  if (!path || !*path) return false;
-  struct stat st{};
-  if (::stat(path, &st) != 0) return false;
-  if ((st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) == 0) return false;
-  return ::access(path, R_OK) == 0;
-}
-
-// Shortens verbose CPU/GPU marketing strings so they fit cleanly in the GUI header
-void clean_hardware_name(const char* raw, char* out, size_t out_size) noexcept {
-  if (!raw || !*raw || out_size == 0) return;
-  std::string s(raw);
-
-  const char* strip_tokens[] = {
-      "(R)",       "(TM)",      "(tm)",      "CPU",       "Processor",
-      "12th Gen ", "13th Gen ", "14th Gen ", "11th Gen ", "10th Gen ",
-      "Intel ",    "NVIDIA ",   "GeForce ",  "AMD ",      "Advanced Micro Devices, Inc. "};
-  for (const char* tok : strip_tokens) {
-    size_t pos = 0;
-    size_t len = std::strlen(tok);
-    while ((pos = s.find(tok, pos)) != std::string::npos) {
-      s.erase(pos, len);
-    }
-  }
-  // Strip trailing "@ 2.50GHz" or "with Radeon Graphics"
-  if (size_t at = s.find('@'); at != std::string::npos) {
-    s.erase(at);
-  }
-  if (size_t w = s.find("with "); w != std::string::npos) {
-    s.erase(w);
-  }
-  // Collapse multiple spaces and trim
-  std::string compact;
-  bool prev_space = true;
-  for (char c : s) {
-    if (c == ' ' || c == '\t') {
-      if (!prev_space) compact.push_back(' ');
-      prev_space = true;
-    } else {
-      compact.push_back(c);
-      prev_space = false;
-    }
-  }
-  while (!compact.empty() && compact.back() == ' ') compact.pop_back();
-  std::snprintf(out, out_size, "%s", compact.empty() ? raw : compact.c_str());
-}
-
 // Resolves PCI (vendor_id, device_id) such as ("0x1002", "0x747e") against system pci.ids
 bool lookup_pci_device_name(const char* vendor_hex, const char* device_hex, char* out,
                             size_t out_size) noexcept {
@@ -214,7 +136,7 @@ std::string get_benchmark_csv_path() {
 
 }  // namespace
 
-TelemetryCollector::TelemetryCollector() {
+TelemetryCollector::TelemetryCollector() : cpu_provider_(""), ram_provider_("") {
   init_sensors();
   poll_once_sync();
   running_.store(true, std::memory_order_relaxed);
@@ -225,7 +147,9 @@ TelemetryCollector::TelemetryCollector(std::string mock_root_prefix, bool disabl
                                        bool disable_level_zero)
     : root_prefix_(std::move(mock_root_prefix)),
       disable_nvml_(disable_nvml),
-      disable_level_zero_(disable_level_zero) {
+      disable_level_zero_(disable_level_zero),
+      cpu_provider_(root_prefix_),
+      ram_provider_(root_prefix_) {
   init_sensors();
   poll_once_sync();
 }
@@ -523,165 +447,9 @@ void TelemetryCollector::init_sensors() {
 }
 
 void TelemetryCollector::init_cpu_sensors() {
-  std::error_code ec;
-  char buf[128];
-
-  // 1. Detect CPU Model Name from /proc/cpuinfo (Works on Intel, AMD, & ARM)
-  {
-    std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
-    if (FILE* fp = std::fopen(cpuinfo_path.c_str(), "r")) {
-      char line_buf[256];
-      while (std::fgets(line_buf, sizeof(line_buf), fp)) {
-        std::string line(line_buf);
-        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
-        if (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0) {
-          auto colon = line.find(':');
-          if (colon != std::string::npos) {
-            std::string raw_name = line.substr(colon + 1);
-            clean_hardware_name(raw_name.c_str(), staging_hw_data_.cpu_name,
-                                sizeof(staging_hw_data_.cpu_name));
-            break;
-          }
-        }
-      }
-      std::fclose(fp);
-    }
-  }
-
-  // 2. Discover CPU core frequency sysfs paths
-  // (/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq)
-  long max_cpus = sysconf(_SC_NPROCESSORS_CONF);
-  if (max_cpus <= 0) max_cpus = 128;
-  if (!root_prefix_.empty()) {
-    max_cpus = std::max(max_cpus, 512L);
-  }
-  max_cpus = std::clamp(max_cpus, 1L, 512L);
-  cpu_freq_sensors_.clear();
-  char path_buf[512];
-  for (long cpu_idx = 0; cpu_idx < max_cpus; ++cpu_idx) {
-    int n_len = std::snprintf(path_buf, sizeof(path_buf),
-                              "%s/sys/devices/system/cpu/cpu%ld/cpufreq/scaling_cur_freq",
-                              root_prefix_.c_str(), cpu_idx);
-    if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) &&
-        ::access(path_buf, R_OK) == 0) {
-      if (!cpu_freq_sensors_.try_push_back(CpuFreqSensor{static_cast<uint16_t>(cpu_idx), false}))
-        break;
-      continue;
-    }
-    n_len = std::snprintf(path_buf, sizeof(path_buf),
-                          "%s/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_cur_freq",
-                          root_prefix_.c_str(), cpu_idx);
-    if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) &&
-        ::access(path_buf, R_OK) == 0) {
-      if (!cpu_freq_sensors_.try_push_back(CpuFreqSensor{static_cast<uint16_t>(cpu_idx), true}))
-        break;
-    }
-    if (cpu_idx == 0) {
-      n_len = std::snprintf(path_buf, sizeof(path_buf),
-                            "%s/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq",
-                            root_prefix_.c_str());
-      uint64_t max_khz = 0;
-      if (n_len > 0 && static_cast<size_t>(n_len) < sizeof(path_buf) &&
-          read_sysfs_u64(path_buf, max_khz) && max_khz > 0) {
-        cpu_max_freq_mhz_ = static_cast<int>(max_khz / 1000ULL);
-      }
-    }
-  }
-
-  // 3. Discover CPU temperature & hwmon power sensors across Intel (coretemp), AMD (k10temp,
-  // zenpower, amd_energy), and ACPI/SoC
-  std::string hwmon_dir = root_prefix_ + "/sys/class/hwmon";
-  if (fs::exists(hwmon_dir, ec)) {
-    for (const auto& entry : fs::directory_iterator(hwmon_dir, ec)) {
-      std::string name_path = (entry.path() / "name").string();
-      if (!read_sysfs_buf(name_path.c_str(), buf, sizeof(buf))) continue;
-
-      bool is_cpu_hwmon =
-          (std::strcmp(buf, "coretemp") == 0 || std::strcmp(buf, "k10temp") == 0 ||
-           std::strcmp(buf, "zenpower") == 0 || std::strcmp(buf, "zenpower3") == 0 ||
-           std::strcmp(buf, "cpu_thermal") == 0 || std::strcmp(buf, "acpitz") == 0);
-
-      if (is_cpu_hwmon && cpu_temp_path_.empty()) {
-        // Scan temp1_label..temp8_label to prioritize AMD Tdie (true die temp without offset)
-        // or Intel Package id 0, falling back to temp1_input (Tctl).
-        std::string fallback_t1;
-        for (int ti = 1; ti <= 8; ++ti) {
-          char t_in_name[32];
-          char t_lbl_name[32];
-          std::snprintf(t_in_name, sizeof(t_in_name), "temp%d_input", ti);
-          std::snprintf(t_lbl_name, sizeof(t_lbl_name), "temp%d_label", ti);
-          fs::path t_in = entry.path() / t_in_name;
-          if (!fs::exists(t_in, ec)) continue;
-          if (fallback_t1.empty()) fallback_t1 = t_in.string();
-
-          fs::path t_lbl = entry.path() / t_lbl_name;
-          char lbl_buf[64]{};
-          if (read_sysfs_buf(t_lbl.c_str(), lbl_buf, sizeof(lbl_buf))) {
-            if (std::strstr(lbl_buf, "Tdie") != nullptr ||
-                std::strstr(lbl_buf, "Package id 0") != nullptr) {
-              cpu_temp_path_ = t_in.string();
-              break;
-            }
-          }
-        }
-        if (cpu_temp_path_.empty() && !fallback_t1.empty()) {
-          cpu_temp_path_ = std::move(fallback_t1);
-        }
-      }
-
-      if (is_cpu_hwmon || std::strcmp(buf, "amd_energy") == 0 || std::strcmp(buf, "zenergy") == 0) {
-        if (cpu_hwmon_power_uw_path_.empty()) {
-          fs::path p_avg = entry.path() / "power1_average";
-          fs::path p_inp = entry.path() / "power1_input";
-          if (is_sysfs_readable(p_avg.c_str()))
-            cpu_hwmon_power_uw_path_ = p_avg.string();
-          else if (is_sysfs_readable(p_inp.c_str()))
-            cpu_hwmon_power_uw_path_ = p_inp.string();
-        }
-        if (cpu_hwmon_energy_uj_path_.empty()) {
-          fs::path e_inp = entry.path() / "energy1_input";
-          if (is_sysfs_readable(e_inp.c_str())) cpu_hwmon_energy_uj_path_ = e_inp.string();
-        }
-      }
-    }
-  }
-
-  // 3b. Fallback CPU temperature via /sys/class/thermal/thermal_zone0/temp (SoCs / Laptops / VMs)
-  if (cpu_temp_path_.empty()) {
-    std::string tz0 = root_prefix_ + "/sys/class/thermal/thermal_zone0/temp";
-    if (fs::exists(tz0, ec)) {
-      cpu_temp_path_ = std::move(tz0);
-    }
-  }
-
-  // 4. Discover RAPL package energy counter (supported by both Intel & modern AMD Zen CPUs via
-  // powercap). Check R_OK so a root-locked (0400) energy_uj does not block hwmon/TDP fallback!
-  const char* rapl_rel_candidates[] = {"/sys/class/powercap/intel-rapl:0/energy_uj",
-                                       "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
-                                       "/sys/class/powercap/amd-rapl:0/energy_uj"};
-  for (const char* rel : rapl_rel_candidates) {
-    std::string candidate = root_prefix_ + rel;
-    fs::path parent_dir = fs::path(candidate).parent_path();
-
-    // Read world-readable (0444) PL1 / TDP limit for sudo-free estimation fallback
-    uint64_t tdp_uw = 0;
-    if (read_sysfs_u64((parent_dir / "constraint_0_max_power_uw").c_str(), tdp_uw) &&
-        tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
-      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
-    } else if (read_sysfs_u64((parent_dir / "constraint_0_power_limit_uw").c_str(), tdp_uw) &&
-               tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
-      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
-    }
-
-    if (is_sysfs_readable(candidate.c_str())) {
-      rapl_energy_path_ = candidate;
-      fs::path max_path = parent_dir / "max_energy_range_uj";
-      if (read_sysfs_buf(max_path.c_str(), buf, sizeof(buf))) {
-        rapl_max_range_uj_ = std::strtoull(buf, nullptr, 10);
-      }
-      break;
-    }
-  }
+  cpu_provider_.init();
+  ram_provider_.init();
+  cpu_provider_.poll(staging_hw_data_);
 }
 
 void TelemetryCollector::init_gpu_sensors() {
@@ -2008,328 +1776,35 @@ void TelemetryCollector::poll_net_speed() {
   staging_hw_data_.net_tx_mbs = tx_mbs;
 }
 
-void TelemetryCollector::poll_cpu_load() {
-  std::string stat_path = root_prefix_ + "/proc/stat";
+void TelemetryCollector::poll_cpu_load() { cpu_provider_.poll_cpu_load(staging_hw_data_); }
 
-  int fd = open(stat_path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return;
-  char buf[16384];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if (n <= 0) return;
-  buf[n] = '\0';
-
-  int max_core_seen = 0;
-  std::array<uint8_t, TelemetryData::kMaxCpuCores> core_loads{};
-  std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
-
-  const char* line = buf;
-  while (*line) {
-    const char* next_line = std::strchr(line, '\n');
-
-    if (line[0] == 'c' && line[1] == 'p' && line[2] == 'u') {
-      if (line[3] == ' ') {
-        // Overall CPU line
-        uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
-                 steal = 0;
-        if (std::sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
-                        &iowait, &irq, &softirq, &steal) >= 4) {
-          uint64_t idle_all = idle + iowait;
-          uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
-          if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
-            uint64_t total_d = total - prev_cpu_total_;
-            uint64_t idle_d = (idle_all > prev_cpu_idle_) ? (idle_all - prev_cpu_idle_) : 0;
-            uint64_t busy_d = (total_d > idle_d) ? (total_d - idle_d) : 0;
-            float usage = std::clamp(
-                100.0f * static_cast<float>(busy_d) / static_cast<float>(total_d), 0.0f, 100.0f);
-            staging_hw_data_.cpu_load_pct = usage;
-          }
-          prev_cpu_total_ = total;
-          prev_cpu_idle_ = idle_all;
-        }
-      } else if (line[3] >= '0' && line[3] <= '9') {
-        // Per-core line: cpu<N>
-        char* endp = nullptr;
-        long cpu_idx = std::strtol(line + 3, &endp, 10);
-        if (endp && endp != line + 3 && cpu_idx >= 0 && cpu_idx < 512) {
-          uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
-                   steal = 0;
-          if (std::sscanf(endp, "%lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
-                          &iowait, &irq, &softirq, &steal) >= 4) {
-            uint64_t idle_all = idle + iowait;
-            uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
-
-            if (cpu_idx < static_cast<long>(TelemetryData::kMaxCpuCores)) {
-              size_t cidx = static_cast<size_t>(cpu_idx);
-              max_core_seen = std::max(max_core_seen, static_cast<int>(cpu_idx) + 1);
-              if (prev_core_total_[cidx] != 0 && total > prev_core_total_[cidx]) {
-                uint64_t tot_d = total - prev_core_total_[cidx];
-                uint64_t idle_d =
-                    (idle_all > prev_core_idle_[cidx]) ? (idle_all - prev_core_idle_[cidx]) : 0;
-                uint64_t busy_d = (tot_d > idle_d) ? (tot_d - idle_d) : 0;
-                int pct = std::clamp(static_cast<int>((busy_d * 100 + tot_d / 2) / tot_d), 0, 100);
-                core_loads[cidx] = static_cast<uint8_t>(pct);
-                core_updated.set(cidx);
-              }
-              prev_core_total_[cidx] = total;
-              prev_core_idle_[cidx] = idle_all;
-            }
-          }
-        }
-      }
-    }
-
-    if (!next_line) break;
-    line = next_line + 1;
-  }
-
-  if (max_core_seen > 0) {
-    staging_hw_data_.cpu_core_count = std::max(staging_hw_data_.cpu_core_count, max_core_seen);
-    for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
-      if (core_updated.test(i)) {
-        staging_hw_data_.cpu_core_loads_pct[i] = core_loads[i];
-      }
-    }
-  }
-}
-
-void TelemetryCollector::poll_cpu_clock() {
-  int max_mhz = 0;
-  int max_core_seen = 0;
-  std::array<uint16_t, TelemetryData::kMaxCpuCores> core_clocks{};
-  std::bitset<TelemetryData::kMaxCpuCores> core_updated{};
-
-  // 1. Fast path: parse /proc/cpuinfo in a single file read (zero IPI interrupts to CPU cores)
-  std::string cpuinfo_path = root_prefix_ + "/proc/cpuinfo";
-  int fd = open(cpuinfo_path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd >= 0) {
-    char buf[16384];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n > 0) {
-      buf[n] = '\0';
-      int cur_processor = -1;
-      const char* p = buf;
-      while (*p) {
-        if (std::strncmp(p, "processor", 9) == 0) {
-          const char* colon = std::strchr(p, ':');
-          if (colon) {
-            cur_processor = std::atoi(colon + 1);
-          }
-        } else if (std::strncmp(p, "cpu MHz", 7) == 0 && cur_processor >= 0) {
-          const char* colon = std::strchr(p, ':');
-          if (colon) {
-            float mhz_f = std::strtof(colon + 1, nullptr);
-            int mhz = static_cast<int>(mhz_f + 0.5f);
-            if (mhz > max_mhz) max_mhz = mhz;
-            if (cur_processor < static_cast<int>(TelemetryData::kMaxCpuCores)) {
-              core_clocks[cur_processor] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
-              core_updated.set(cur_processor);
-              max_core_seen = std::max(max_core_seen, cur_processor + 1);
-            }
-          }
-        }
-        const char* next = std::strchr(p, '\n');
-        if (!next) break;
-        p = next + 1;
-      }
-    }
-  }
-
-  // 2. Fallback to sysfs if cpu MHz was not in /proc/cpuinfo (e.g. mock directories or
-  // architectures)
-  if (max_mhz <= 0 && max_core_seen <= 0) {
-    char buf[32];
-    char path_buf[512];
-    for (const auto& sensor : cpu_freq_sensors_) {
-      int n_len = std::snprintf(path_buf, sizeof(path_buf),
-                                sensor.use_cpuinfo
-                                    ? "%s/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_cur_freq"
-                                    : "%s/sys/devices/system/cpu/cpu%u/cpufreq/scaling_cur_freq",
-                                root_prefix_.c_str(), static_cast<unsigned>(sensor.cpu_id));
-      if (n_len <= 0 || static_cast<size_t>(n_len) >= sizeof(path_buf)) continue;
-      if (read_sysfs_buf(path_buf, buf, sizeof(buf))) {
-        long khz = std::strtol(buf, nullptr, 10);
-        int mhz = static_cast<int>((khz + 500) / 1000);
-        if (mhz > max_mhz) max_mhz = mhz;
-        if (sensor.cpu_id < TelemetryData::kMaxCpuCores) {
-          core_clocks[sensor.cpu_id] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));
-          core_updated.set(sensor.cpu_id);
-          max_core_seen = std::max(max_core_seen, static_cast<int>(sensor.cpu_id) + 1);
-        }
-      }
-    }
-  }
-
-  if (max_mhz > 0 || max_core_seen > 0) {
-    if (max_mhz > 0) staging_hw_data_.cpu_clock_mhz = max_mhz;
-    staging_hw_data_.cpu_core_count = std::max(staging_hw_data_.cpu_core_count, max_core_seen);
-    for (size_t i = 0; i < TelemetryData::kMaxCpuCores; ++i) {
-      if (core_updated.test(i)) {
-        staging_hw_data_.cpu_core_clocks_mhz[i] = core_clocks[i];
-      }
-    }
-  }
-}
+void TelemetryCollector::poll_cpu_clock() { cpu_provider_.poll_cpu_clock(staging_hw_data_); }
 
 void TelemetryCollector::poll_cpu_temp() {
-  if (cpu_temp_path_.empty()) return;
-  char buf[32];
-  if (!read_sysfs_buf(cpu_temp_path_.c_str(), buf, sizeof(buf))) return;
-
-  long millideg = std::strtol(buf, nullptr, 10);
-  int temp_c = static_cast<int>((millideg + 500) / 1000);
-  staging_hw_data_.cpu_temp_c = temp_c;
+  cpu_provider_.poll_cpu_temp(staging_hw_data_);
   if (bench_active_.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> block(bench_mutex_);
-    if (temp_c > bench_max_cpu_temp_c_) bench_max_cpu_temp_c_ = temp_c;
+    if (staging_hw_data_.cpu_temp_c > bench_max_cpu_temp_c_) {
+      bench_max_cpu_temp_c_ = staging_hw_data_.cpu_temp_c;
+    }
   }
 }
 
 void TelemetryCollector::poll_cpu_power() {
-  char buf[32];
-  float watts = -1.0f;
-
-  // 1. Primary: Intel / AMD RAPL energy counter
-  const std::string& energy_path =
-      !rapl_energy_path_.empty() ? rapl_energy_path_ : cpu_hwmon_energy_uj_path_;
-  if (!energy_path.empty() && read_sysfs_buf(energy_path.c_str(), buf, sizeof(buf))) {
-    uint64_t curr_uj = std::strtoull(buf, nullptr, 10);
-    auto now = std::chrono::steady_clock::now();
-
-    if (prev_rapl_time_.time_since_epoch().count() != 0) {
-      double dt_sec = std::chrono::duration<double>(now - prev_rapl_time_).count();
-      if (dt_sec > 0.01) {
-        uint64_t delta_uj = 0;
-        if (curr_uj >= prev_rapl_uj_) {
-          delta_uj = curr_uj - prev_rapl_uj_;
-        } else if (rapl_max_range_uj_ > prev_rapl_uj_) {
-          delta_uj = (rapl_max_range_uj_ - prev_rapl_uj_) + curr_uj;
-        }
-        watts = static_cast<float>((static_cast<double>(delta_uj) / 1e6) / dt_sec);
-      }
-    }
-    prev_rapl_uj_ = curr_uj;
-    prev_rapl_time_ = now;
-  }
-
-  // 2. Fallback: Direct hwmon power1_average / power1_input in microwatts (AMD zenpower / k10temp)
-  if (watts < 0.0f && !cpu_hwmon_power_uw_path_.empty() &&
-      read_sysfs_buf(cpu_hwmon_power_uw_path_.c_str(), buf, sizeof(buf))) {
-    uint64_t uw = std::strtoull(buf, nullptr, 10);
-    watts = static_cast<float>(uw) / 1e6f;
-  }
-
-  // 3. Tier-3 Fallback: Sudo-free TDP estimation (constraint_0_max_power_uw + load & boost ratio)
-  // Active when RAPL energy_uj is locked (0400) and no hwmon power counter exists (e.g. Intel
-  // coretemp)
-  if (watts < 0.0f && energy_path.empty() && cpu_hwmon_power_uw_path_.empty()) {
-    float load_ratio = std::clamp(staging_hw_data_.cpu_load_pct / 100.0f, 0.0f, 1.0f);
-    int cur_mhz = staging_hw_data_.cpu_clock_mhz;
-    float freq_ratio = 1.0f;
-    if (cur_mhz > 0 && cpu_max_freq_mhz_ > 0) {
-      freq_ratio = std::clamp(static_cast<float>(cur_mhz) / static_cast<float>(cpu_max_freq_mhz_),
-                              0.35f, 1.25f);
-    }
-    float idle_w = std::clamp(cpu_tdp_watts_ * 0.12f, 4.0f, 18.0f);
-    float dyn_w = (cpu_tdp_watts_ - idle_w) * load_ratio * std::pow(freq_ratio, 1.5f);
-    watts = std::clamp(idle_w + dyn_w, idle_w, cpu_tdp_watts_ * 1.35f);
-  }
-
-  if (watts >= 0.0f && watts < 500.0f) {
-    staging_hw_data_.cpu_power_w = watts;
-    if (bench_active_.load(std::memory_order_relaxed)) {
-      std::lock_guard<std::mutex> block(bench_mutex_);
-      if (watts > bench_max_cpu_power_w_) bench_max_cpu_power_w_ = watts;
+  cpu_provider_.poll_cpu_power(staging_hw_data_);
+  if (bench_active_.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> block(bench_mutex_);
+    if (staging_hw_data_.cpu_power_w > bench_max_cpu_power_w_) {
+      bench_max_cpu_power_w_ = staging_hw_data_.cpu_power_w;
     }
   }
 }
 
-void TelemetryCollector::poll_ram() {
-  std::string mem_path = root_prefix_ + "/proc/meminfo";
-  int fd = open(mem_path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return;
-  char buf[4096];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if (n <= 0) return;
-  buf[n] = '\0';
+void TelemetryCollector::poll_ram() { ram_provider_.poll_ram(staging_hw_data_); }
 
-  uint64_t mem_total_kb = 0;
-  uint64_t mem_avail_kb = 0;
-  uint64_t swap_total_kb = 0;
-  uint64_t swap_free_kb = 0;
+void TelemetryCollector::poll_game_ram() { ram_provider_.poll_game_ram(staging_hw_data_); }
 
-  if (const char* p = std::strstr(buf, "MemTotal:")) {
-    mem_total_kb = std::strtoull(p + 9, nullptr, 10);
-  }
-  if (const char* p = std::strstr(buf, "MemAvailable:")) {
-    mem_avail_kb = std::strtoull(p + 13, nullptr, 10);
-  }
-  if (const char* p = std::strstr(buf, "SwapTotal:")) {
-    swap_total_kb = std::strtoull(p + 10, nullptr, 10);
-  }
-  if (const char* p = std::strstr(buf, "SwapFree:")) {
-    swap_free_kb = std::strtoull(p + 9, nullptr, 10);
-  }
-
-  if (mem_total_kb > 0) {
-    uint64_t used_kb = (mem_total_kb > mem_avail_kb) ? (mem_total_kb - mem_avail_kb) : 0;
-    uint64_t swap_used_kb = (swap_total_kb > swap_free_kb) ? (swap_total_kb - swap_free_kb) : 0;
-    constexpr float kKbPerGb = 1024.0f * 1024.0f;
-    staging_hw_data_.ram_total_gb = static_cast<float>(mem_total_kb) / kKbPerGb;
-    staging_hw_data_.ram_used_gb = static_cast<float>(used_kb) / kKbPerGb;
-    staging_hw_data_.ram_used_pct =
-        100.0f * static_cast<float>(used_kb) / static_cast<float>(mem_total_kb);
-    staging_hw_data_.swap_total_gb = static_cast<float>(swap_total_kb) / kKbPerGb;
-    staging_hw_data_.swap_used_gb = static_cast<float>(swap_used_kb) / kKbPerGb;
-  }
-}
-
-void TelemetryCollector::poll_game_ram() {
-  // Fast path: /proc/self/statm (single line: size resident shared text lib data dirty)
-  std::string statm_path = root_prefix_ + "/proc/self/statm";
-  char buf[128];
-  if (read_sysfs_buf(statm_path.c_str(), buf, sizeof(buf))) {
-    unsigned long size = 0;
-    unsigned long resident = 0;
-    if (std::sscanf(buf, "%lu %lu", &size, &resident) == 2) {
-      static const long s_page_size = sysconf(_SC_PAGESIZE);
-      double bytes = static_cast<double>(resident) * (s_page_size > 0 ? s_page_size : 4096);
-      staging_hw_data_.game_ram_gb = static_cast<float>(bytes / (1024.0 * 1024.0 * 1024.0));
-      return;
-    }
-  }
-
-  // Fallback: /proc/self/status VmRSS
-  std::string status_path = root_prefix_ + "/proc/self/status";
-  int fd = open(status_path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return;
-  char sbuf[4096];
-  ssize_t n = read(fd, sbuf, sizeof(sbuf) - 1);
-  close(fd);
-  if (n <= 0) return;
-  sbuf[n] = '\0';
-
-  if (const char* p = std::strstr(sbuf, "VmRSS:")) {
-    uint64_t rss_kb = std::strtoull(p + 6, nullptr, 10);
-    staging_hw_data_.game_ram_gb = static_cast<float>(rss_kb) / (1024.0f * 1024.0f);
-  }
-}
-
-void TelemetryCollector::poll_mem_pressure() {
-  // Linux PSI: share of time (last 10s) in which at least one task stalled waiting for memory
-  char buf[256];
-  std::string psi_path = root_prefix_ + "/proc/pressure/memory";
-  float some_avg10 = -1.0f;
-  if (read_sysfs_buf(psi_path.c_str(), buf, sizeof(buf))) {
-    float v = 0.0f;
-    if (std::sscanf(buf, "some avg10=%f", &v) == 1) {
-      some_avg10 = std::clamp(v, 0.0f, 100.0f);
-    }
-  }
-  staging_hw_data_.mem_psi_some_pct = some_avg10;
-}
+void TelemetryCollector::poll_mem_pressure() { ram_provider_.poll_mem_pressure(staging_hw_data_); }
 
 void TelemetryCollector::poll_gpu() {
   std::lock_guard<std::mutex> lock(gpu_sensor_mutex_);

@@ -12,6 +12,8 @@
 #include "gui_menu.hpp"
 #include "imgui.h"
 #include "logger.hpp"
+#include "providers/cpu_provider.hpp"
+#include "providers/ram_provider.hpp"
 
 #include <linux/input.h>
 #include <vulkan/vulkan.h>
@@ -4536,6 +4538,74 @@ void run_all_devices_and_features_suite() {
     bool logger_suite_passed = init_safe && write_formatted_ok;
     check_cond(logger_suite_passed, "12.1 Zero-Cost C++26 Logging Engine & POSIX Formatter",
                write_detail.c_str());
+
+    // --- SUITE 13: Modular Telemetry: CPU & RAM Providers ---
+    std::printf("\n--- SUITE 13: Modular Telemetry: CPU & RAM Providers ---\n");
+    char prov_test_dir_tmpl[] = "/tmp/fpshud_test_providers_XXXXXX";
+    char* prov_test_dir = ::mkdtemp(prov_test_dir_tmpl);
+    bool prov_suite_passed = false;
+    std::string prov_detail;
+    if (prov_test_dir) {
+      fs::path pdir(prov_test_dir);
+      write_mock_file(pdir / "proc/cpuinfo",
+                      "processor\t: 0\nmodel name\t: Test CPU Model\ncpu MHz\t: 3600.000\n"
+                      "processor\t: 1\nmodel name\t: Test CPU Model\ncpu MHz\t: 3600.000\n");
+      write_mock_file(pdir / "proc/stat",
+                      "cpu  10000 0 2000 88000 0 0 0 0\n"
+                      "cpu0 5000 0 1000 44000 0 0 0 0\n"
+                      "cpu1 5000 0 1000 44000 0 0 0 0\n");
+      write_mock_file(pdir / "sys/class/hwmon/hwmon0/name", "coretemp");
+      write_mock_file(pdir / "sys/class/hwmon/hwmon0/temp1_input", "55000");
+      write_mock_file(pdir / "sys/class/hwmon/hwmon0/power1_average", "45000000");
+      write_mock_file(pdir / "proc/meminfo",
+                      "MemTotal:       16777216 kB\nMemAvailable:    8388608 kB\n"
+                      "SwapTotal:        4194304 kB\nSwapFree:         2097152 kB\n");
+      write_mock_file(pdir / "proc/self/statm", "10000 2500 500 100 0 100 0\n");
+      write_mock_file(pdir / "proc/pressure/memory",
+                      "some avg10=3.50 avg60=1.20 avg300=0.50 total=12345\n");
+
+      fpshud::CpuProvider cpu_prov(pdir.string());
+      cpu_prov.init();
+      fpshud::HardwareTelemetryData hdata{};
+      cpu_prov.poll(hdata);
+
+      write_mock_file(pdir / "proc/stat",
+                      "cpu  10600 0 2000 88400 0 0 0 0\n"
+                      "cpu0 5300 0 1000 44200 0 0 0 0\n"
+                      "cpu1 5300 0 1000 44200 0 0 0 0\n");
+      cpu_prov.poll(hdata);
+
+      fpshud::RamProvider ram_prov(pdir.string());
+      ram_prov.init();
+      ram_prov.poll(hdata);
+
+      bool cpu_load_ok = (hdata.cpu_load_pct >= 59.0f && hdata.cpu_load_pct <= 61.0f);
+      bool cpu_clk_ok = (hdata.cpu_clock_mhz == 3600);
+      bool cpu_temp_ok = (hdata.cpu_temp_c == 55);
+      bool cpu_pwr_ok = (hdata.cpu_power_w >= 44.9f && hdata.cpu_power_w <= 45.1f);
+      bool ram_used_ok = (hdata.ram_used_gb >= 7.9f && hdata.ram_used_gb <= 8.1f);
+      bool ram_tot_ok = (hdata.ram_total_gb >= 15.9f && hdata.ram_total_gb <= 16.1f);
+      bool swap_used_ok = (hdata.swap_used_gb >= 1.9f && hdata.swap_used_gb <= 2.1f);
+      bool swap_tot_ok = (hdata.swap_total_gb >= 3.9f && hdata.swap_total_gb <= 4.1f);
+      bool psi_ok = (hdata.mem_psi_some_pct >= 3.4f && hdata.mem_psi_some_pct <= 3.6f);
+      bool game_ram_ok = (hdata.game_ram_gb > 0.0f);
+
+      prov_suite_passed = cpu_load_ok && cpu_clk_ok && cpu_temp_ok && cpu_pwr_ok && ram_used_ok &&
+                          ram_tot_ok && swap_used_ok && swap_tot_ok && psi_ok && game_ram_ok;
+      prov_detail = "cpu_load=" + std::to_string(hdata.cpu_load_pct) +
+                    ", clk=" + std::to_string(hdata.cpu_clock_mhz) +
+                    ", temp=" + std::to_string(hdata.cpu_temp_c) +
+                    ", ram=" + std::to_string(hdata.ram_used_gb) + "/" +
+                    std::to_string(hdata.ram_total_gb) +
+                    ", swap=" + std::to_string(hdata.swap_used_gb) +
+                    ", psi=" + std::to_string(hdata.mem_psi_some_pct) +
+                    ", game=" + std::to_string(hdata.game_ram_gb);
+
+      std::error_code rm_ec;
+      fs::remove_all(pdir, rm_ec);
+    }
+    check_cond(prov_suite_passed, "13.1 Modular Telemetry: CPU & RAM Providers",
+               prov_detail.c_str());
   }
 
   std::printf("\n====================================================================\n");
