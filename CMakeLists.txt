@@ -97,6 +97,7 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
         -Wl,--wrap=fmodf
         -Wl,--wrap=sinh
         -Wl,--wrap=cosh
+        -Wl,--wrap=sqrtf
         -Wl,--wrap=__isoc23_sscanf
         -Wl,--wrap=__isoc23_strtol
         -Wl,--wrap=__isoc23_strtoul
@@ -107,7 +108,7 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(NOT USE_SANITIZERS)
+    if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO (Extreme Release)")
         add_compile_options(
             -O3
@@ -132,6 +133,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
             -static-libgcc
         )
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build]")
+        add_compile_options(
+            -O0
+            -g3
+            -Wall
+            -Wextra
+        )
     else()
         message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
         add_compile_options(
@@ -144,7 +153,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         )
     endif()
 else()
-    if(NOT USE_SANITIZERS)
+    if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
         add_compile_options(
@@ -164,6 +173,14 @@ else()
             -Wl,--as-needed
             $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
             -static-libgcc
+        )
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
+        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build]")
+        add_compile_options(
+            -O0
+            -g3
+            -Wall
+            -Wextra
         )
     else()
         message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
@@ -233,7 +250,8 @@ set(IMGUI_SOURCES
 )
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
-add_library(fpshud SHARED
+# Deduplicated common object library for layer and test runner
+add_library(fpshud_common_obj OBJECT
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
@@ -253,15 +271,44 @@ add_library(fpshud SHARED
     src/input/input_manager.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
+    ${IMGUI_CORE_SOURCES}
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
+    ${FPSHUD_EXPERIMENTAL_SOURCES}
+)
+
+set_target_properties(fpshud_common_obj PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    C_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+
+target_include_directories(fpshud_common_obj PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
+    ${FPSHUD_EXPERIMENTAL_INCLUDES}
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+add_library(fpshud SHARED
+    $<TARGET_OBJECTS:fpshud_common_obj>
     src/layer/vulkan_hooks.cpp
     src/layer/vulkan_swapchain.cpp
     src/layer/vulkan_capture.cpp
     src/layer/vulkan_player_stream.cpp
     src/layer/vulkan_layer.cpp
     src/layer/opengl_hook.cpp
-    ${IMGUI_SOURCES}
-    ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    ${FPSHUD_EXPERIMENTAL_SOURCES}
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
 target_include_directories(fpshud PRIVATE
@@ -310,6 +357,7 @@ set_target_properties(fpshud PROPERTIES
 
 # CLI Test Runner for Config, Telemetry, Layer ABI, Recorder & Input (Modular Doctest)
 add_executable(fpshud_test
+    $<TARGET_OBJECTS:fpshud_common_obj>
     tests/test_main.cpp
     tests/tools/sensor_probe.cpp
     tests/suites/test_core.cpp
@@ -318,29 +366,7 @@ add_executable(fpshud_test
     tests/suites/test_layer_abi.cpp
     tests/suites/test_recorder_player.cpp
     tests/suites/test_input.cpp
-    src/core/config.cpp
-    src/core/logger.cpp
-    src/telemetry/telemetry.cpp
-    src/telemetry/analytics/frametime_analyzer.cpp
-    src/telemetry/analytics/benchmark_recorder.cpp
-    src/telemetry/providers/cpu_provider.cpp
-    src/telemetry/providers/ram_provider.cpp
-    src/telemetry/providers/system_provider.cpp
-    src/telemetry/providers/gpu_nvidia.cpp
-    src/telemetry/providers/gpu_drm.cpp
-    src/telemetry/providers/gpu_levelzero.cpp
-    src/input/backends/evdev_backend.cpp
-    src/input/backends/wayland_backend.cpp
-    src/input/backends/x11_backend.cpp
-    src/input/input_manager.cpp
-    src/recorder/png_writer.cpp
-    src/recorder/recorder_ipc.cpp
     src/recorder/recorder_player.cpp
-    src/ui/gui_menu.cpp
-    src/ui/overlay_ui.cpp
-    ${IMGUI_CORE_SOURCES}
-    ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    ${FPSHUD_EXPERIMENTAL_SOURCES}
 )
 
 target_include_directories(fpshud_test PRIVATE
@@ -454,6 +480,7 @@ if (BUILD_STATIC_RECORDER)
     )
     target_link_libraries(fpshud_recorder PRIVATE
         ${CMAKE_DL_LIBS}
+        m
     )
     target_link_options(fpshud_recorder PRIVATE
         ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
@@ -505,6 +532,7 @@ elseif (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgC
     )
     target_link_libraries(fpshud_recorder PRIVATE
         ${CMAKE_DL_LIBS}
+        m
     )
     target_link_options(fpshud_recorder PRIVATE
         ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
@@ -562,6 +590,8 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_core.cpp

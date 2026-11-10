@@ -155,6 +155,41 @@ TEST_CASE("Core: ISO C++26 Modernization Suite") {
   }
 }
 
+TEST_CASE("Core Config") {
+  ScopedTempDir tmp("fpshud_keybind_neg1");
+  const char* prev_xdg = std::getenv("XDG_CONFIG_HOME");
+  std::string saved_xdg_env = prev_xdg ? prev_xdg : "";
+  ::setenv("XDG_CONFIG_HOME", tmp.c_str(), 1);
+
+  fpshud::HudConfig cfg{};
+  CHECK(cfg.record_codec == 0);
+  CHECK(cfg.record_bitrate_kbps == 20000);
+  CHECK(cfg.record_cq_level == 22);
+  cfg.key_toggle_gui = -1;
+  cfg.key_toggle_hud = -1;
+  cfg.key_benchmark = -1;
+  cfg.key_record = -1;
+  cfg.bind_toggle_gui = {29, 88};  // Ctrl (29) + F12 (88)
+  fpshud::get_mutable_config() = cfg;
+  fpshud::save_config_to_disk();
+
+  fpshud::get_mutable_config().key_toggle_gui = 0;
+  fpshud::load_config_from_disk();
+  const auto& loaded = fpshud::get_global_config();
+  CHECK(loaded.key_toggle_gui == -1);
+  CHECK(loaded.key_toggle_hud == -1);
+  CHECK(loaded.key_benchmark == -1);
+  CHECK(loaded.key_record == -1);
+  CHECK(loaded.bind_toggle_gui.main_key == 88);
+  CHECK(loaded.bind_toggle_gui.mod_key == 29);
+
+  if (prev_xdg) {
+    ::setenv("XDG_CONFIG_HOME", saved_xdg_env.c_str(), 1);
+  } else {
+    ::unsetenv("XDG_CONFIG_HOME");
+  }
+}
+
 TEST_CASE("Core: GUI Presets, INI Persistence & Video Encoders") {
   SUBCASE("GUI Presets and Metrics Configuration") {
     HudConfig test_cfg;
@@ -183,7 +218,11 @@ TEST_CASE("Core: GUI Presets, INI Persistence & Video Encoders") {
       CHECK(cfg_hpp.find("metric_name(") == std::string::npos);
       CHECK(cfg_hpp.find("background_name(") == std::string::npos);
       CHECK(cfg_hpp.find("font_family_name(") == std::string::npos);
+      CHECK(cfg_hpp.find("arrangement_name") == std::string::npos);
+      CHECK(cfg_hpp.find("CenterTop") == std::string::npos);
+      CHECK(cfg_hpp.find("CenterBottom") == std::string::npos);
       CHECK(cfg_cpp.find("LayoutPosition::CenterTop") == std::string::npos);
+      CHECK(cfg_cpp.find("arrangement_name") == std::string::npos);
     }
 
     test_cfg.set_metric(MetricType::Battery, true);

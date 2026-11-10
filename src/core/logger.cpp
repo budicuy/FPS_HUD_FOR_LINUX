@@ -12,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <mutex>
+#include <string>
 
 namespace fpshud::log {
 
@@ -88,6 +89,18 @@ bool parse_level_str(const char* s, Level& out) noexcept {
 void init() noexcept {
   std::lock_guard<std::mutex> lock(g_log_mutex);
 
+  static std::string s_last_env_str;
+  static bool s_has_run = false;
+
+  const char* env = std::getenv("FPS_HUD_LOG");
+  std::string current_env = env ? env : "";
+
+  if (s_has_run && g_initialized.load(std::memory_order_acquire) && current_env == s_last_env_str) {
+    return;
+  }
+  s_has_run = true;
+  s_last_env_str = current_env;
+
   // Close previous file descriptor if custom
   if (g_is_custom_file && g_log_fd != STDERR_FILENO && g_log_fd >= 0) {
     ::close(g_log_fd);
@@ -95,13 +108,8 @@ void init() noexcept {
   g_log_fd = STDERR_FILENO;
   g_is_custom_file = false;
 
-  const char* env = std::getenv("FPS_HUD_LOG");
   if (!env || env[0] == '\0') {
-#if defined(FPSHUD_ENABLE_DEBUG_LOGGING)
     g_min_level.store(Level::Warn, std::memory_order_release);
-#else
-    g_min_level.store(Level::Warn, std::memory_order_release);
-#endif
     g_initialized.store(true, std::memory_order_release);
     return;
   }

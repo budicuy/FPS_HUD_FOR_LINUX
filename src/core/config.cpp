@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "logger.hpp"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -55,11 +56,14 @@ static_assert(sizeof(kCanonicalMetricsOrder) / sizeof(kCanonicalMetricsOrder[0])
                   kTotalMetricCount,
               "kTotalMetricCount must match the number of MetricType entries");
 
-std::string trim_copy(std::string s) {
-  auto not_space = [](unsigned char c) { return !std::isspace(c); };
-  s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-  s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-  return s;
+std::string trim_copy(std::string_view sv) {
+  while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) {
+    sv.remove_prefix(1);
+  }
+  while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) {
+    sv.remove_suffix(1);
+  }
+  return std::string(sv);
 }
 
 constexpr std::size_t canonical_metric_index(MetricType m) {
@@ -239,7 +243,11 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   FILE* fp = std::fopen(tmp_path.c_str(), "w");
   if (!fp) {
     fp = std::fopen(path.c_str(), "w");
-    if (!fp) return false;
+    if (!fp) {
+      FPSHUD_LOG_WARN(fpshud::log::Subsystem::Core, "Failed to open config file for writing: %s",
+                      path.c_str());
+      return false;
+    }
     tmp_path.clear();
   }
 
@@ -311,6 +319,7 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
   std::fclose(fp);
 
   if (write_error) {
+    FPSHUD_LOG_WARN(fpshud::log::Subsystem::Core, "Failed to write config file: %s", path.c_str());
     if (!tmp_path.empty()) {
       std::remove(tmp_path.c_str());
     }
@@ -319,6 +328,9 @@ bool save_ini_file(const std::string& path, const HudConfig& cfg, const char* he
 
   if (!tmp_path.empty()) {
     if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+      FPSHUD_LOG_WARN(fpshud::log::Subsystem::Core,
+                      "Failed to rename temporary config file: %s -> %s", tmp_path.c_str(),
+                      path.c_str());
       std::remove(tmp_path.c_str());
       return false;
     }
@@ -377,7 +389,7 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.font_family = static_cast<FontFamily>(v);
       parsed_any = true;
     } else if (key == "font_size_px") {
-      cfg.font_size_px = std::clamp(safe_strtof(val, 24.0f), 10.0f, 64.0f);
+      cfg.font_size_px = std::clamp(safe_strtof(val, 20.0f), 10.0f, 64.0f);
       cfg.font_scale = cfg.font_size_px / kAtlasBaseFontSizePx;
       parsed_any = true;
     } else if (key == "text_color") {
@@ -393,22 +405,22 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.text_opacity = std::clamp(safe_strtof(val, 1.0f), 0.05f, 1.0f);
       parsed_any = true;
     } else if (key == "bg_alpha") {
-      cfg.bg_alpha = std::clamp(safe_strtof(val, 0.40f), 0.0f, 1.0f);
+      cfg.bg_alpha = std::clamp(safe_strtof(val, 0.38f), 0.0f, 1.0f);
       parsed_any = true;
     } else if (key == "outline_enabled") {
-      cfg.outline_enabled = (safe_strtoi(val, 0) != 0);
+      cfg.outline_enabled = (safe_strtoi(val, 1) != 0);
       parsed_any = true;
     } else if (key == "outline_thickness") {
       cfg.outline_thickness = std::clamp(safe_strtof(val, 1.4f), 0.0f, 6.0f);
       parsed_any = true;
     } else if (key == "shadow_enabled") {
-      cfg.shadow_enabled = (safe_strtoi(val, 0) != 0);
+      cfg.shadow_enabled = (safe_strtoi(val, 1) != 0);
       parsed_any = true;
     } else if (key == "shadow_offset") {
       cfg.shadow_offset = std::clamp(safe_strtof(val, 2.0f), 0.0f, 10.0f);
       parsed_any = true;
     } else if (key == "shadow_opacity") {
-      cfg.shadow_opacity = std::clamp(safe_strtof(val, 0.70f), 0.0f, 1.0f);
+      cfg.shadow_opacity = std::clamp(safe_strtof(val, 0.85f), 0.0f, 1.0f);
       parsed_any = true;
     } else if (key == "category_colors_enabled") {
       cfg.category_colors_enabled = (safe_strtoi(val, 1) != 0);
@@ -423,16 +435,16 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.hud_graph_enabled = (safe_strtoi(val, 0) != 0);
       parsed_any = true;
     } else if (key == "key_toggle_gui") {
-      cfg.key_toggle_gui = std::clamp(safe_strtoi(val, 0), 0, 4);
+      cfg.key_toggle_gui = std::clamp(safe_strtoi(val, 0), -1, 4);
       parsed_any = true;
     } else if (key == "key_toggle_hud") {
-      cfg.key_toggle_hud = std::clamp(safe_strtoi(val, 0), 0, 2);
+      cfg.key_toggle_hud = std::clamp(safe_strtoi(val, 0), -1, 2);
       parsed_any = true;
     } else if (key == "key_benchmark") {
-      cfg.key_benchmark = std::clamp(safe_strtoi(val, 0), 0, 1);
+      cfg.key_benchmark = std::clamp(safe_strtoi(val, 0), -1, 1);
       parsed_any = true;
     } else if (key == "key_record") {
-      cfg.key_record = std::clamp(safe_strtoi(val, 0), 0, 2);
+      cfg.key_record = std::clamp(safe_strtoi(val, 0), -1, 2);
       parsed_any = true;
     } else if (key == "bind_toggle_gui" || key == "bind_toggle_hud" || key == "bind_benchmark" ||
                key == "bind_record" || key == "bind_save_replay" || key == "bind_screenshot") {
@@ -472,7 +484,7 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.record_fps = std::clamp(safe_strtoi(val, 60), 0, 240);
       parsed_any = true;
     } else if (key == "record_bitrate_kbps") {
-      cfg.record_bitrate_kbps = std::clamp(safe_strtoi(val, 15000), 1000, 100000);
+      cfg.record_bitrate_kbps = std::clamp(safe_strtoi(val, 20000), 1000, 100000);
       parsed_any = true;
     } else if (key == "record_audio_source") {
       cfg.record_audio_source = std::clamp(safe_strtoi(val, 0), 0, 3);
@@ -487,7 +499,7 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       cfg.record_quality_mode = std::clamp(safe_strtoi(val, 0), 0, 1);
       parsed_any = true;
     } else if (key == "record_cq_level") {
-      cfg.record_cq_level = std::clamp(safe_strtoi(val, 20), 16, 30);
+      cfg.record_cq_level = std::clamp(safe_strtoi(val, 22), 16, 30);
       parsed_any = true;
     } else if (key == "record_directory") {
       cfg.record_directory = val;
@@ -610,6 +622,16 @@ HudConfig init_config_from_env(const char* env_value) {
   return cfg;
 }
 
+bool save_config_to_disk() {
+  std::lock_guard<std::mutex> lock(get_config_mutex());
+  return save_config_to_disk(get_mutable_config());
+}
+
+bool load_config_from_disk() {
+  std::lock_guard<std::mutex> lock(get_config_mutex());
+  return load_config_from_disk(get_mutable_config());
+}
+
 bool save_config_to_disk(const HudConfig& cfg, std::string* out_path) {
   std::string path = get_config_file_path();
   if (out_path) *out_path = path;
@@ -652,18 +674,6 @@ const char* layout_name(LayoutPosition p) {
       return "Custom";
   }
   return "Top-Left";
-}
-
-const char* arrangement_name(ArrangementMode a) {
-  switch (a) {
-    case ArrangementMode::Stack:
-      return "Stack (Vertical Grouped)";
-    case ArrangementMode::Double:
-      return "Double (2-Col Grouped)";
-    case ArrangementMode::Linear:
-      return "Linear (Horizontal Grouped)";
-  }
-  return "Stack";
 }
 
 const char* linux_keycode_name(uint32_t code) noexcept {

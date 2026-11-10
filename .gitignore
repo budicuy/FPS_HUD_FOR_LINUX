@@ -28,6 +28,10 @@ compile_commands.json
 *~
 .DS_Store
 
+# Sockets
+*.sock
+*_sock
+
 # Benchmark CSV outputs in workspace
 *.csv
 imgui.ini

@@ -8,6 +8,7 @@ __asm__(".symver compat_atan2f, atan2f@GLIBC_2.2.5");
 __asm__(".symver compat_fmodf, fmodf@GLIBC_2.2.5");
 __asm__(".symver compat_sinh, sinh@GLIBC_2.2.5");
 __asm__(".symver compat_cosh, cosh@GLIBC_2.2.5");
+__asm__(".symver compat_sqrtf, sqrtf@GLIBC_2.2.5");
 __asm__(".symver compat_vsscanf, vsscanf@GLIBC_2.2.5");
 __asm__(".symver compat_strtol, strtol@GLIBC_2.2.5");
 __asm__(".symver compat_strtoul, strtoul@GLIBC_2.2.5");
@@ -19,6 +20,7 @@ extern float compat_atan2f(float y, float x);
 extern float compat_fmodf(float x, float y);
 extern double compat_sinh(double x);
 extern double compat_cosh(double x);
+extern float compat_sqrtf(float x);
 extern int compat_vsscanf(const char* s, const char* fmt, va_list ap);
 extern long compat_strtol(const char* nptr, char** endptr, int base);
 extern unsigned long compat_strtoul(const char* nptr, char** endptr, int base);
@@ -30,6 +32,7 @@ __attribute__((used)) float __wrap_atan2f(float y, float x) { return compat_atan
 __attribute__((used)) float __wrap_fmodf(float x, float y) { return compat_fmodf(x, y); }
 __attribute__((used)) double __wrap_sinh(double x) { return compat_sinh(x); }
 __attribute__((used)) double __wrap_cosh(double x) { return compat_cosh(x); }
+__attribute__((used)) float __wrap_sqrtf(float x) { return compat_sqrtf(x); }
 
 __attribute__((used)) int __wrap___isoc23_sscanf(const char* s, const char* fmt, ...) {
   va_list ap;

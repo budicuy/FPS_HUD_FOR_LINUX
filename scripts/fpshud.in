@@ -163,21 +163,10 @@ SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!
 EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
-    # 2. Kernel Evdev Mouse Input Grab rule (grants access to group 'input' and adds user)
-    TARGET_USER="${SUDO_USER:-$USER}"
-    echo "[*] Installing udev rule for kernel mouse grab (/etc/udev/rules.d/99-fpshud-input.rules)..."
-    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "EOF"
-KERNEL=="event*", SUBSYSTEM=="input", MODE="0664", GROUP="input"
-EOF'
-    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
-    $SUDO_CMD usermod -aG input "$TARGET_USER" 2>/dev/null || true
-    $SUDO_CMD chmod a+r /dev/input/event* 2>/dev/null || true
-
-    # 3. Reload udev rules
+    # 2. Reload udev rules
     echo "[*] Reloading system udev rules..."
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
     $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
 
     # 3. Flatpak Steam configuration
     TARGET_HOME="${HOME}"
