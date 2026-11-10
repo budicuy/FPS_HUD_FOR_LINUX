@@ -541,7 +541,10 @@ FPS_HUD_FOR_LINUX/
 │   ├── telemetry/                       # Telemetri GPU/CPU/Storage/Net multi-vendor & benchmark CSV
 │   └── ui/                              # Menu GUI 3-kolom Dear ImGui, HUD two-tone & font embedded
 └── tests/
-    └── test_cli.cpp                     # Suite pengujian 99-check simulasi 5-perangkat, sensor probe & memori
+    ├── test_main.cpp                    # Entrypoint doctest, CLI filter & dispatcher flag probe
+    ├── test_common.hpp                  # RAII ScopedTempDir, binary locator & shim doctest
+    ├── suites/                          # Suite pengujian modular (core, telemetri, layer ABI, recorder, input)
+    └── tools/                           # Tool CLI diagnostik sensor probe hardware
 ```
 
 ---

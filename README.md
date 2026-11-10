@@ -541,7 +541,10 @@ FPS_HUD_FOR_LINUX/
 │   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
 │   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/
-    └── test_cli.cpp                     # Automated 99-check 5-device simulation, sensor probe & safety suite
+    ├── test_main.cpp                    # Doctest entrypoint, CLI filter & probe flag dispatcher
+    ├── test_common.hpp                  # RAII ScopedTempDir, binary locators & doctest shims
+    ├── suites/                          # Modular test suites (core, telemetry, layer ABI, recorder, input)
+    └── tools/                           # Sensor probe hardware diagnostics CLI tool
 ```
 
 ---

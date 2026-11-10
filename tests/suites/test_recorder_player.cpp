@@ -24,62 +24,6 @@
 namespace fs = std::filesystem;
 using namespace fpshud;
 
-namespace {
-
-fs::path find_recorder_bin_path() {
-  std::vector<fs::path> candidates;
-  char exe_buf[4096] = {0};
-  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
-  if (len > 0) {
-    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
-    candidates.push_back(exe_dir / "fpshud_recorder_bin");
-    candidates.push_back(exe_dir / "build" / "fpshud_recorder_bin");
-  }
-  fs::path repo_root = find_repo_root();
-  if (!repo_root.empty()) {
-    candidates.push_back(repo_root / "build" / "fpshud_recorder_bin");
-    candidates.push_back(repo_root / "fpshud_recorder_bin");
-  }
-  candidates.push_back(fs::path("./build/fpshud_recorder_bin"));
-  candidates.push_back(fs::path("./fpshud_recorder_bin"));
-
-  for (const auto& p : candidates) {
-    std::error_code ec;
-    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
-      return fs::canonical(p, ec);
-    }
-  }
-  return {};
-}
-
-fs::path find_recorder_launcher_path() {
-  std::vector<fs::path> candidates;
-  char exe_buf[4096] = {0};
-  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
-  if (len > 0) {
-    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
-    candidates.push_back(exe_dir / "fpshud_recorder");
-    candidates.push_back(exe_dir / "build" / "fpshud_recorder");
-  }
-  fs::path repo_root = find_repo_root();
-  if (!repo_root.empty()) {
-    candidates.push_back(repo_root / "build" / "fpshud_recorder");
-    candidates.push_back(repo_root / "fpshud_recorder");
-  }
-  candidates.push_back(fs::path("./build/fpshud_recorder"));
-  candidates.push_back(fs::path("./fpshud_recorder"));
-
-  for (const auto& p : candidates) {
-    std::error_code ec;
-    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
-      return fs::canonical(p, ec);
-    }
-  }
-  return {};
-}
-
-}  // namespace
-
 TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
   SUBCASE("Hardware Video Encoders & Host Container Probe") {
     fs::path rec_path = find_recorder_bin_path();

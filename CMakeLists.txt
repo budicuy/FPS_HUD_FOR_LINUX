@@ -308,9 +308,16 @@ set_target_properties(fpshud PROPERTIES
     OUTPUT_NAME "fpshud"
 )
 
-# CLI Test Utility for Config & Hardware Telemetry
+# CLI Test Runner for Config, Telemetry, Layer ABI, Recorder & Input (Modular Doctest)
 add_executable(fpshud_test
-    tests/test_cli.cpp
+    tests/test_main.cpp
+    tests/tools/sensor_probe.cpp
+    tests/suites/test_core.cpp
+    tests/suites/test_telemetry_hardware.cpp
+    tests/suites/test_telemetry_analytics.cpp
+    tests/suites/test_layer_abi.cpp
+    tests/suites/test_recorder_player.cpp
+    tests/suites/test_input.cpp
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
@@ -359,67 +366,6 @@ target_link_libraries(fpshud_test PRIVATE
 )
 
 target_link_options(fpshud_test PRIVATE
-    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-)
-
-# Doctest Modular Test Scaffolding Smoke Target
-add_executable(fpshud_test_smoke
-    tests/test_main.cpp
-    tests/tools/sensor_probe.cpp
-    tests/suites/test_core.cpp
-    tests/suites/test_telemetry_hardware.cpp
-    tests/suites/test_telemetry_analytics.cpp
-    tests/suites/test_layer_abi.cpp
-    tests/suites/test_recorder_player.cpp
-    tests/suites/test_input.cpp
-    src/core/config.cpp
-    src/core/logger.cpp
-    src/telemetry/telemetry.cpp
-    src/telemetry/analytics/frametime_analyzer.cpp
-    src/telemetry/analytics/benchmark_recorder.cpp
-    src/telemetry/providers/cpu_provider.cpp
-    src/telemetry/providers/ram_provider.cpp
-    src/telemetry/providers/system_provider.cpp
-    src/telemetry/providers/gpu_nvidia.cpp
-    src/telemetry/providers/gpu_drm.cpp
-    src/telemetry/providers/gpu_levelzero.cpp
-    src/input/backends/evdev_backend.cpp
-    src/input/backends/wayland_backend.cpp
-    src/input/backends/x11_backend.cpp
-    src/input/input_manager.cpp
-    src/recorder/png_writer.cpp
-    src/recorder/recorder_ipc.cpp
-    src/recorder/recorder_player.cpp
-    src/ui/gui_menu.cpp
-    src/ui/overlay_ui.cpp
-    ${IMGUI_CORE_SOURCES}
-    ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    ${FPSHUD_EXPERIMENTAL_SOURCES}
-)
-
-target_include_directories(fpshud_test_smoke PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/input
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
-    ${FPSHUD_EXPERIMENTAL_INCLUDES}
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
-
-target_link_libraries(fpshud_test_smoke PRIVATE
-    Threads::Threads
-    ${CMAKE_DL_LIBS}
-)
-
-target_link_options(fpshud_test_smoke PRIVATE
     ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
 )
 
@@ -616,7 +562,14 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_core.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_hardware.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_analytics.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_layer_abi.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_recorder_player.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_input.cpp
     )
     add_custom_target(clang-tidy
         COMMAND ${CLANG_TIDY_EXE}
@@ -691,7 +644,6 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_common.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.hpp

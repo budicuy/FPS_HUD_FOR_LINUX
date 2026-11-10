@@ -43,6 +43,88 @@ inline fs::path find_repo_root() {
   return {};
 }
 
+/// Resolve the path to libfpshud.so across common build & installation locations
+inline fs::path find_libfpshud_path() {
+  std::vector<fs::path> candidates;
+  fs::path repo_root = find_repo_root();
+  if (!repo_root.empty()) {
+    candidates.push_back(repo_root / "build" / "libfpshud.so");
+    candidates.push_back(repo_root / "libfpshud.so");
+    candidates.push_back(repo_root / "dist" / "libfpshud.so");
+  }
+  char exe_buf[4096] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+  if (len > 0) {
+    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+    candidates.push_back(exe_dir / "libfpshud.so");
+    candidates.push_back(exe_dir / "build" / "libfpshud.so");
+  }
+  candidates.push_back(fs::path("./build/libfpshud.so"));
+  candidates.push_back(fs::path("./libfpshud.so"));
+
+  for (const auto& p : candidates) {
+    std::error_code ec;
+    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+      return fs::canonical(p, ec);
+    }
+  }
+  return {};
+}
+
+/// Resolve the path to fpshud_recorder_bin
+inline fs::path find_recorder_bin_path() {
+  std::vector<fs::path> candidates;
+  char exe_buf[4096] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+  if (len > 0) {
+    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+    candidates.push_back(exe_dir / "fpshud_recorder_bin");
+    candidates.push_back(exe_dir / "build" / "fpshud_recorder_bin");
+  }
+  fs::path repo_root = find_repo_root();
+  if (!repo_root.empty()) {
+    candidates.push_back(repo_root / "build" / "fpshud_recorder_bin");
+    candidates.push_back(repo_root / "fpshud_recorder_bin");
+  }
+  candidates.push_back(fs::path("./build/fpshud_recorder_bin"));
+  candidates.push_back(fs::path("./fpshud_recorder_bin"));
+
+  for (const auto& p : candidates) {
+    std::error_code ec;
+    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+      return fs::canonical(p, ec);
+    }
+  }
+  return {};
+}
+
+/// Resolve the path to fpshud_recorder launcher
+inline fs::path find_recorder_launcher_path() {
+  std::vector<fs::path> candidates;
+  char exe_buf[4096] = {0};
+  ssize_t len = ::readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+  if (len > 0) {
+    fs::path exe_dir = fs::path(std::string(exe_buf, static_cast<size_t>(len))).parent_path();
+    candidates.push_back(exe_dir / "fpshud_recorder");
+    candidates.push_back(exe_dir / "build" / "fpshud_recorder");
+  }
+  fs::path repo_root = find_repo_root();
+  if (!repo_root.empty()) {
+    candidates.push_back(repo_root / "build" / "fpshud_recorder");
+    candidates.push_back(repo_root / "fpshud_recorder");
+  }
+  candidates.push_back(fs::path("./build/fpshud_recorder"));
+  candidates.push_back(fs::path("./fpshud_recorder"));
+
+  for (const auto& p : candidates) {
+    std::error_code ec;
+    if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+      return fs::canonical(p, ec);
+    }
+  }
+  return {};
+}
+
 /// Compatibility shim bridging monolithic check_cond() to doctest CHECK_MESSAGE()
 inline void check_cond(bool ok, std::string_view label, std::string_view detail = "") {
   if (!detail.empty()) {
