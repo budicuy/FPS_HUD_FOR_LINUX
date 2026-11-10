@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
 #include "test_common.hpp"
+#include "tools/sensor_probe.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
   // 1. Live sensor diagnostic tool intercept
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--probe-sensors") == 0 || std::strcmp(argv[i], "--status") == 0) {
-      std::printf("FPSHUD Sensor Diagnostic Probe (stub for Task 2)\n");
+      fpshud::tools::run_sensor_probe();
       return 0;
     }
   }

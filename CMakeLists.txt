@@ -365,6 +365,7 @@ target_link_options(fpshud_test PRIVATE
 # Doctest Modular Test Scaffolding Smoke Target
 add_executable(fpshud_test_smoke
     tests/test_main.cpp
+    tests/tools/sensor_probe.cpp
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
@@ -687,6 +688,8 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_common.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
     )
 
     add_custom_target(format

@@ -24,16 +24,22 @@ inline void write_mock_file(const fs::path& p, const std::string& content) {
 }
 
 /// Compatibility shim bridging monolithic check_cond() to doctest CHECK_MESSAGE()
-inline void check_cond(bool ok, const char* label, const char* detail = "") {
-  if (detail != nullptr && detail[0] != '\0') {
+inline void check_cond(bool ok, std::string_view label, std::string_view detail = "") {
+  if (!detail.empty()) {
     CHECK_MESSAGE(ok, label, " | ", detail);
   } else {
     CHECK_MESSAGE(ok, label);
   }
 }
 
+inline void check_cond(bool ok, const char* label, const char* detail = nullptr) {
+  std::string_view l = (label != nullptr) ? std::string_view(label) : std::string_view("(null)");
+  std::string_view d = (detail != nullptr) ? std::string_view(detail) : std::string_view("");
+  check_cond(ok, l, d);
+}
+
 inline void check_cond(bool ok, const std::string& label, const std::string& detail = "") {
-  check_cond(ok, label.c_str(), detail.empty() ? "" : detail.c_str());
+  check_cond(ok, std::string_view(label), std::string_view(detail));
 }
 
 /// RAII Temporary Directory Manager for Hardware & Filesystem Mock Isolation
