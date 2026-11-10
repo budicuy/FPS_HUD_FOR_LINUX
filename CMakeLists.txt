@@ -367,6 +367,7 @@ add_executable(fpshud_test_smoke
     tests/test_main.cpp
     tests/tools/sensor_probe.cpp
     tests/suites/test_core.cpp
+    tests/suites/test_telemetry_hardware.cpp
     src/core/config.cpp
     src/core/logger.cpp
     src/telemetry/telemetry.cpp
@@ -692,6 +693,7 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_core.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_hardware.cpp
     )
 
     add_custom_target(format
