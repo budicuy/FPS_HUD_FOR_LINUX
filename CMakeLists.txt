@@ -79,7 +79,6 @@ endif()
 
 if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
     set(USE_SANITIZERS ON)
-    add_compile_definitions(FPSHUD_SANITIZER_BUILD=1)
 else()
     set(USE_SANITIZERS OFF)
 endif()
@@ -418,6 +417,35 @@ target_link_libraries(fpshud_test PRIVATE
 target_link_options(fpshud_test PRIVATE
     ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
 )
+
+enable_testing()
+add_test(
+    NAME fpshud_test
+    COMMAND fpshud_test
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(fpshud_test PROPERTIES TIMEOUT 120)
+
+set(FPSHUD_CTEST_ENV "")
+if(ENABLE_ASAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:strict_string_checks=1:detect_invalid_pointer_pairs=2:protect_shadow_gap=0"
+        "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tests/lsan_suppressions.txt"
+    )
+endif()
+if(ENABLE_UBSAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
+    )
+endif()
+if(ENABLE_TSAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1:history_size=7"
+    )
+endif()
+if(FPSHUD_CTEST_ENV)
+    set_property(TEST fpshud_test PROPERTY ENVIRONMENT ${FPSHUD_CTEST_ENV})
+endif()
 
 # Screen Recorder Helper Daemon (On-Demand)
 set(FFMPEG_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/ffmpeg_minimal" CACHE PATH "Path to minimal static FFmpeg build")

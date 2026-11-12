@@ -378,7 +378,10 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
       }
     }
 
-#if !defined(FPSHUD_SANITIZER_BUILD)
+#if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__) &&        \
+    !(defined(__has_feature) &&                                               \
+      (__has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+       __has_feature(undefined_behavior_sanitizer)))
     CHECK_MESSAGE(violating_versions.empty(),
                   "GLIBC portability gate violated! Binaries must be compatible with Ubuntu 22.04 "
                   "LTS (<= GLIBC 2.35).");

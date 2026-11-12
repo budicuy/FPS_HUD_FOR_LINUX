@@ -56,7 +56,7 @@ void verify_all_features_on_device(fpshud::TelemetryCollector& tc, const char* d
 
   TelemetryData d = tc.get_snapshot();
 
-  char detail_hw[160];
+  char detail_hw[256];
   std::snprintf(detail_hw, sizeof(detail_hw), "CPU=[%s] | GPU=[%s (%s, %s)]", d.cpu_name,
                 d.gpu_name, d.gpu_vendor, d.gpu_driver_version);
 

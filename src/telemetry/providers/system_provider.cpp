@@ -145,7 +145,7 @@ void SystemProvider::poll_battery(HardwareTelemetryData& data) {
     while (buf[0] && (buf[std::strlen(buf) - 1] == '\n' || buf[std::strlen(buf) - 1] == '\r')) {
       buf[std::strlen(buf) - 1] = '\0';
     }
-    std::snprintf(status_str, sizeof(status_str), "%s", buf);
+    std::snprintf(status_str, sizeof(status_str), "%.15s", buf);
     is_charging = (std::strcmp(status_str, "Charging") == 0);
   }
 

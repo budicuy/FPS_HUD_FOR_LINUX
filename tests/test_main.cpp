@@ -8,6 +8,7 @@
 #include <cstring>
 #include <vector>
 
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
 extern "C" const char* __lsan_default_suppressions() {
   return "leak:libnvidia-ml.so\n"
          "leak:init_gpu_sensors_locked\n"
@@ -17,8 +18,10 @@ extern "C" const char* __lsan_default_suppressions() {
          "leak:nvidia_drv_video.so\n"
          "leak:libva.so\n"
          "leak:libva-drm.so\n"
-         "leak:old_pthread_cond_broadcast\n";
+         "leak:old_pthread_cond_broadcast\n"
+         "leak:pthread_cond_broadcast\n";
 }
+#endif
 
 int main(int argc, char** argv) {
   // 1. Live sensor diagnostic tool intercept
