@@ -28,11 +28,12 @@ enum class GroupCategory { FPS = 0, GPU = 1, CPU = 2, RAM = 3, SYS = 4 };
 // Fixed-capacity stack structs with separated prefix/number/unit for high readability (zero heap
 // allocation!)
 struct StyledValue {
-  char prefix[12] = {0};  // e.g., "AVG ", "1% ", "0.1% ", "FAN "
-  char number[36] = {0};  // e.g., "60", "39", "1320", "Radeon RX 7800 XT"
+  char prefix[16] = {0};  // e.g., "AVG ", "1% ", "0.1% ", "FAN "
+  char number[48] = {0};  // e.g., "60", "39", "1320", "Radeon RX 7800 XT"
   char unit[12] = {0};    // e.g., "%", "MHz", "GB", "°C", "W", "ms"
   ImU32 color = 0;
 };
+static_assert(sizeof(StyledValue) == 80, "StyledValue size must be exactly 80 bytes");
 
 constexpr size_t kMaxMetricsPerGroup = 16;
 constexpr size_t kMaxMetricGroups = 40;
@@ -405,7 +406,7 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
                 MetricGroup{GroupCategory::CPU, row_label, row_col, {}})) {
           for (int k = c; k < std::min(c + 4, n_cores); ++k) {
             StyledValue sv{};
-            std::snprintf(sv.prefix, sizeof(sv.prefix), "C%d:", k);
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "C%u:", static_cast<unsigned>(k));
             if (is_load) {
               int pct = static_cast<int>(data.cpu_core_loads_pct[static_cast<size_t>(k)]);
               std::snprintf(sv.number, sizeof(sv.number), "%d", pct);

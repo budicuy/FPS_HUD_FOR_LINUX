@@ -216,7 +216,8 @@ bool LevelZeroGpuProvider::init(const std::string& root_prefix,
         clean_hardware_name(props.modelName, gpu_name_, sizeof(gpu_name_));
       }
       if (props.driverVersion[0] != '\0') {
-        std::snprintf(gpu_driver_version_, sizeof(gpu_driver_version_), "%s", props.driverVersion);
+        std::snprintf(gpu_driver_version_, sizeof(gpu_driver_version_), "%.*s",
+                      static_cast<int>(sizeof(gpu_driver_version_) - 1), props.driverVersion);
       }
     }
   }

@@ -439,6 +439,42 @@ TEST_CASE("Core: GUI Presets, INI Persistence & Video Encoders") {
     CHECK(ImGui::GetDrawData() != nullptr);
     ImGui::DestroyContext(ctx_a);
   }
+
+  SUBCASE("Overlay UI Long Hardware Names & Core Indices") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    fpshud::setup_overlay_font(ImGui::GetIO());
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    ImGui::GetIO().DisplaySize = ImVec2(1280.0f, 720.0f);
+    ImGui::NewFrame();
+
+    fpshud::TelemetryData td{};
+    std::memset(td.gpu_name, 'A', 47);
+    td.gpu_name[47] = '\0';
+    std::memset(td.cpu_name, 'B', 47);
+    td.cpu_name[47] = '\0';
+    td.cpu_core_count = 64;
+    for (size_t i = 0; i < 64; ++i) {
+      td.cpu_core_loads_pct[i] = static_cast<uint8_t>((i * 7) % 100);
+      td.cpu_core_clocks_mhz[i] = static_cast<uint16_t>(2000 + i * 25);
+    }
+
+    fpshud::HudConfig cfg = fpshud::get_global_config();
+    cfg.enabled = true;
+    cfg.hud_visible = true;
+    cfg.set_metric(MetricType::GpuModel, true);
+    cfg.set_metric(MetricType::CpuModel, true);
+    cfg.set_metric(MetricType::CpuAllCoreLoad, true);
+    cfg.set_metric(MetricType::CpuAllCoreClock, true);
+
+    fpshud::render_overlay_ui(cfg, td, 1280.0f, 720.0f);
+    ImGui::Render();
+    CHECK(ImGui::GetDrawData() != nullptr);
+    ImGui::DestroyContext(ctx);
+  }
 }
 
 TEST_CASE("Core: Zero-Cost C++26 Logging Engine") {

@@ -382,8 +382,12 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
           auto* d = reinterpret_cast<const LinuxDirent64*>(d_buf + bpos);
           if (d->d_reclen == 0 || bpos + d->d_reclen > nread) break;
           if (d->d_name[0] != '.') {
-            char fd_path[256];
-            std::snprintf(fd_path, sizeof(fd_path), "%s/%s", fdinfo_dir, d->d_name);
+            char fd_path[1024];
+            int n = std::snprintf(fd_path, sizeof(fd_path), "%s/%s", fdinfo_dir, d->d_name);
+            if (n <= 0 || static_cast<size_t>(n) >= sizeof(fd_path)) {
+              bpos += d->d_reclen;
+              continue;
+            }
             int fd = open(fd_path, O_RDONLY | O_CLOEXEC);
             if (fd >= 0) {
               char fdbuf[512];
