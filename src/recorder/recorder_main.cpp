@@ -44,7 +44,7 @@ extern "C" {
 #include "pulse_audio_util.hpp"
 
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
-extern "C" const char* __lsan_default_suppressions() {
+extern "C" const char* __lsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
   return "leak:libnvidia-ml.so\n"
          "leak:libGLX_nvidia.so\n"
          "leak:libcuda.so\n"
