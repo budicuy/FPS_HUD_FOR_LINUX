@@ -53,7 +53,10 @@ inline bool is_sysfs_readable(const char* path) noexcept {
   if (!path || !*path) return false;
   struct stat st{};
   if (::stat(path, &st) != 0) return false;
-  if ((st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) == 0) return false;
+  constexpr uint32_t kReadableMask = static_cast<uint32_t>(S_IRUSR) |
+                                     static_cast<uint32_t>(S_IRGRP) |
+                                     static_cast<uint32_t>(S_IROTH);
+  if ((static_cast<uint32_t>(st.st_mode) & kReadableMask) == 0u) return false;
   return ::access(path, R_OK) == 0;
 }
 

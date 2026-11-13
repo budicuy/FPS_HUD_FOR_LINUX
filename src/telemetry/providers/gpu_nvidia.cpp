@@ -190,8 +190,8 @@ bool NvidiaGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id,
       if (device_id != 0 && pfn_nvmlDeviceGetPciInfo_) {
         NvmlPciInfo pci{};
         if (pfn_nvmlDeviceGetPciInfo_(h, &pci) == NVML_SUCCESS) {
-          uint32_t dev_id_hi = (pci.pciDeviceId >> 16) & 0xFFFF;
-          uint32_t dev_id_lo = pci.pciDeviceId & 0xFFFF;
+          uint32_t dev_id_hi = (pci.pciDeviceId >> 16u) & 0xFFFFu;
+          uint32_t dev_id_lo = pci.pciDeviceId & 0xFFFFu;
           if (dev_id_hi == device_id || dev_id_lo == device_id) {
             best_handle = h;
             break;

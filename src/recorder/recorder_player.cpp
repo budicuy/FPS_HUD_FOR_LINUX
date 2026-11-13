@@ -239,7 +239,8 @@ void drain_audio(PulseAudioPlayback& pulse, std::vector<uint8_t>& pending,
           pending.clear();
           audio_read_offset = 0;
         } else if (audio_read_offset >= 4096) {
-          pending.erase(pending.begin(), pending.begin() + audio_read_offset);
+          pending.erase(pending.begin(),
+                        pending.begin() + static_cast<std::ptrdiff_t>(audio_read_offset));
           audio_read_offset = 0;
         }
       }
@@ -344,7 +345,8 @@ int run_player_worker(int argc, char** argv) {
     return 1;
   }
   codec_ctx->thread_count = 0;  // Auto multi-threaded decode across all CPU cores
-  codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+  codec_ctx->thread_type = static_cast<int>(static_cast<uint32_t>(FF_THREAD_FRAME) |
+                                            static_cast<uint32_t>(FF_THREAD_SLICE));
   if (avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to open video decoder.\n");
     avcodec_free_context(&codec_ctx);
@@ -510,9 +512,9 @@ int run_player_worker(int argc, char** argv) {
   listen(server_sock, 1);
 
   // 4. Initialize SwsContext for RGBA conversion
-  SwsContext* sws =
-      sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt, width, height,
-                     AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+  SwsContext* sws = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+                                   static_cast<int>(width), static_cast<int>(height),
+                                   AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!sws) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: sws_getContext failed.\n");
     close(server_sock);
@@ -616,9 +618,9 @@ int run_player_worker(int argc, char** argv) {
           if (avcodec_send_packet(aud_codec_ctx, pkt) == 0) {
             while (avcodec_receive_frame(aud_codec_ctx, raw_audio_frame) == 0) {
               int in_rate = aud_codec_ctx->sample_rate > 0 ? aud_codec_ctx->sample_rate : 48000;
-              int max_out =
+              int max_out = static_cast<int>(
                   av_rescale_rnd(swr_get_delay(swr_audio, in_rate) + raw_audio_frame->nb_samples,
-                                 48000, in_rate, AV_ROUND_UP);
+                                 48000, in_rate, AV_ROUND_UP));
               if (max_out < 256) max_out = 256;
 
               std::vector<int16_t> pcm_out(static_cast<size_t>(max_out) * 2);
@@ -628,8 +630,9 @@ int run_player_worker(int argc, char** argv) {
                                           raw_audio_frame->nb_samples);
               if (converted > 0) {
                 if (audio_read_offset >= 4096) {
-                  audio_pending.erase(audio_pending.begin(),
-                                      audio_pending.begin() + audio_read_offset);
+                  audio_pending.erase(
+                      audio_pending.begin(),
+                      audio_pending.begin() + static_cast<std::ptrdiff_t>(audio_read_offset));
                   audio_read_offset = 0;
                 }
                 size_t sample_count = static_cast<size_t>(converted) * 2;
@@ -666,7 +669,8 @@ int run_player_worker(int argc, char** argv) {
       struct pollfd pfd{};
       pfd.fd = server_sock;
       pfd.events = POLLIN;
-      if (poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN)) {
+      if (poll(&pfd, 1, 1) > 0 &&
+          ((static_cast<uint32_t>(pfd.revents) & static_cast<uint32_t>(POLLIN)) != 0u)) {
         client_sock = accept(server_sock, nullptr, nullptr);
       }
     }
@@ -675,7 +679,8 @@ int run_player_worker(int argc, char** argv) {
       struct pollfd pfd{};
       pfd.fd = client_sock;
       pfd.events = POLLIN;
-      while (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+      while (poll(&pfd, 1, 0) > 0 &&
+             ((static_cast<uint32_t>(pfd.revents) & static_cast<uint32_t>(POLLIN)) != 0u)) {
         IpcPlaybackRequest req{};
         ssize_t n = recv(client_sock, &req, sizeof(req), MSG_DONTWAIT);
         if (n <= 0) {

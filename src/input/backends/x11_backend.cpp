@@ -113,8 +113,9 @@ void X11Backend::worker_loop() {
 
       std::vector<PendingKeyEvent> batch;
       for (unsigned int xkc = 8; xkc < 256; ++xkc) {
-        bool down = (keys[xkc >> 3] & (1 << (xkc & 7))) != 0;
-        bool prev_down = (prev_x11_keymap_[xkc >> 3] & (1 << (xkc & 7))) != 0;
+        uint8_t bit = static_cast<uint8_t>(1u << (xkc & 7u));
+        bool down = (static_cast<uint8_t>(keys[xkc >> 3u]) & bit) != 0u;
+        bool prev_down = (static_cast<uint8_t>(prev_x11_keymap_[xkc >> 3u]) & bit) != 0u;
         if (down != prev_down) {
           batch.push_back({xkc - 8, down});
         }
@@ -127,7 +128,8 @@ void X11Backend::worker_loop() {
         if (pending_key_events_.size() > 256) {
           pending_key_events_.erase(
               pending_key_events_.begin(),
-              pending_key_events_.begin() + (pending_key_events_.size() - 256));
+              pending_key_events_.begin() +
+                  static_cast<std::ptrdiff_t>(pending_key_events_.size() - 256));
         }
       }
     }

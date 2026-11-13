@@ -62,6 +62,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
+constexpr uint32_t kCodecFlagGlobalHeader = 1u << 22u;  // Matches AV_CODEC_FLAG_GLOBAL_HEADER
+
 std::atomic<bool> g_running{true};
 std::atomic<bool> g_has_received_game_frame{false};
 
@@ -495,11 +497,12 @@ int main(int argc, char* argv[]) {
     if (start_cfg.width > 0) target_width = std::max(64, static_cast<int>(start_cfg.width));
     if (start_cfg.height > 0) target_height = std::max(64, static_cast<int>(start_cfg.height));
     if (start_cfg.fps > 0) target_fps = std::clamp(static_cast<int>(start_cfg.fps), 15, 240);
-    if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = start_cfg.bitrate_kbps;
+    if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = static_cast<int>(start_cfg.bitrate_kbps);
     if (start_cfg.save_dir[0] != '\0') save_dir = start_cfg.save_dir;
     codec_choice = (start_cfg.codec == 1) ? "hevc" : "h264";
     quality_mode = (start_cfg.quality_mode == 1) ? 1 : 0;
-    if (start_cfg.cq_level >= 16 && start_cfg.cq_level <= 30) target_cq = start_cfg.cq_level;
+    if (start_cfg.cq_level >= 16 && start_cfg.cq_level <= 30)
+      target_cq = static_cast<int>(start_cfg.cq_level);
   }
 
   if (save_dir.empty()) {
@@ -509,8 +512,8 @@ int main(int argc, char* argv[]) {
   fs::create_directories(save_dir, ec);
 
   // Ensure width and height are even for YUV420p/NV12 video encoding and at least 64
-  target_width = std::max(64, target_width & ~1);
-  target_height = std::max(64, target_height & ~1);
+  target_width = std::max(64, static_cast<int>(static_cast<uint32_t>(target_width) & ~1u));
+  target_height = std::max(64, static_cast<int>(static_cast<uint32_t>(target_height) & ~1u));
 
   std::string ext =
       (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
@@ -677,7 +680,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    ctx->flags = static_cast<int>(static_cast<uint32_t>(ctx->flags) | kCodecFlagGlobalHeader);
 
     if (avcodec_open2(ctx, c, nullptr) >= 0) {
       vcodec = c;
@@ -744,7 +747,9 @@ int main(int argc, char* argv[]) {
   vstream->time_base = vctx->time_base;
   avcodec_parameters_from_context(vstream->codecpar, vctx);
   if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
-    vstream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+    vstream->codecpar->codec_tag = static_cast<uint32_t>('h') | (static_cast<uint32_t>('v') << 8u) |
+                                   (static_cast<uint32_t>('c') << 16u) |
+                                   (static_cast<uint32_t>('1') << 24u);
   }
 
   // 4. Initialize Audio Stream via PulseAudio / PipeWire
@@ -762,7 +767,7 @@ int main(int argc, char* argv[]) {
         actx->sample_fmt = AV_SAMPLE_FMT_FLTP;
         actx->bit_rate = 192000;
         actx->time_base = AVRational{1, actx->sample_rate};
-        actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        actx->flags = static_cast<int>(static_cast<uint32_t>(actx->flags) | kCodecFlagGlobalHeader);
 
         if (avcodec_open2(actx, acodec, nullptr) >= 0) {
           astream = avformat_new_stream(oc, nullptr);
@@ -802,7 +807,9 @@ int main(int argc, char* argv[]) {
     if (actx) avcodec_free_context(&actx);
     if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     if (oc) {
-      if (oc->pb && !(oc->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc->pb);
+      if (oc->pb &&
+          ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u))
+        avio_closep(&oc->pb);
       avformat_free_context(oc);
     }
     if (shm_base && shm_base != MAP_FAILED) {
@@ -816,10 +823,11 @@ int main(int argc, char* argv[]) {
 
   bool is_replay = (start_cfg.replay_mode == 1);
   int replay_sec = std::clamp<int>(
-      start_cfg.replay_duration_sec > 0 ? start_cfg.replay_duration_sec : 30, 5, 300);
+      start_cfg.replay_duration_sec > 0 ? static_cast<int>(start_cfg.replay_duration_sec) : 30, 5,
+      300);
 
   if (!is_replay) {
-    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+    if ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) {
       if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
         std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n",
                      out_filename.c_str());
@@ -867,7 +875,9 @@ int main(int argc, char* argv[]) {
     auto now_tp = std::chrono::steady_clock::now();
     int64_t now_us =
         std::chrono::duration_cast<std::chrono::microseconds>(now_tp - replay_clock_start).count();
-    bool is_key = (stream_idx == 0) && ((cloned->flags & AV_PKT_FLAG_KEY) != 0);
+    bool is_key =
+        (stream_idx == 0) &&
+        ((static_cast<uint32_t>(cloned->flags) & static_cast<uint32_t>(AV_PKT_FLAG_KEY)) != 0u);
     packet_ring.push_back(BufferedPacket{cloned, stream_idx, now_us, is_key});
 
     int64_t cutoff_us = now_us - static_cast<int64_t>(replay_sec) * 1000000LL;
@@ -998,7 +1008,8 @@ int main(int argc, char* argv[]) {
       size_t nbytes = 0;
       if (pa_stream_peek(pulse.stream, &data, &nbytes) == 0 && nbytes > 0) {
         if (pcm_read_offset >= 4096) {
-          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+          pcm_ring.erase(pcm_ring.begin(),
+                         pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
           pcm_read_offset = 0;
         }
         if (data == nullptr) {
@@ -1018,7 +1029,8 @@ int main(int argc, char* argv[]) {
         size_t mnbytes = 0;
         if (pa_stream_peek(pulse_mic.stream, &mdata, &mnbytes) == 0 && mnbytes > 0) {
           if (mic_read_offset >= 4096) {
-            mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mic_read_offset);
+            mic_ring.erase(mic_ring.begin(),
+                           mic_ring.begin() + static_cast<std::ptrdiff_t>(mic_read_offset));
             mic_read_offset = 0;
           }
           if (mdata == nullptr) {
@@ -1055,14 +1067,16 @@ int main(int argc, char* argv[]) {
           }
           mic_read_offset += mix_n;
           if (mic_read_offset >= 4096) {
-            mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mic_read_offset);
+            mic_ring.erase(mic_ring.begin(),
+                           mic_ring.begin() + static_cast<std::ptrdiff_t>(mic_read_offset));
             mic_read_offset = 0;
           }
         }
         if (av_frame_make_writable(aframe) < 0) {
           pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
           if (pcm_read_offset >= 4096) {
-            pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+            pcm_ring.erase(pcm_ring.begin(),
+                           pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
             pcm_read_offset = 0;
           }
           continue;
@@ -1085,7 +1099,8 @@ int main(int argc, char* argv[]) {
 
         pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
         if (pcm_read_offset >= 4096) {
-          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
+          pcm_ring.erase(pcm_ring.begin(),
+                         pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
           pcm_read_offset = 0;
         }
       }
@@ -1226,7 +1241,7 @@ int main(int argc, char* argv[]) {
               size_t slot_offset = shm_hdr->offset[notify.slot];
               if (slot_offset < shm_size && frame_bytes <= (shm_size - slot_offset)) {
                 const uint8_t* src = static_cast<const uint8_t*>(shm_base) + slot_offset;
-                int stride = notify.width * 4;
+                int stride = static_cast<int>(notify.width * 4);
 
                 AVPixelFormat src_fmt = AV_PIX_FMT_BGRA;
                 if (notify.format == 1) {
@@ -1240,12 +1255,13 @@ int main(int argc, char* argv[]) {
                     last_src_w != static_cast<int>(notify.width) ||
                     last_src_h != static_cast<int>(notify.height)) {
                   if (sws_ctx) sws_freeContext(sws_ctx);
-                  sws_ctx = sws_getContext(notify.width, notify.height, src_fmt, target_width,
+                  sws_ctx = sws_getContext(static_cast<int>(notify.width),
+                                           static_cast<int>(notify.height), src_fmt, target_width,
                                            target_height, sw_pix_fmt, SWS_FAST_BILINEAR, nullptr,
                                            nullptr, nullptr);
                   last_src_fmt = src_fmt;
-                  last_src_w = notify.width;
-                  last_src_h = notify.height;
+                  last_src_w = static_cast<int>(notify.width);
+                  last_src_h = static_cast<int>(notify.height);
                 }
 
                 if (!sws_ctx) {
@@ -1274,13 +1290,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
                   encode_frame_to_stream(0);
                 } else if (is_vfr) {
@@ -1290,13 +1306,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
 
                   int64_t elapsed_us = 0;
@@ -1342,13 +1358,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
 
                   // If target_pts is fresh (next slot or greater), encode the new frame!
@@ -1402,7 +1418,9 @@ int main(int argc, char* argv[]) {
                 rv->time_base = vctx->time_base;
                 avcodec_parameters_from_context(rv->codecpar, vctx);
                 if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
-                  rv->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+                  rv->codecpar->codec_tag =
+                      static_cast<uint32_t>('h') | (static_cast<uint32_t>('v') << 8u) |
+                      (static_cast<uint32_t>('c') << 16u) | (static_cast<uint32_t>('1') << 24u);
                 }
 
                 AVStream* ra = nullptr;
@@ -1420,7 +1438,8 @@ int main(int argc, char* argv[]) {
                 }
 
                 bool opened = true;
-                if (!(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                if ((static_cast<uint32_t>(replay_oc->oformat->flags) &
+                     static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) {
                   opened = (avio_open(&replay_oc->pb, replay_file.c_str(), AVIO_FLAG_WRITE) >= 0);
                 }
                 if (opened && avformat_write_header(replay_oc, &ropts) >= 0) {
@@ -1451,7 +1470,8 @@ int main(int argc, char* argv[]) {
                                 replay_file.c_str());
                 }
                 av_dict_free(&ropts);
-                if (replay_oc->pb && !(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                if (replay_oc->pb && ((static_cast<uint32_t>(replay_oc->oformat->flags) &
+                                       static_cast<uint32_t>(AVFMT_NOFILE)) == 0u)) {
                   avio_closep(&replay_oc->pb);
                 }
                 avformat_free_context(replay_oc);
@@ -1523,7 +1543,9 @@ int main(int argc, char* argv[]) {
   send(client_fd, &final_resp, sizeof(final_resp), 0);
 
   // Cleanup FFmpeg resources
-  if (!is_replay && !(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
+  if (!is_replay &&
+      ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) &&
+      oc->pb) {
     avio_closep(&oc->pb);
   }
   avcodec_free_context(&vctx);

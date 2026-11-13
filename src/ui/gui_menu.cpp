@@ -110,6 +110,10 @@ std::vector<RecordedClipInfo> scan_recorded_clips(const std::string& dir_path) {
 
 namespace {
 
+constexpr ImU32 make_col32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) noexcept {
+  return (a << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
 void open_system_folder(const std::string& path);
 void set_status_message(const std::string& msg);
 
@@ -159,15 +163,19 @@ static void render_video_player_modal(float scale, float display_width, float di
   if (g_player_fullscreen) {
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(display_width, display_height));
-    flags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+    flags = static_cast<ImGuiWindowFlags>(static_cast<uint32_t>(flags) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_NoScrollbar) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_NoCollapse) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_NoResize) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_NoMove));
   } else {
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     float max_w = std::min(display_width * 0.85f, 1024.0f);
     float max_h = std::min(display_height * 0.85f, 700.0f);
     ImGui::SetNextWindowSize(ImVec2(max_w, max_h), ImGuiCond_Appearing);
-    flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    flags = static_cast<ImGuiWindowFlags>(static_cast<uint32_t>(flags) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_AlwaysAutoResize));
   }
 
   bool modal_open = true;
@@ -474,9 +482,13 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
                             ImVec2(0.5f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.82f);
     ImGuiWindowFlags toast_flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+        static_cast<ImGuiWindowFlags>(static_cast<uint32_t>(ImGuiWindowFlags_NoDecoration) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_AlwaysAutoResize) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_NoSavedSettings) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_NoFocusOnAppearing) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_NoNav) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_NoMove) |
+                                      static_cast<uint32_t>(ImGuiWindowFlags_NoInputs));
     if (gui_font) ImGui::PushFont(gui_font);
     if (ImGui::Begin("##FPSHUD_ToastHint", nullptr, toast_flags)) {
       ImGui::SetWindowFontScale(16.0f / base_gui_font_px);
@@ -824,20 +836,20 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         // Monitor outer bezel & dark screen background
-        dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(14, 18, 26, 245), 5.0f * scale);
+        dl->AddRectFilled(canvas_p0, canvas_p1, make_col32(14u, 18u, 26u, 245u), 5.0f * scale);
         dl->AddRect(canvas_p0, canvas_p1,
-                    is_dragging
-                        ? IM_COL32(95, 215, 255, 255)
-                        : (is_hovered ? IM_COL32(80, 165, 220, 230) : IM_COL32(55, 72, 96, 210)),
+                    is_dragging ? make_col32(95u, 215u, 255u, 255u)
+                                : (is_hovered ? make_col32(80u, 165u, 220u, 230u)
+                                              : make_col32(55u, 72u, 96u, 210u)),
                     5.0f * scale, 0, 1.5f * scale);
 
         // Subtle center guide lines
         float mid_x = (inner_min.x + inner_max.x) * 0.5f;
         float mid_y = (inner_min.y + inner_max.y) * 0.5f;
         dl->AddLine(ImVec2(mid_x, inner_min.y), ImVec2(mid_x, inner_max.y),
-                    IM_COL32(45, 60, 82, 110), 1.0f);
+                    make_col32(45u, 60u, 82u, 110u), 1.0f);
         dl->AddLine(ImVec2(inner_min.x, mid_y), ImVec2(inner_max.x, mid_y),
-                    IM_COL32(45, 60, 82, 110), 1.0f);
+                    make_col32(45u, 60u, 82u, 110u), 1.0f);
 
         // Clamped mini FPS badge inside the monitor preview
         float bx = std::clamp(inner_min.x + eff_nx * usable_w, inner_min.x,
@@ -847,10 +859,10 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
         ImVec2 b_min(bx, by);
         ImVec2 b_max(bx + badge_sz.x, by + badge_sz.y);
 
-        dl->AddRectFilled(b_min, b_max, IM_COL32(28, 115, 70, 235), 3.0f * scale);
-        dl->AddRect(b_min, b_max, IM_COL32(90, 245, 150, 255), 3.0f * scale, 0, 1.2f * scale);
-        dl->AddText(ImVec2(bx + 5.0f * scale, by + 2.0f * scale), IM_COL32(255, 255, 255, 255),
-                    fps_badge);
+        dl->AddRectFilled(b_min, b_max, make_col32(28u, 115u, 70u, 235u), 3.0f * scale);
+        dl->AddRect(b_min, b_max, make_col32(90u, 245u, 150u, 255u), 3.0f * scale, 0, 1.2f * scale);
+        dl->AddText(ImVec2(bx + 5.0f * scale, by + 2.0f * scale),
+                    make_col32(255u, 255u, 255u, 255u), fps_badge);
       }
 
       // Manual Position (X / Y) Inputs + Reset Layout Button
@@ -984,7 +996,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - reset_btn_w - (6.0f * scale));
       int scale_pct = static_cast<int>(std::round(cfg.gui_scale * 100.0f));
       if (ImGui::SliderInt("##MenuScaleSlider", &scale_pct, 50, 200, "%d%%")) {
-        cfg.gui_scale = std::clamp(scale_pct / 100.0f, 0.50f, 2.00f);
+        cfg.gui_scale = std::clamp(static_cast<float>(scale_pct) / 100.0f, 0.50f, 2.00f);
       }
       ImGui::SameLine(0.0f, 6.0f * scale);
       if (ImGui::Button("100%", ImVec2(reset_btn_w, 0.0f))) {
@@ -1051,8 +1063,9 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Base Text Color");
       ImGui::TableSetColumnIndex(1);
-      float col3[3] = {cfg.text_color.r / 255.0f, cfg.text_color.g / 255.0f,
-                       cfg.text_color.b / 255.0f};
+      float col3[3] = {static_cast<float>(cfg.text_color.r) / 255.0f,
+                       static_cast<float>(cfg.text_color.g) / 255.0f,
+                       static_cast<float>(cfg.text_color.b) / 255.0f};
       ImGui::SetNextItemWidth(-1.0f);
       if (ImGui::ColorEdit3("##BaseTextColor", col3, ImGuiColorEditFlags_Uint8)) {
         cfg.text_color.r = static_cast<uint8_t>(std::clamp(col3[0] * 255.0f, 0.0f, 255.0f));

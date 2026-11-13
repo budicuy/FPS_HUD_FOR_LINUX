@@ -89,17 +89,18 @@ bool parse_level_str(const char* s, Level& out) noexcept {
 void init() noexcept {
   std::lock_guard<std::mutex> lock(g_log_mutex);
 
-  static std::string s_last_env_str;
+  static char s_last_env_str[128] = {0};
   static bool s_has_run = false;
 
   const char* env = std::getenv("FPS_HUD_LOG");
-  std::string current_env = env ? env : "";
+  const char* cur_env = env ? env : "";
 
-  if (s_has_run && g_initialized.load(std::memory_order_acquire) && current_env == s_last_env_str) {
+  if (s_has_run && g_initialized.load(std::memory_order_acquire) &&
+      std::strncmp(cur_env, s_last_env_str, sizeof(s_last_env_str)) == 0) {
     return;
   }
   s_has_run = true;
-  s_last_env_str = current_env;
+  std::snprintf(s_last_env_str, sizeof(s_last_env_str), "%s", cur_env);
 
   // Close previous file descriptor if custom
   if (g_is_custom_file && g_log_fd != STDERR_FILENO && g_log_fd >= 0) {

@@ -60,14 +60,23 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
     VkPhysicalDeviceMemoryProperties mem_props{};
     dd->instance_data->GetPhysicalDeviceMemoryProperties(dd->physical_device, &mem_props);
 
+    constexpr VkMemoryPropertyFlags kReqFlags1 = static_cast<VkMemoryPropertyFlags>(
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) |
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_CACHED_BIT));
+
+    constexpr VkMemoryPropertyFlags kReqFlags2 = static_cast<VkMemoryPropertyFlags>(
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_CACHED_BIT));
+
+    constexpr VkMemoryPropertyFlags kReqFlags3 = static_cast<VkMemoryPropertyFlags>(
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
+        static_cast<uint32_t>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
+
     // Priority 1: Host Visible + Host Coherent + Host Cached (Fastest CPU readback, ~0.4ms)
     for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
       if ((mem_req.memoryTypeBits & (1u << i)) &&
-          (mem_props.memoryTypes[i].propertyFlags &
-           (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-            VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) ==
-              (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-               VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
+          (mem_props.memoryTypes[i].propertyFlags & kReqFlags1) == kReqFlags1) {
         mem_type = i;
         found = true;
         is_coherent = true;
@@ -79,9 +88,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
     if (!found) {
       for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
         if ((mem_req.memoryTypeBits & (1u << i)) &&
-            (mem_props.memoryTypes[i].propertyFlags &
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
+            (mem_props.memoryTypes[i].propertyFlags & kReqFlags2) == kReqFlags2) {
           mem_type = i;
           found = true;
           is_coherent = false;
@@ -94,9 +101,7 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
     if (!found) {
       for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
         if ((mem_req.memoryTypeBits & (1u << i)) &&
-            (mem_props.memoryTypes[i].propertyFlags &
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            (mem_props.memoryTypes[i].propertyFlags & kReqFlags3) == kReqFlags3) {
           mem_type = i;
           found = true;
           is_coherent = true;

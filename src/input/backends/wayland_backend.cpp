@@ -496,12 +496,12 @@ void wl_reg_global_remove(void* /*data*/, struct wl_registry* /*registry*/, uint
 void wl_seat_caps(void* data, struct wl_seat* seat, uint32_t capabilities) {
   auto* self = static_cast<WaylandBackend*>(data);
   if (!self || !seat) return;
-  if (capabilities & 1) {
+  if ((capabilities & 1u) != 0u) {
     self->register_keyboard(seat);
   } else {
     self->destroy_keyboard();
   }
-  if (capabilities & 2) {
+  if ((capabilities & 2u) != 0u) {
     self->register_pointer(seat);
   } else {
     self->destroy_pointer();

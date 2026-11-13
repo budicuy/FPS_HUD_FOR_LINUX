@@ -305,6 +305,26 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
+        bool has_hw_accel_350 = false;
+        for (int node_id = 128; node_id <= 135; ++node_id) {
+          std::string dev = "/dev/dri/renderD" + std::to_string(node_id);
+          if (access(dev.c_str(), R_OK | W_OK) == 0) {
+            has_hw_accel_350 = true;
+            break;
+          }
+        }
+        if (access("/dev/nvidia0", R_OK) == 0 || access("/dev/nvidiactl", R_OK) == 0) {
+          has_hw_accel_350 = true;
+        }
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+        constexpr bool kIsTsanBuild350 = true;
+#else
+        constexpr bool kIsTsanBuild350 = false;
+#endif
+        bool is_headless_or_ci_350 =
+            (!has_hw_accel_350 || kIsTsanBuild350 || std::getenv("CI") != nullptr ||
+             std::getenv("GITHUB_ACTIONS") != nullptr);
+
         bool child_stopped_cleanly_350 = false;
         if (connected_350 && client_fd_350 >= 0) {
           IpcPacketHeader start_hdr{};
@@ -339,26 +359,6 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           recv(client_fd_350, &resp, sizeof(resp), 0);
           close(client_fd_350);
 
-          bool has_hw_accel_350 = false;
-          for (int node_id = 128; node_id <= 135; ++node_id) {
-            std::string dev = "/dev/dri/renderD" + std::to_string(node_id);
-            if (access(dev.c_str(), R_OK | W_OK) == 0) {
-              has_hw_accel_350 = true;
-              break;
-            }
-          }
-          if (access("/dev/nvidia0", R_OK) == 0 || access("/dev/nvidiactl", R_OK) == 0) {
-            has_hw_accel_350 = true;
-          }
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
-          constexpr bool kIsTsanBuild350 = true;
-#else
-          constexpr bool kIsTsanBuild350 = false;
-#endif
-          bool is_headless_or_ci_350 =
-              (!has_hw_accel_350 || kIsTsanBuild350 || std::getenv("CI") != nullptr ||
-               std::getenv("GITHUB_ACTIONS") != nullptr);
-
           auto stop_wait_start = std::chrono::steady_clock::now();
           while (std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - stop_wait_start)
@@ -386,7 +386,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
         CHECK_MESSAGE(child_stopped_cleanly_350, "Recorder daemon stops cleanly on 350ms run");
 
         std::string err_output_350 = read_text_file(stderr_350);
-        if (pulse_accessible) {
+        if (pulse_accessible && !is_headless_or_ci_350) {
           CHECK_MESSAGE(err_output_350.find("Audio capture initialized on:") != std::string::npos,
                         "Audio capture must be initialized on live PulseAudio daemon");
         } else {

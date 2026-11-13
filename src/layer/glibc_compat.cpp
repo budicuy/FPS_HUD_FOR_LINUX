@@ -33,6 +33,7 @@ extern unsigned long compat_strtoul(const char* nptr, char** endptr, int base);
 extern unsigned long long compat_strtoull(const char* nptr, char** endptr, int base);
 extern long long compat_strtoll(const char* nptr, char** endptr, int base);
 
+// NOLINTBEGIN(bugprone-reserved-identifier)
 __attribute__((used)) float __wrap_acosf(float x) { return compat_acosf(x); }
 __attribute__((used)) float __wrap_atan2f(float y, float x) { return compat_atan2f(y, x); }
 __attribute__((used)) float __wrap_fmodf(float x, float y) { return compat_fmodf(x, y); }
@@ -70,6 +71,7 @@ __attribute__((used)) long long __wrap___isoc23_strtoll(const char* nptr, char**
  * std::filesystem temp helpers) references arc4random@GLIBC_2.36. Provide a
  * GLIBC_2.2.5-only replacement backed by the getrandom(2) syscall. */
 __attribute__((used)) uint32_t __wrap_arc4random(void) {
+  // NOLINTEND(bugprone-reserved-identifier)
   uint32_t val = 0;
 #if defined(SYS_getrandom)
   if (syscall(SYS_getrandom, &val, sizeof(val), 0) == static_cast<long>(sizeof(val))) {
@@ -80,13 +82,13 @@ __attribute__((used)) uint32_t __wrap_arc4random(void) {
   struct timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
   uint64_t x = (static_cast<uint64_t>(ts.tv_sec) * 1000000007ULL) ^
-               static_cast<uint64_t>(ts.tv_nsec) ^ (static_cast<uint64_t>(getpid()) << 32) ^
+               static_cast<uint64_t>(ts.tv_nsec) ^ (static_cast<uint64_t>(getpid()) << 32u) ^
                static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&val));
-  x ^= x >> 33;
+  x ^= x >> 33u;
   x *= 0xff51afd7ed558ccdULL;
-  x ^= x >> 33;
+  x ^= x >> 33u;
   x *= 0xc4ceb9fe1a85ec53ULL;
-  x ^= x >> 33;
+  x ^= x >> 33u;
   return static_cast<uint32_t>(x);
 }
 

@@ -97,7 +97,7 @@ std::string get_secure_runtime_dir() {
   struct stat st{};
   if (::lstat(fallback.c_str(), &st) == 0) {
     if (S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && st.st_uid == ::getuid() &&
-        ((st.st_mode & 0777) == 0700)) {
+        ((static_cast<uint32_t>(st.st_mode) & 0777u) == 0700u)) {
       return fallback;
     }
     if (st.st_uid == ::getuid() && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
@@ -649,7 +649,7 @@ bool RecorderController::setup_shm(uint32_t width, uint32_t height) {
     return false;
   }
 
-  if (ftruncate(shm_fd_, total_sz) != 0) {
+  if (ftruncate(shm_fd_, static_cast<off_t>(total_sz)) != 0) {
     close(shm_fd_);
     shm_fd_ = -1;
     unlink(shm_path_.c_str());

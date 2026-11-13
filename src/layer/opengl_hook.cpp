@@ -643,15 +643,15 @@ static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t 
     g_player_tex_h = h;
     g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
     if (g_gl.glTexImage2D) {
-      g_gl.glTexImage2D(GL_TEXTURE_2D, 0, 0x1908 /* GL_RGBA */, w, h, 0, 0x1908 /* GL_RGBA */,
-                        GL_UNSIGNED_BYTE, rgba);
+      g_gl.glTexImage2D(GL_TEXTURE_2D, 0, 0x1908 /* GL_RGBA */, static_cast<GLsizei>(w),
+                        static_cast<GLsizei>(h), 0, 0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE, rgba);
     }
     g_player_last_seq = seq;
   } else if (seq != g_player_last_seq) {
     g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
     if (g_gl.glTexSubImage2D) {
-      g_gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, 0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE,
-                           rgba);
+      g_gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                           0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE, rgba);
     }
     g_player_last_seq = seq;
   }

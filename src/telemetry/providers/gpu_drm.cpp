@@ -418,9 +418,10 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
               std::chrono::duration_cast<std::chrono::nanoseconds>(now - prev_drm_render_time_)
                   .count();
           if (dt_ns > 1000000) {
-            load_pct = std::clamp(
-                static_cast<float>((total_render_ns - prev_drm_render_ns_) * 100.0 / dt_ns), 0.0f,
-                100.0f);
+            double d_render_ns = static_cast<double>(total_render_ns - prev_drm_render_ns_);
+            double d_dt_ns = static_cast<double>(dt_ns);
+            load_pct =
+                std::clamp(static_cast<float>((d_render_ns * 100.0) / d_dt_ns), 0.0f, 100.0f);
           }
         }
         prev_drm_render_ns_ = total_render_ns;

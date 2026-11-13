@@ -398,12 +398,14 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
 
     VkSwapchainCreateInfoKHR modified_info = *pCreateInfo;
     modified_info.imageUsage |=
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        static_cast<VkImageUsageFlags>(static_cast<uint32_t>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
+                                       static_cast<uint32_t>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
     bool supports_transfer = true;
 
     VkResult res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
     if (res != VK_SUCCESS) {
-      modified_info.imageUsage = pCreateInfo->imageUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+      modified_info.imageUsage = pCreateInfo->imageUsage | static_cast<VkImageUsageFlags>(
+                                                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
       res = dd->CreateSwapchainKHR(device, &modified_info, pAllocator, pSwapchain);
       supports_transfer = false;
       if (res != VK_SUCCESS) {

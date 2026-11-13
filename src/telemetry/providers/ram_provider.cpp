@@ -79,7 +79,8 @@ void RamProvider::poll_game_ram(HardwareTelemetryData& out_data) {
     std::string_view sv(buf);
     if (fpshud::parse::parse_int_prefix(sv, size, &sv) && fpshud::parse::parse_int(sv, resident)) {
       static const long s_page_size = sysconf(_SC_PAGESIZE);
-      double bytes = static_cast<double>(resident) * (s_page_size > 0 ? s_page_size : 4096);
+      double page_sz = static_cast<double>(s_page_size > 0 ? s_page_size : 4096);
+      double bytes = static_cast<double>(resident) * page_sz;
       out_data.game_ram_gb = static_cast<float>(bytes / (1024.0 * 1024.0 * 1024.0));
       return;
     }

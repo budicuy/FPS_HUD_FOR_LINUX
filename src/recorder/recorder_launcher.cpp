@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
 
   // 4. Execute the real binary
   std::vector<char*> exec_args;
-  exec_args.reserve(static_cast<size_t>(argc + 1));
+  exec_args.reserve(static_cast<size_t>(argc) + 1u);
   exec_args.push_back(target.data());
   for (int i = 1; i < argc; ++i) {
     exec_args.push_back(argv[i]);

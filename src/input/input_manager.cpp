@@ -21,7 +21,9 @@ void release_imgui_inputs(ImGuiIO& io) {
   io.AddMouseButtonEvent(2, false);
   io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
   io.ClearInputKeys();
-  io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags =
+      static_cast<ImGuiConfigFlags>(static_cast<uint32_t>(io.ConfigFlags) &
+                                    ~static_cast<uint32_t>(ImGuiConfigFlags_NavEnableKeyboard));
 }
 
 bool is_gui_toggle_key(unsigned int code, int mode) {
@@ -367,7 +369,9 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
       cursor_y_ = io.DisplaySize.y * 0.5f;
     }
     io.AddMousePosEvent(cursor_x_, cursor_y_);
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags =
+        static_cast<ImGuiConfigFlags>(static_cast<uint32_t>(io.ConfigFlags) |
+                                      static_cast<uint32_t>(ImGuiConfigFlags_NavEnableKeyboard));
     pending_ungrab_ = false;
     set_mouse_grab(true);
     if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) &&

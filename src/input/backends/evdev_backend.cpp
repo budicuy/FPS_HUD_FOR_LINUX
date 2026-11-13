@@ -20,7 +20,10 @@ namespace fpshud {
 namespace {
 
 bool test_bit(int bit, const unsigned long* array) {
-  return (array[bit / (sizeof(unsigned long) * 8)] >> (bit % (sizeof(unsigned long) * 8))) & 1;
+  if (bit < 0 || !array) return false;
+  auto ubit = static_cast<unsigned long>(bit);
+  constexpr unsigned long kBits = sizeof(unsigned long) * 8u;
+  return ((array[ubit / kBits] >> (ubit % kBits)) & 1u) != 0u;
 }
 
 }  // namespace
