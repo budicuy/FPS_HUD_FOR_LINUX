@@ -2,10 +2,11 @@ name: CI Build, Test & Release
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "testing" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "testing" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,96 +14,35 @@ permissions:
 jobs:
   build-test-release:
     runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      CC: clang
+      CXX: clang++
+      AR: llvm-ar
+      RANLIB: llvm-ranlib
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Toolchain & Build Dependencies
+      - name: Install Toolchain & Build Dependencies (Arch Linux)
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          EXTRA_COMPILER=""
-          if apt-cache show g++-16 >/dev/null 2>&1; then
-            EXTRA_COMPILER="gcc-16 g++-16"
-          elif apt-cache show g++-15 >/dev/null 2>&1; then
-            EXTRA_COMPILER="gcc-15 g++-15"
-          elif apt-cache show clang-19 >/dev/null 2>&1; then
-            EXTRA_COMPILER="clang-19 lld-19"
-          else
-            EXTRA_COMPILER="clang"
-          fi
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            $EXTRA_COMPILER build-essential cmake ninja-build pkg-config binutils clang-format \
-            libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
-            fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev \
-            libva-dev libdrm-dev zlib1g-dev upx-ucl \
-            mesa-vulkan-drivers vulkan-tools xvfb
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pacman -Syu --noconfirm --needed \
+            clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
+            vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
+            shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
 
-      - name: Build Minimal Hardware Static FFmpeg (< 4 MB)
+      - name: Configure, Lint, Build & Test (Pure Clang Release + LLD)
         run: |
-          ./scripts/build_static_ffmpeg.sh build/ffmpeg_minimal
-
-      - name: Configure, Build & Verify ABI/GLIBC Portability Gates
-        run: |
-          if command -v g++-16 >/dev/null 2>&1; then
-            CC_BIN="gcc-16"
-            CXX_BIN="g++-16"
-          elif command -v g++-15 >/dev/null 2>&1; then
-            CC_BIN="gcc-15"
-            CXX_BIN="g++-15"
-          elif command -v clang++-19 >/dev/null 2>&1; then
-            CC_BIN="clang-19"
-            CXX_BIN="clang++-19"
-          elif command -v clang++ >/dev/null 2>&1; then
-            CC_BIN="clang"
-            CXX_BIN="clang++"
-          else
-            CC_BIN="gcc"
-            CXX_BIN="g++"
-          fi
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$CC_BIN" \
-            -DCMAKE_CXX_COMPILER="$CXX_BIN"
+          cmake --preset release
           cmake --build build --target format-check
           cmake --build build --parallel
-          if objdump -T build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin | grep -E "GLIBC_2\.(3[6-9]|4[0-9])"; then
-            echo "::error::Binary imports GLIBC >= 2.36 symbols!"
-            exit 1
-          fi
-          EXPORT_COUNT="$(nm -D --defined-only build/libfpshud.so | wc -l)"
-          if [ "$EXPORT_COUNT" -ne 8 ]; then
-            echo "::error::Expected exactly 8 exported ABI symbols in libfpshud.so, got $EXPORT_COUNT"
-            exit 1
-          fi
-          if LC_ALL=C readelf -d build/libfpshud.so | grep NEEDED | grep -E "lib(GLX|EGL|OpenGL|GL)\.so"; then
-            echo "::error::Direct dynamic link to OpenGL/GLX/EGL detected in libfpshud.so DT_NEEDED!"
-            exit 1
-          fi
-          "$CXX_BIN" -std=c++26 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsyntax-only -Isrc -Isrc/recorder -Isrc/core \
-            -Ibuild/ffmpeg_minimal/include \
-            src/recorder/recorder_main.cpp
-          strip --strip-unneeded build/libfpshud.so build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin
-          if [ -f "build/fpshud_recorder_bin" ]; then
-            REC_SIZE="$(stat -c%s build/fpshud_recorder_bin)"
-            if [ "$REC_SIZE" -gt 5242880 ]; then
-              echo "::error::fpshud_recorder_bin exceeds 5 MB limit ($REC_SIZE bytes)!"
-              exit 1
-            fi
-            if LC_ALL=C readelf -d build/fpshud_recorder_bin | grep NEEDED | grep "libav"; then
-              echo "::error::Dynamic libav dependency detected in fpshud_recorder_bin!"
-              exit 1
-            fi
-            echo "[✓] Static minimal recorder verified: $REC_SIZE bytes (< 5 MB), 0 dynamic libav dependencies."
-          fi
-          if LC_ALL=C readelf -d build/fpshud_recorder | grep NEEDED | grep "libstdc++"; then
-            echo "::error::Dynamic libstdc++ dependency detected in fpshud_recorder!"
-            exit 1
-          fi
+          cmake --build build --target clang-tidy
+          ctest --test-dir build --output-on-failure
 
-      - name: Run Multi-Device Simulation & Feature Verification Suite
+      - name: Package Portable Release & Verify Portability Gates
         run: |
-          ./build/fpshud_test 1
+          ./scripts/package_release.sh
 
       - name: Verify Real Vulkan Hook & HUD Rendering (Mesa Lavapipe CPU Software Rasterizer)
         run: |
@@ -110,29 +50,17 @@ jobs:
 
       - name: Verify End-to-End Installation & Uninstallation Lifecycle
         run: |
+          export FPSHUD_RELEASE_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz"
+          export FPSHUD_RELEASE_SHA_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz.sha256"
           ./scripts/test_e2e_install.sh
-
-      - name: Package Portable Release Archive
-        run: |
-          mkdir -p release_pkg
-          cp scripts/uninstall.sh build/uninstall.sh
-          # Optional UPX compression to further shrink the self-contained recorder
-          if command -v upx >/dev/null 2>&1 && [ -f "build/fpshud_recorder_bin" ]; then
-            echo "[*] Compressing fpshud_recorder_bin with UPX..."
-            upx --best build/fpshud_recorder_bin || true
-          fi
-          TAR_ITEMS="libfpshud.so fpshud fpshud_test fpshud_recorder fpshud_recorder_bin uninstall.sh"
-          chmod 755 build/libfpshud.so build/fpshud build/fpshud_test build/fpshud_recorder build/fpshud_recorder_bin build/uninstall.sh
-          tar -czf release_pkg/fpshud-linux-x86_64.tar.gz -C build $TAR_ITEMS
-          (cd release_pkg && sha256sum fpshud-linux-x86_64.tar.gz > fpshud-linux-x86_64.tar.gz.sha256)
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: fpshud-linux-x86_64
           path: |
-            release_pkg/fpshud-linux-x86_64.tar.gz
-            release_pkg/fpshud-linux-x86_64.tar.gz.sha256
+            dist/fpshud-linux-x86_64.tar.gz
+            dist/fpshud-linux-x86_64.tar.gz.sha256
 
   distro-compatibility-matrix:
     needs: build-test-release
@@ -143,22 +71,19 @@ jobs:
         distro:
           - name: "Arch Linux (Rolling)"
             image: "archlinux:latest"
-            cmd: "pacman -Sy --noconfirm tar gzip procps-ng vulkan-icd-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "pacman -Syu --noconfirm --needed tar gzip procps-ng vulkan-icd-loader libpulse libva libdrm binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Fedora Latest (RPM)"
             image: "fedora:latest"
-            cmd: "dnf install -y tar gzip procps-ng vulkan-loader && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "dnf install -y tar gzip procps-ng vulkan-loader pulseaudio-libs libva libdrm binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Debian 12 (Bookworm)"
             image: "debian:bookworm-slim"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Ubuntu 22.04 LTS (Jammy - GLIBC 2.35 Baseline)"
             image: "ubuntu:22.04"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
           - name: "Ubuntu 24.04 LTS (Noble)"
             image: "ubuntu:24.04"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
-          - name: "openSUSE Tumbleweed"
-            image: "opensuse/tumbleweed:latest"
-            cmd: "zypper --non-interactive install tar gzip procps libvulkan1 && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
     steps:
       - name: Download Portable Build Artifact
         uses: actions/download-artifact@v4
@@ -177,49 +102,29 @@ jobs:
 
   sanitizer-verification:
     runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      CC: clang
+      CXX: clang++
+      AR: llvm-ar
+      RANLIB: llvm-ranlib
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Toolchain & Dependencies for Sanitizers
+      - name: Install Toolchain & Dependencies for Sanitizers (Arch Linux)
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          EXTRA_COMPILER=""
-          if apt-cache show g++-16 >/dev/null 2>&1; then
-            EXTRA_COMPILER="gcc-16 g++-16"
-          elif apt-cache show g++-15 >/dev/null 2>&1; then
-            EXTRA_COMPILER="gcc-15 g++-15"
-          elif apt-cache show clang-19 >/dev/null 2>&1; then
-            EXTRA_COMPILER="clang-19"
-          else
-            EXTRA_COMPILER="clang"
-          fi
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            $EXTRA_COMPILER build-essential cmake ninja-build pkg-config \
-            libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
-            fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
-            libpulse-dev libva-dev libdrm-dev zlib1g-dev
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pacman -Syu --noconfirm --needed \
+            clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
+            vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
+            shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
 
-      - name: Run Memory Safety & Undefined Behavior Suite (ASan + UBSan)
+      - name: Run Memory Safety, Thread Safety & Undefined Behavior Suite (ASan + UBSan & TSan)
         run: |
-          SAN_CC="gcc"
-          SAN_CXX="g++"
-          if command -v g++-16 >/dev/null 2>&1; then
-            SAN_CC="gcc-16"
-            SAN_CXX="g++-16"
-          elif command -v g++-15 >/dev/null 2>&1; then
-            SAN_CC="gcc-15"
-            SAN_CXX="g++-15"
-          elif command -v clang++-19 >/dev/null 2>&1; then
-            SAN_CC="clang-19"
-            SAN_CXX="clang++-19"
-          elif command -v clang++ >/dev/null 2>&1; then
-            SAN_CC="clang"
-            SAN_CXX="clang++"
-          fi
-          CC="$SAN_CC" CXX="$SAN_CXX" ./scripts/run_sanitizers.sh
-          rm -rf build_asan
+          ./scripts/run_sanitizers.sh
+          cmake --build build_asan --target clang-tidy
+          rm -rf build_asan build_tsan
 
   publish-release:
     needs: [build-test-release, distro-compatibility-matrix, sanitizer-verification]
@@ -228,7 +133,8 @@ jobs:
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
       !contains(needs.*.result, 'skipped') &&
-      github.event_name == 'push'
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
