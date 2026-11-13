@@ -102,7 +102,9 @@ jobs:
 
   sanitizer-verification:
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    container:
+      image: archlinux:base-devel
+      options: --security-opt seccomp=unconfined
     env:
       CC: clang
       CXX: clang++
@@ -120,11 +122,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Run Memory Safety, Thread Safety & Undefined Behavior Suite (ASan + UBSan & TSan)
+      - name: Run Address, Leak & Undefined Behavior Sanitizers (ASan + LSan + UBSan)
         run: |
-          ./scripts/run_sanitizers.sh
-          cmake --build build_asan --target clang-tidy
-          rm -rf build_asan build_tsan
+          cmake --workflow --preset asan-ubsan
+          rm -rf build_asan
+
+      - name: Run ThreadSanitizer (TSan)
+        run: |
+          cmake --workflow --preset tsan
+          rm -rf build_tsan
 
   publish-release:
     needs: [build-test-release, distro-compatibility-matrix, sanitizer-verification]
