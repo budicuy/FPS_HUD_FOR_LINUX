@@ -158,7 +158,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
       }
       delete id;
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 
@@ -539,7 +542,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device,
       }
       delete dd;
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 
@@ -557,7 +563,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue(VkDevice device, uint32_t queueFa
         g_device_map[get_dispatch_key(*pQueue)] = dd;
       }
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 
@@ -583,7 +592,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
         g_device_map[get_dispatch_key(*pQueue)] = dd;
       }
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 
@@ -619,7 +631,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurface
         fpDestroySurfaceKHR(instance, surface, pAllocator);
       }
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 

@@ -10,6 +10,7 @@
 #include "overlay_ui.hpp"
 #include "imgui.h"
 #include "pack_indexing.hpp"
+#include "parse_util.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
 
@@ -543,5 +544,110 @@ TEST_CASE("Core: Zero-Cost C++26 Logging Engine") {
 #if !defined(FPSHUD_ENABLE_DEBUG_LOGGING)
     CHECK(side_effect_counter == 0);
 #endif
+  }
+}
+
+TEST_CASE("Core: Safe Integer and Float Parsing Utilities (parse_util)") {
+  SUBCASE("Valid positive, negative, and hex integer parsing") {
+    int val = 0;
+    CHECK(fpshud::parse::parse_int("42", val));
+    CHECK(val == 42);
+
+    CHECK(fpshud::parse::parse_int("  -15", val));
+    CHECK(val == -15);
+
+    int hex_val = 0;
+    CHECK(fpshud::parse::parse_int("0x1f", hex_val, 16));
+    CHECK(hex_val == 0x1f);
+
+    CHECK(fpshud::parse::parse_int("0X2A", hex_val, 16));
+    CHECK(hex_val == 0x2a);
+
+    CHECK(fpshud::parse::parse_int("3B", hex_val, 16));
+    CHECK(hex_val == 0x3b);
+  }
+
+  SUBCASE("Empty string, whitespace only, and invalid letters") {
+    int val = 123;
+    CHECK(!fpshud::parse::parse_int("", val));
+    CHECK(!fpshud::parse::parse_int("    ", val));
+    CHECK(!fpshud::parse::parse_int("\t \n", val));
+    CHECK(!fpshud::parse::parse_int("abc", val));
+    CHECK(!fpshud::parse::parse_int("  xyz123", val));
+  }
+
+  SUBCASE("Exact mode vs prefix mode with trailing junk") {
+    int val = 0;
+    // Exact mode must reject trailing characters
+    CHECK(!fpshud::parse::parse_int_exact("12xyz", val));
+
+    // Prefix mode must parse the numeric prefix and return remaining view
+    std::string_view remainder;
+    CHECK(fpshud::parse::parse_int_prefix("12xyz", val, &remainder));
+    CHECK(val == 12);
+    CHECK(remainder == "xyz");
+
+    // Exact mode accepts trimmed trailing whitespace
+    CHECK(fpshud::parse::parse_int_exact("   123   ", val));
+    CHECK(val == 123);
+  }
+
+  SUBCASE("Overflow detection without UB") {
+    int val = 0;
+    CHECK(!fpshud::parse::parse_int("99999999999999999999999", val));
+    CHECK(!fpshud::parse::parse_int("-99999999999999999999999", val));
+
+    uint32_t u32_val = 0;
+    CHECK(!fpshud::parse::parse_int("99999999999999999999999", u32_val));
+
+    uint64_t u64_val = 0;
+    CHECK(!fpshud::parse::parse_int("99999999999999999999999", u64_val));
+  }
+
+  SUBCASE("Negative numbers on unsigned types fail cleanly") {
+    uint32_t uval = 0;
+    CHECK(!fpshud::parse::parse_int("-15", uval));
+    CHECK(!fpshud::parse::parse_int_exact("-15", uval));
+
+    uint64_t u64val = 0;
+    CHECK(!fpshud::parse::parse_int("-1", u64val));
+    CHECK(!fpshud::parse::parse_int_exact("-100", u64val));
+  }
+
+  SUBCASE("parse_int_or fallback behavior") {
+    CHECK(fpshud::parse::parse_int_or("123", 999) == 123);
+    CHECK(fpshud::parse::parse_int_or("invalid", 999) == 999);
+    CHECK(fpshud::parse::parse_int_or("", 42) == 42);
+    CHECK(fpshud::parse::parse_int_or("-50", 10) == -50);
+    uint32_t fallback = 500;
+    CHECK(fpshud::parse::parse_int_or("-50", fallback) == fallback);
+  }
+
+  SUBCASE("Floating point parsing with parse_float") {
+    float f = 0.0f;
+    CHECK(fpshud::parse::parse_float("3.14159", f));
+    CHECK(std::abs(f - 3.14159f) < 0.0001f);
+
+    CHECK(fpshud::parse::parse_float("  -0.5", f));
+    CHECK(f == -0.5f);
+
+    CHECK(fpshud::parse::parse_float("+10.25", f));
+    CHECK(f == 10.25f);
+
+    // Prefix mode for float
+    std::string_view remainder;
+    CHECK(fpshud::parse::parse_float_prefix("1.25abc", f, &remainder));
+    CHECK(f == 1.25f);
+    CHECK(remainder == "abc");
+
+    // Exact mode rejects trailing non-whitespace
+    CHECK(!fpshud::parse::parse_float_exact("1.25abc", f));
+    CHECK(fpshud::parse::parse_float_exact("  1.25  ", f));
+    CHECK(f == 1.25f);
+
+    // Fallback helper
+    CHECK(fpshud::parse::parse_float_or("invalid", 2.5f) == 2.5f);
+    CHECK(fpshud::parse::parse_float_or("7.5", 2.5f) == 7.5f);
+    CHECK(fpshud::parse::parse_float_or("", 1.0f) == 1.0f);
   }
 }

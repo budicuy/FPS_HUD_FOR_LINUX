@@ -104,7 +104,10 @@ static EGLDisplay Hook_eglGetPlatformDisplay(EGLenum platform, void* native_disp
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_KHR
       fpshud::get_input_manager().attach_wayland_display(native_display);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglGetPlatformDisplay
              ? real_eglGetPlatformDisplay(platform, native_display, attrib_list)
@@ -118,7 +121,10 @@ static EGLDisplay Hook_eglGetPlatformDisplayEXT(EGLenum platform, void* native_d
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_EXT
       fpshud::get_input_manager().attach_wayland_display(native_display);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglGetPlatformDisplayEXT
              ? real_eglGetPlatformDisplayEXT(platform, native_display, attrib_list)
@@ -583,7 +589,10 @@ private:
   std::chrono::steady_clock::time_point m_last_capture_time{};
 };
 
-GlAsyncPboRing g_gl_pbo_ring;
+inline GlAsyncPboRing& gl_pbo_ring() {
+  static GlAsyncPboRing ring;
+  return ring;
+}
 
 static GLuint g_player_gl_tex = 0;
 static uint32_t g_player_tex_w = 0;
@@ -690,7 +699,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
     g_player_tex_h = 0;
     g_player_last_seq = 0;
     g_player_gl_pending_release = false;
-    g_gl_pbo_ring.abandon_context();
+    gl_pbo_ring().abandon_context();
     g_core_gl_resolved = false;
     g_last_gl_context = current_ctx;
   }
@@ -834,7 +843,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
 #if FPSHUD_ENABLE_EXPERIMENTAL
     if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
       if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
-              now, g_gl_pbo_ring.last_capture_time(), cfg.record_vfr_max_fps)) {
+              now, gl_pbo_ring().last_capture_time(), cfg.record_vfr_max_fps)) {
         should_capture = true;
       }
     } else
@@ -843,18 +852,18 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
       int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
       auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
       auto min_interval = target_interval * 70 / 100;
-      if (g_gl_pbo_ring.last_capture_time() == std::chrono::steady_clock::time_point{} ||
-          now - g_gl_pbo_ring.last_capture_time() >= min_interval) {
+      if (gl_pbo_ring().last_capture_time() == std::chrono::steady_clock::time_point{} ||
+          now - gl_pbo_ring().last_capture_time() >= min_interval) {
         should_capture = true;
       }
     }
     if (should_capture) {
-      g_gl_pbo_ring.set_last_capture_time(now);
-      g_gl_pbo_ring.capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
+      gl_pbo_ring().set_last_capture_time(now);
+      gl_pbo_ring().capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
                                   static_cast<uint32_t>(height));
     }
   } else {
-    g_gl_pbo_ring.reset_pending();
+    gl_pbo_ring().reset_pending();
   }
 
   if (g_gl.glGetError) {
@@ -879,8 +888,10 @@ __attribute__((visibility("default"))) void glXSwapBuffers(Display* dpy, GLXDraw
       }
       render_gl_frame(reinterpret_cast<void*>(ctx), w, h);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
-    // Exception safety at C ABI boundary
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   if (real_glXSwapBuffers) {
     real_glXSwapBuffers(dpy, drawable);
@@ -932,8 +943,10 @@ __attribute__((visibility("default"))) EGLBoolean eglSwapBuffers(EGLDisplay dpy,
       render_gl_frame(reinterpret_cast<void*>(ctx), static_cast<unsigned int>(w),
                       static_cast<unsigned int>(h));
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
-    // Exception safety at C ABI boundary
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglSwapBuffers ? real_eglSwapBuffers(dpy, surface) : EGL_FALSE;
 }

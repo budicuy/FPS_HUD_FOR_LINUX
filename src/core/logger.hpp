@@ -49,3 +49,11 @@ void write(Level level, Subsystem subsys, const char* file, int line, const char
   ::fpshud::log::write(::fpshud::log::Level::Warn, (subsys), __FILE__, __LINE__, __VA_ARGS__)
 #define FPSHUD_LOG_ERROR(subsys, ...) \
   ::fpshud::log::write(::fpshud::log::Level::Error, (subsys), __FILE__, __LINE__, __VA_ARGS__)
+
+namespace fpshud::log {
+inline void log_hook_exception([[maybe_unused]] const char* hook_name,
+                               [[maybe_unused]] const char* what_msg) noexcept {
+  FPSHUD_LOG_DEBUG(Subsystem::Core, "Exception suppressed in %s: %s",
+                   hook_name ? hook_name : "unknown", what_msg ? what_msg : "unknown");
+}
+}  // namespace fpshud::log

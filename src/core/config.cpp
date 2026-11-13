@@ -1,5 +1,6 @@
 #include "config.hpp"
 #include "logger.hpp"
+#include "parse_util.hpp"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -191,37 +192,14 @@ void ensure_parent_dir(const std::string& file_path) {
   }
 }
 
-static inline int safe_strtoi(const std::string& str, int fallback = 0) {
-  if (str.empty()) return fallback;
-  char* end = nullptr;
-  errno = 0;
-  long v = std::strtol(str.c_str(), &end, 10);
-  if (errno != 0 || end == str.c_str()) return fallback;
-  if (v < std::numeric_limits<int>::min()) return std::numeric_limits<int>::min();
-  if (v > std::numeric_limits<int>::max()) return std::numeric_limits<int>::max();
-  return static_cast<int>(v);
+static inline int safe_strtoi(std::string_view str, int fallback = 0) {
+  return fpshud::parse::parse_int_or(str, fallback);
 }
 
 }  // namespace
 
 float safe_strtof(std::string_view str, float fallback) noexcept {
-  if (str.empty()) return fallback;
-  // Locale-independent parsing: reliably parses '.' decimal separator across all user locales
-  const char* start = str.data();
-  const char* end = str.data() + str.size();
-  while (start < end && (*start == ' ' || *start == '\t')) ++start;
-  while (end > start &&
-         (*(end - 1) == ' ' || *(end - 1) == '\t' || *(end - 1) == '\r' || *(end - 1) == '\n')) {
-    --end;
-  }
-  if (start >= end) return fallback;
-
-  float v = fallback;
-  auto [ptr, ec] = std::from_chars(start, end, v);
-  if (ec == std::errc() && !std::isnan(v) && !std::isinf(v)) {
-    return v;
-  }
-  return fallback;
+  return fpshud::parse::parse_float_or(str, fallback);
 }
 
 std::string sanitize_ini_value(const std::string& val) {
@@ -394,11 +372,24 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
       parsed_any = true;
     } else if (key == "text_color") {
       int r = 255, g = 255, b = 255;
-      if (std::sscanf(val.c_str(), "%d,%d,%d", &r, &g, &b) == 3) {
-        cfg.text_color.r = static_cast<uint8_t>(std::clamp(r, 0, 255));
-        cfg.text_color.g = static_cast<uint8_t>(std::clamp(g, 0, 255));
-        cfg.text_color.b = static_cast<uint8_t>(std::clamp(b, 0, 255));
-        cfg.text_color.a = 255;
+      std::string_view sv = val;
+      if (fpshud::parse::parse_int_prefix(sv, r, &sv)) {
+        sv = fpshud::parse::trim_leading_whitespace(sv);
+        if (sv.starts_with(',')) {
+          sv.remove_prefix(1);
+          if (fpshud::parse::parse_int_prefix(sv, g, &sv)) {
+            sv = fpshud::parse::trim_leading_whitespace(sv);
+            if (sv.starts_with(',')) {
+              sv.remove_prefix(1);
+              if (fpshud::parse::parse_int(sv, b)) {
+                cfg.text_color.r = static_cast<uint8_t>(std::clamp(r, 0, 255));
+                cfg.text_color.g = static_cast<uint8_t>(std::clamp(g, 0, 255));
+                cfg.text_color.b = static_cast<uint8_t>(std::clamp(b, 0, 255));
+                cfg.text_color.a = 255;
+              }
+            }
+          }
+        }
       }
       parsed_any = true;
     } else if (key == "text_opacity") {
@@ -449,8 +440,18 @@ bool load_ini_file(const std::string& path, HudConfig& cfg) {
     } else if (key == "bind_toggle_gui" || key == "bind_toggle_hud" || key == "bind_benchmark" ||
                key == "bind_record" || key == "bind_save_replay" || key == "bind_screenshot") {
       unsigned int mod_k = 0, main_k = 0;
-      if (std::sscanf(val.c_str(), "%u,%u", &mod_k, &main_k) == 2 && main_k > 0 && main_k < 512 &&
-          mod_k < 512) {
+      std::string_view sv = val;
+      bool parsed_bind = false;
+      if (fpshud::parse::parse_int_prefix(sv, mod_k, &sv)) {
+        sv = fpshud::parse::trim_leading_whitespace(sv);
+        if (sv.starts_with(',')) {
+          sv.remove_prefix(1);
+          if (fpshud::parse::parse_int(sv, main_k) && main_k > 0 && main_k < 512 && mod_k < 512) {
+            parsed_bind = true;
+          }
+        }
+      }
+      if (parsed_bind) {
         Keybind kb{mod_k, main_k};
         if (key == "bind_toggle_gui")
           cfg.bind_toggle_gui = kb;

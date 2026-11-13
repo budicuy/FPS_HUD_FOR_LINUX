@@ -621,7 +621,7 @@ int run_player_worker(int argc, char** argv) {
                                  48000, in_rate, AV_ROUND_UP);
               if (max_out < 256) max_out = 256;
 
-              std::vector<int16_t> pcm_out(max_out * 2);
+              std::vector<int16_t> pcm_out(static_cast<size_t>(max_out) * 2);
               uint8_t* out_ptrs[1] = {reinterpret_cast<uint8_t*>(pcm_out.data())};
               int converted = swr_convert(swr_audio, out_ptrs, max_out,
                                           const_cast<const uint8_t**>(raw_audio_frame->data),

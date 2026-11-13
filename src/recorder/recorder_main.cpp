@@ -1,3 +1,4 @@
+#include "parse_util.hpp"
 #include "recorder_ipc.hpp"
 #include "recorder_player.hpp"
 
@@ -361,19 +362,20 @@ int main(int argc, char* argv[]) {
     else if (arg == "--shm" && i + 1 < argc)
       shm_path = argv[++i];
     else if (arg == "--width" && i + 1 < argc)
-      target_width = std::max(64, std::atoi(argv[++i]));
+      target_width = std::max(64, fpshud::parse::parse_int_or(argv[++i], target_width));
     else if (arg == "--height" && i + 1 < argc)
-      target_height = std::max(64, std::atoi(argv[++i]));
+      target_height = std::max(64, fpshud::parse::parse_int_or(argv[++i], target_height));
     else if (arg == "--fps" && i + 1 < argc)
-      target_fps = std::clamp(std::atoi(argv[++i]), 15, 240);
+      target_fps = std::clamp(fpshud::parse::parse_int_or(argv[++i], target_fps), 15, 240);
     else if (arg == "--bitrate" && i + 1 < argc)
-      target_bitrate_kbps = std::clamp(std::atoi(argv[++i]), 1000, 100000);
+      target_bitrate_kbps =
+          std::clamp(fpshud::parse::parse_int_or(argv[++i], target_bitrate_kbps), 1000, 100000);
     else if (arg == "--codec" && i + 1 < argc)
       codec_choice = argv[++i];
     else if (arg == "--cqp-mode" && i + 1 < argc)
-      quality_mode = std::clamp(std::atoi(argv[++i]), 0, 1);
+      quality_mode = std::clamp(fpshud::parse::parse_int_or(argv[++i], quality_mode), 0, 1);
     else if (arg == "--cqp" && i + 1 < argc)
-      target_cq = std::clamp(std::atoi(argv[++i]), 16, 30);
+      target_cq = std::clamp(fpshud::parse::parse_int_or(argv[++i], target_cq), 16, 30);
     else if (arg == "--dir" && i + 1 < argc)
       save_dir = argv[++i];
   }
@@ -903,13 +905,16 @@ int main(int argc, char* argv[]) {
 
   // Initialize frame background
   if (vframe->data[0]) {
-    std::memset(vframe->data[0], 16, vframe->linesize[0] * target_height);
+    std::memset(vframe->data[0], 16,
+                static_cast<size_t>(vframe->linesize[0]) * static_cast<size_t>(target_height));
   }
   if (vframe->data[1]) {
-    std::memset(vframe->data[1], 128, vframe->linesize[1] * (target_height / 2));
+    std::memset(vframe->data[1], 128,
+                static_cast<size_t>(vframe->linesize[1]) * static_cast<size_t>(target_height / 2));
   }
   if (vframe->data[2]) {
-    std::memset(vframe->data[2], 128, vframe->linesize[2] * (target_height / 2));
+    std::memset(vframe->data[2], 128,
+                static_cast<size_t>(vframe->linesize[2]) * static_cast<size_t>(target_height / 2));
   }
 
   AVFrame* hw_frame = nullptr;
@@ -957,8 +962,8 @@ int main(int argc, char* argv[]) {
     std::vector<int16_t> mic_ring;
     size_t pcm_read_offset = 0;
     size_t mic_read_offset = 0;
-    pcm_ring.reserve(kAudioSamplesPerFrame * 8);
-    if (has_mic) mic_ring.reserve(kAudioSamplesPerFrame * 8);
+    pcm_ring.reserve(static_cast<size_t>(kAudioSamplesPerFrame) * 8);
+    if (has_mic) mic_ring.reserve(static_cast<size_t>(kAudioSamplesPerFrame) * 8);
     int64_t audio_pts = 0;
 
     // Resampler from S16 to FLTP
@@ -1038,10 +1043,11 @@ int main(int argc, char* argv[]) {
       }
 
       while ((pcm_ring.size() - pcm_read_offset) >=
-             static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
+             static_cast<size_t>(kAudioSamplesPerFrame) * 2) {
         if (has_mic && (mic_ring.size() - mic_read_offset) > 0) {
           size_t mic_avail = mic_ring.size() - mic_read_offset;
-          size_t mix_n = std::min<size_t>(kAudioSamplesPerFrame * 2, mic_avail);
+          size_t mix_n =
+              std::min<size_t>(static_cast<size_t>(kAudioSamplesPerFrame) * 2, mic_avail);
           for (size_t i = 0; i < mix_n; ++i) {
             int mixed = static_cast<int>(pcm_ring[pcm_read_offset + i]) +
                         static_cast<int>(mic_ring[mic_read_offset + i]);
@@ -1054,7 +1060,7 @@ int main(int argc, char* argv[]) {
           }
         }
         if (av_frame_make_writable(aframe) < 0) {
-          pcm_read_offset += (kAudioSamplesPerFrame * 2);
+          pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
           if (pcm_read_offset >= 4096) {
             pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
             pcm_read_offset = 0;
@@ -1077,7 +1083,7 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        pcm_read_offset += (kAudioSamplesPerFrame * 2);
+        pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
         if (pcm_read_offset >= 4096) {
           pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + pcm_read_offset);
           pcm_read_offset = 0;

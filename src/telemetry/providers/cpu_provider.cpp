@@ -1,5 +1,6 @@
 #include "providers/cpu_provider.hpp"
 #include "logger.hpp"
+#include "parse_util.hpp"
 #include "telemetry.hpp"
 
 #include <fcntl.h>
@@ -223,8 +224,17 @@ void CpuProvider::poll_cpu_load(HardwareTelemetryData& out_data) {
         // Overall CPU line
         uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
                  steal = 0;
-        if (std::sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
-                        &iowait, &irq, &softirq, &steal) >= 4) {
+        std::string_view sv(line + 4);
+        int parsed = 0;
+        uint64_t* fields[] = {&user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal};
+        for (auto* f : fields) {
+          if (fpshud::parse::parse_int_prefix(sv, *f, &sv)) {
+            ++parsed;
+          } else {
+            break;
+          }
+        }
+        if (parsed >= 4) {
           uint64_t idle_all = idle + iowait;
           uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
           if (prev_cpu_total_ != 0 && total > prev_cpu_total_) {
@@ -240,13 +250,21 @@ void CpuProvider::poll_cpu_load(HardwareTelemetryData& out_data) {
         }
       } else if (line[3] >= '0' && line[3] <= '9') {
         // Per-core line: cpu<N>
-        char* endp = nullptr;
-        long cpu_idx = std::strtol(line + 3, &endp, 10);
-        if (endp && endp != line + 3 && cpu_idx >= 0 && cpu_idx < 512) {
+        long cpu_idx = 0;
+        std::string_view sv(line + 3);
+        if (fpshud::parse::parse_int_prefix(sv, cpu_idx, &sv) && cpu_idx >= 0 && cpu_idx < 512) {
           uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0,
                    steal = 0;
-          if (std::sscanf(endp, "%lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle,
-                          &iowait, &irq, &softirq, &steal) >= 4) {
+          int parsed = 0;
+          uint64_t* fields[] = {&user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal};
+          for (auto* f : fields) {
+            if (fpshud::parse::parse_int_prefix(sv, *f, &sv)) {
+              ++parsed;
+            } else {
+              break;
+            }
+          }
+          if (parsed >= 4) {
             uint64_t idle_all = idle + iowait;
             uint64_t total = user + nice + system + idle_all + irq + softirq + steal;
 
@@ -311,7 +329,7 @@ void CpuProvider::poll_cpu_clock(HardwareTelemetryData& out_data) {
           if (std::strncmp(p, "processor", 9) == 0) {
             const char* colon = std::strchr(p, ':');
             if (colon) {
-              cur_processor = std::atoi(colon + 1);
+              cur_processor = fpshud::parse::parse_int_or(colon + 1, -1);
             }
           } else if (std::strncmp(p, "cpu MHz", 7) == 0 && cur_processor >= 0) {
             const char* colon = std::strchr(p, ':');

@@ -1,6 +1,7 @@
 #include "vulkan_swapchain.hpp"
 
 #include "config.hpp"
+#include "logger.hpp"
 #include "overlay_ui.hpp"
 #include "telemetry.hpp"
 #include "vulkan_player_stream.hpp"
@@ -456,7 +457,10 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(VkDevice device, VkSwapchain
     if (dd && dd->DestroySwapchainKHR) {
       dd->DestroySwapchainKHR(device, swapchain, pAllocator);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
 }
 

@@ -1,4 +1,5 @@
 #include "telemetry.hpp"
+#include "parse_util.hpp"
 
 #include <dirent.h>
 #include <dlfcn.h>
@@ -157,7 +158,7 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
   // Automated Benchmark Controller (via FPSHUD_BENCHMARK=seconds environment variable)
   static const int s_auto_bench_secs = []() {
     if (const char* env = std::getenv("FPSHUD_BENCHMARK")) {
-      return std::max(1, std::atoi(env));
+      return std::max(1, fpshud::parse::parse_int_or(env, 1));
     }
     return 0;
   }();
@@ -182,7 +183,7 @@ void TelemetryCollector::on_simulated_frame_dt(float dt_ms, bool force_display_u
         bench_finished_ = true;
         std::fprintf(stderr, "[FPSHUD] Automated Benchmark complete! Results saved to CSV.\n");
         if (const char* exit_env = std::getenv("FPSHUD_BENCHMARK_EXIT");
-            exit_env && std::atoi(exit_env) != 0) {
+            exit_env && fpshud::parse::parse_int_or(exit_env, 0) != 0) {
           std::exit(0);
         }
       }

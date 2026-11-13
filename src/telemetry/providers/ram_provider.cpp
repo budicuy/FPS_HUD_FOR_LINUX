@@ -1,5 +1,6 @@
 #include "providers/ram_provider.hpp"
 #include "logger.hpp"
+#include "parse_util.hpp"
 #include "telemetry.hpp"
 
 #include <fcntl.h>
@@ -75,7 +76,8 @@ void RamProvider::poll_game_ram(HardwareTelemetryData& out_data) {
   if (read_sysfs_buf(proc_statm_path_.c_str(), buf, sizeof(buf))) {
     unsigned long size = 0;
     unsigned long resident = 0;
-    if (std::sscanf(buf, "%lu %lu", &size, &resident) == 2) {
+    std::string_view sv(buf);
+    if (fpshud::parse::parse_int_prefix(sv, size, &sv) && fpshud::parse::parse_int(sv, resident)) {
       static const long s_page_size = sysconf(_SC_PAGESIZE);
       double bytes = static_cast<double>(resident) * (s_page_size > 0 ? s_page_size : 4096);
       out_data.game_ram_gb = static_cast<float>(bytes / (1024.0 * 1024.0 * 1024.0));
@@ -104,8 +106,13 @@ void RamProvider::poll_mem_pressure(HardwareTelemetryData& out_data) {
   float some_avg10 = -1.0f;
   if (read_sysfs_buf(proc_pressure_mem_path_.c_str(), buf, sizeof(buf))) {
     float v = 0.0f;
-    if (std::sscanf(buf, "some avg10=%f", &v) == 1) {
-      some_avg10 = std::clamp(v, 0.0f, 100.0f);
+    std::string_view sv(buf);
+    constexpr std::string_view kTarget = "some avg10=";
+    auto pos = sv.find(kTarget);
+    if (pos != std::string_view::npos) {
+      if (fpshud::parse::parse_float(sv.substr(pos + kTarget.size()), v)) {
+        some_avg10 = std::clamp(v, 0.0f, 100.0f);
+      }
     }
   }
   out_data.mem_psi_some_pct = some_avg10;

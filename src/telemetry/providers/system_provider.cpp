@@ -1,4 +1,5 @@
 #include "providers/system_provider.hpp"
+#include "parse_util.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -241,8 +242,40 @@ void SystemProvider::poll_disk_io(HardwareTelemetryData& data) {
     char dev_name[64] = {0};
     unsigned long long r_ios = 0, r_merges = 0, r_sec = 0, r_ticks = 0;
     unsigned long long w_ios = 0, w_merges = 0, w_sec = 0;
-    if (std::sscanf(line, "%u %u %63s %llu %llu %llu %llu %llu %llu %llu", &maj, &min_id, dev_name,
-                    &r_ios, &r_merges, &r_sec, &r_ticks, &w_ios, &w_merges, &w_sec) == 10) {
+    std::string_view sv(line);
+    if (next_line) {
+      sv = std::string_view(line, next_line - line);
+    }
+    bool parsed_disk = false;
+    if (fpshud::parse::parse_int_prefix(sv, maj, &sv) &&
+        fpshud::parse::parse_int_prefix(sv, min_id, &sv)) {
+      sv = fpshud::parse::trim_leading_whitespace(sv);
+      if (!sv.empty()) {
+        size_t name_len = 0;
+        while (name_len < sv.size() && !fpshud::parse::is_whitespace(sv[name_len])) {
+          ++name_len;
+        }
+        if (name_len > 0 && name_len < sizeof(dev_name)) {
+          std::memcpy(dev_name, sv.data(), name_len);
+          dev_name[name_len] = '\0';
+          sv.remove_prefix(name_len);
+          unsigned long long* nums[] = {&r_ios, &r_merges, &r_sec, &r_ticks,
+                                        &w_ios, &w_merges, &w_sec};
+          int parsed = 0;
+          for (auto* n : nums) {
+            if (fpshud::parse::parse_int_prefix(sv, *n, &sv)) {
+              ++parsed;
+            } else {
+              break;
+            }
+          }
+          if (parsed == 7) {
+            parsed_disk = true;
+          }
+        }
+      }
+    }
+    if (parsed_disk) {
       if (is_whole_disk(dev_name)) {
         total_read_sectors += static_cast<uint64_t>(r_sec);
         total_write_sectors += static_cast<uint64_t>(w_sec);
@@ -307,8 +340,18 @@ void SystemProvider::poll_network(HardwareTelemetryData& data) {
       if (!skip) {
         unsigned long long rx_b = 0, rx_p = 0, rx_e = 0, rx_d = 0, rx_f = 0, rx_fr = 0, rx_c = 0,
                            rx_m = 0, tx_b = 0;
-        if (std::sscanf(colon + 1, "%llu %llu %llu %llu %llu %llu %llu %llu %llu", &rx_b, &rx_p,
-                        &rx_e, &rx_d, &rx_f, &rx_fr, &rx_c, &rx_m, &tx_b) == 9) {
+        std::string_view sv(colon + 1);
+        unsigned long long* nums[] = {&rx_b,  &rx_p, &rx_e, &rx_d, &rx_f,
+                                      &rx_fr, &rx_c, &rx_m, &tx_b};
+        int parsed = 0;
+        for (auto* n : nums) {
+          if (fpshud::parse::parse_int_prefix(sv, *n, &sv)) {
+            ++parsed;
+          } else {
+            break;
+          }
+        }
+        if (parsed == 9) {
           total_rx += static_cast<uint64_t>(rx_b);
           total_tx += static_cast<uint64_t>(tx_b);
         }

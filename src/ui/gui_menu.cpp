@@ -83,10 +83,10 @@ std::vector<RecordedClipInfo> scan_recorded_clips(const std::string& dir_path) {
     info.date_str = date_buf;
 
     char sz_buf[32] = {0};
-    if (info.file_size_bytes >= 1024 * 1024 * 1024) {
+    if (info.file_size_bytes >= static_cast<uint64_t>(1024) * 1024 * 1024) {
       std::snprintf(sz_buf, sizeof(sz_buf), "%.2f GB",
                     static_cast<double>(info.file_size_bytes) / (1024.0 * 1024.0 * 1024.0));
-    } else if (info.file_size_bytes >= 1024 * 1024) {
+    } else if (info.file_size_bytes >= static_cast<uint64_t>(1024) * 1024) {
       std::snprintf(sz_buf, sizeof(sz_buf), "%.1f MB",
                     static_cast<double>(info.file_size_bytes) / (1024.0 * 1024.0));
     } else {
@@ -113,7 +113,11 @@ namespace {
 void open_system_folder(const std::string& path);
 void set_status_message(const std::string& msg);
 
-static VideoPlayerController g_player_controller;
+inline VideoPlayerController& player_controller() {
+  static VideoPlayerController controller;
+  return controller;
+}
+#define g_player_controller (player_controller())
 static std::string g_player_active_filename;
 static bool g_player_modal_open_requested = false;
 static bool g_player_modal_active = false;
@@ -122,9 +126,9 @@ static bool g_player_fullscreen = false;
 static void open_modal_player(const std::string& filepath, const std::string& filename) {
   g_player_active_filename = filename;
   std::string helper_bin = get_helper_binary_path();
-  if (!g_player_controller.open(filepath, helper_bin)) {
+  if (!player_controller().open(filepath, helper_bin)) {
     set_status_message("[!] Failed to open video clip.");
-    g_player_controller.close();
+    player_controller().close();
     return;
   }
   g_player_fullscreen = false;
@@ -173,24 +177,24 @@ static void render_video_player_modal(float scale, float display_width, float di
 
   bool is_inside = ImGui::BeginPopupModal("In-Game Video Player##Modal", &modal_open, flags);
   if (is_inside) {
-    if (!g_player_controller.is_active()) {
+    if (!player_controller().is_active()) {
       set_status_message("[!] Video playback failed.");
       g_player_modal_active = false;
       g_player_fullscreen = false;
-      g_player_controller.close();
+      player_controller().close();
       release_player_texture();
       ImGui::CloseCurrentPopup();
       ImGui::EndPopup();
       return;
     }
 
-    const auto* hdr = g_player_controller.header();
+    const auto* hdr = player_controller().header();
     if (!hdr) {
       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[!] Initializing video decoder...");
       if (ImGui::Button("Close Player")) {
         g_player_modal_active = false;
         g_player_fullscreen = false;
-        g_player_controller.close();
+        player_controller().close();
         release_player_texture();
         ImGui::CloseCurrentPopup();
       }
@@ -238,7 +242,7 @@ static void render_video_player_modal(float scale, float display_width, float di
       }
     }
 
-    const uint8_t* pixels = g_player_controller.frame_pixels();
+    const uint8_t* pixels = player_controller().frame_pixels();
     uint64_t seq = hdr->frame_seq.load(std::memory_order_acquire);
     ImTextureID tex = get_or_update_player_texture(pixels, vw, vh, seq);
     if (tex != 0) {
@@ -269,7 +273,7 @@ static void render_video_player_modal(float scale, float display_width, float di
 
     if (ImGui::SliderFloat("##SeekSlider", &slider_time, 0.0f, duration > 0 ? duration : 1.0f,
                            time_buf)) {
-      g_player_controller.seek(slider_time);
+      player_controller().seek(slider_time);
     }
     ImGui::PopItemWidth();
 
@@ -282,20 +286,20 @@ static void render_video_player_modal(float scale, float display_width, float di
 
     if (ImGui::Button(is_playing ? "[Pause]" : "[Play]", ImVec2(80.0f * scale, 28.0f * scale))) {
       if (is_playing) {
-        g_player_controller.pause();
+        player_controller().pause();
       } else {
-        g_player_controller.play();
+        player_controller().play();
       }
     }
 
     ImGui::SameLine();
     if (ImGui::Button("[-5s]", ImVec2(65.0f * scale, 28.0f * scale))) {
-      g_player_controller.seek(std::max(0.0f, cur_time - 5.0f));
+      player_controller().seek(std::max(0.0f, cur_time - 5.0f));
     }
 
     ImGui::SameLine();
     if (ImGui::Button("[+5s]", ImVec2(65.0f * scale, 28.0f * scale))) {
-      g_player_controller.seek(std::min(duration, cur_time + 5.0f));
+      player_controller().seek(std::min(duration, cur_time + 5.0f));
     }
 
     ImGui::SameLine();
@@ -315,8 +319,8 @@ static void render_video_player_modal(float scale, float display_width, float di
   if (!modal_open || !is_inside) {
     g_player_modal_active = false;
     g_player_fullscreen = false;
-    if (g_player_controller.is_active()) {
-      g_player_controller.close();
+    if (player_controller().is_active()) {
+      player_controller().close();
     }
     release_player_texture();
     if (is_inside) {
@@ -326,13 +330,13 @@ static void render_video_player_modal(float scale, float display_width, float di
 }
 
 std::string g_status_msg;
-std::chrono::steady_clock::time_point g_status_time{};
-std::chrono::steady_clock::time_point g_startup_time{};
+int64_t g_status_time_ns = 0;
+int64_t g_startup_time_ns = 0;
 bool g_startup_initialized = false;
 
 void set_status_message(const std::string& msg) {
   g_status_msg = msg;
-  g_status_time = std::chrono::steady_clock::now();
+  g_status_time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
 void open_system_folder(const std::string& path) {
@@ -457,13 +461,14 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
   ImFont* gui_font = get_gui_font(scale, base_gui_font_px);
 
   auto now = std::chrono::steady_clock::now();
+  int64_t now_ns = now.time_since_epoch().count();
   if (!g_startup_initialized) {
     g_startup_initialized = true;
-    g_startup_time = now;
+    g_startup_time_ns = now_ns;
   }
 
   // Show a brief 5-second toast hint on launch so user knows how to toggle the GUI
-  double elapsed_since_start = std::chrono::duration<double>(now - g_startup_time).count();
+  double elapsed_since_start = static_cast<double>(now_ns - g_startup_time_ns) / 1e9;
   if (!cfg.gui_open && elapsed_since_start < 5.5) {
     ImGui::SetNextWindowPos(ImVec2(display_width * 0.5f, display_height - 28.0f), ImGuiCond_Always,
                             ImVec2(0.5f, 1.0f));
@@ -503,7 +508,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
   }
 
   if (!cfg.gui_open) {
-    if (g_player_modal_active || g_player_controller.is_active()) {
+    if (g_player_modal_active || player_controller().is_active()) {
       g_player_modal_active = false;
       g_player_fullscreen = false;
       g_player_controller.close();
@@ -1702,7 +1707,7 @@ void render_gui_menu(HudConfig& cfg, const TelemetryData& data, float display_wi
     }
 
     if (!g_status_msg.empty()) {
-      double since_msg = std::chrono::duration<double>(now - g_status_time).count();
+      double since_msg = static_cast<double>(now_ns - g_status_time_ns) / 1e9;
       if (since_msg < 4.0) {
         ImGui::SameLine(0.0f, 14.0f * scale);
         ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.50f, 1.0f), "%s", g_status_msg.c_str());

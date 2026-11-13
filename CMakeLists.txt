@@ -648,6 +648,7 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/parse_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/sysfs_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
