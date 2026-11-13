@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "gui_menu.hpp"
 #include "png_writer.hpp"
+#include "pulse_audio_util.hpp"
 #include "recorder_ipc.hpp"
 #include "recorder_playback_protocol.hpp"
 #include "recorder_player.hpp"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -25,7 +27,75 @@
 namespace fs = std::filesystem;
 using namespace fpshud;
 
+namespace {
+bool is_pulse_socket_accessible() {
+  const char* pulse_server = std::getenv("PULSE_SERVER");
+  std::string sock_path;
+  if (pulse_server && *pulse_server) {
+    if (std::string_view(pulse_server).starts_with("unix:")) {
+      sock_path = pulse_server + 5;
+    } else if (pulse_server[0] == '/') {
+      sock_path = pulse_server;
+    }
+  }
+  if (sock_path.empty()) {
+    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
+    if (xdg && *xdg) {
+      sock_path = std::string(xdg) + "/pulse/native";
+    } else {
+      sock_path = "/run/user/" + std::to_string(getuid()) + "/pulse/native";
+    }
+  }
+  int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sfd < 0) return false;
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+  bool ok = (connect(sfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  close(sfd);
+  return ok;
+}
+}  // namespace
+
 TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
+  SUBCASE("PulseAudio Status Classification & Source Resolution") {
+    // 1. should_log_pulse_init_failure
+    CHECK_FALSE(should_log_pulse_init_failure(PulseInitStatus::Connected));
+    CHECK_FALSE(should_log_pulse_init_failure(PulseInitStatus::Cancelled));
+    CHECK(should_log_pulse_init_failure(PulseInitStatus::TimedOut));
+    CHECK(should_log_pulse_init_failure(PulseInitStatus::Error));
+
+    // 2. format_pulse_init_warning
+    CHECK(format_pulse_init_warning({PulseInitStatus::Cancelled, ""}).empty());
+    CHECK(format_pulse_init_warning({PulseInitStatus::Cancelled, "ignore"}).empty());
+    CHECK(format_pulse_init_warning({PulseInitStatus::Connected, ""}).empty());
+
+    std::string timeout_warn = format_pulse_init_warning({PulseInitStatus::TimedOut, ""});
+    CHECK_FALSE(timeout_warn.empty());
+    CHECK(timeout_warn.find("timed out") != std::string::npos);
+
+    std::string err_warn =
+        format_pulse_init_warning({PulseInitStatus::Error, "Connection refused"});
+    CHECK_FALSE(err_warn.empty());
+    CHECK(err_warn.find("Connection refused") != std::string::npos);
+    CHECK(err_warn.find("timed out") == std::string::npos);
+
+    // 3. resolve_monitor_source_name
+    CHECK_EQ(resolve_monitor_source_name("alsa_output.pci.analog-stereo"),
+             "alsa_output.pci.analog-stereo.monitor");
+    CHECK_EQ(resolve_monitor_source_name(nullptr), "@DEFAULT_MONITOR@");
+    CHECK_EQ(resolve_monitor_source_name(""), "@DEFAULT_MONITOR@");
+    CHECK_EQ(resolve_monitor_source_name("alsa_output.pci.analog-stereo.monitor"),
+             "alsa_output.pci.analog-stereo.monitor");
+
+    // 4. resolve_mic_source_name
+    CHECK_EQ(resolve_mic_source_name("alsa_input.mic", "sink"), "alsa_input.mic");
+    CHECK_EQ(resolve_mic_source_name("alsa_output.pci.analog-stereo.monitor", "sink"),
+             "@DEFAULT_SOURCE@");
+    CHECK_EQ(resolve_mic_source_name(nullptr, "sink"), "@DEFAULT_SOURCE@");
+    CHECK_EQ(resolve_mic_source_name("", "sink"), "@DEFAULT_SOURCE@");
+  }
+
   SUBCASE("Hardware Video Encoders & Host Container Probe") {
     fs::path rec_path = find_recorder_bin_path();
     CHECK_MESSAGE(!rec_path.empty(), "fpshud_recorder_bin must exist on disk");
@@ -72,11 +142,17 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
         ScopedTempDir rec_temp_dir("fpshud_test_rec_");
         fs::path test_sock = rec_temp_dir.path / "rec.sock";
         fs::path test_dir = rec_temp_dir.path / "out";
+        fs::path stderr_20ms = rec_temp_dir.path / "rec_20ms_stderr.log";
         std::error_code ec;
         fs::remove_all(test_dir, ec);
 
         pid_t child_pid = fork();
         if (child_pid == 0) {
+          int err_fd = open(stderr_20ms.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+          if (err_fd >= 0) {
+            dup2(err_fd, STDERR_FILENO);
+            close(err_fd);
+          }
           execl(rec_path.c_str(), rec_path.c_str(), "--socket", test_sock.c_str(), "--dir",
                 test_dir.c_str(), "--width", "321", "--height", "241", nullptr);
           _exit(127);
@@ -180,6 +256,143 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 
         CHECK_MESSAGE(child_stopped_cleanly,
                       "Recorder daemon stops cleanly (<3000ms exit on odd dim 321x241)");
+
+        std::string err_output_20ms = read_text_file(stderr_20ms);
+        bool pulse_accessible = is_pulse_socket_accessible();
+        if (pulse_accessible) {
+          CHECK_MESSAGE(
+              err_output_20ms.find("PulseAudio connection failed or timeout") == std::string::npos,
+              "20ms quick stop must not log PulseAudio connection failed or timeout");
+          CHECK_MESSAGE(
+              err_output_20ms.find("PulseAudio connection timed out") == std::string::npos,
+              "20ms quick stop must not log PulseAudio connection timed out");
+        }
+
+        // Step 4: Short Session (~350ms) Audio Capture Probe
+        fs::path test_sock_350 = rec_temp_dir.path / "rec_350ms.sock";
+        fs::path test_dir_350 = rec_temp_dir.path / "out_350ms";
+        fs::path stderr_350 = rec_temp_dir.path / "rec_350ms_stderr.log";
+        fs::remove_all(test_dir_350, ec);
+
+        pid_t child_pid_350 = fork();
+        if (child_pid_350 == 0) {
+          int err_fd = open(stderr_350.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+          if (err_fd >= 0) {
+            dup2(err_fd, STDERR_FILENO);
+            close(err_fd);
+          }
+          execl(rec_path.c_str(), rec_path.c_str(), "--socket", test_sock_350.c_str(), "--dir",
+                test_dir_350.c_str(), "--width", "320", "--height", "240", nullptr);
+          _exit(127);
+        }
+
+        bool connected_350 = false;
+        int client_fd_350 = -1;
+        for (int i = 0; i < 100; ++i) {
+          client_fd_350 = socket(AF_UNIX, SOCK_STREAM, 0);
+          if (client_fd_350 >= 0) {
+            struct sockaddr_un saddr{};
+            saddr.sun_family = AF_UNIX;
+            std::strncpy(saddr.sun_path, test_sock_350.c_str(), sizeof(saddr.sun_path) - 1);
+            if (connect(client_fd_350, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) ==
+                0) {
+              connected_350 = true;
+              break;
+            }
+            close(client_fd_350);
+            client_fd_350 = -1;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        bool child_stopped_cleanly_350 = false;
+        if (connected_350 && client_fd_350 >= 0) {
+          IpcPacketHeader start_hdr{};
+          start_hdr.magic = kRecorderIpcMagic;
+          start_hdr.command = static_cast<uint32_t>(RecorderCommand::StartRecord);
+          start_hdr.payload_size = sizeof(IpcStartPayload);
+
+          IpcStartPayload start_payload{};
+          start_payload.width = 320;
+          start_payload.height = 240;
+          start_payload.fps = 60;
+          start_payload.bitrate_kbps = 4000;
+          start_payload.audio_source = 0;
+          start_payload.container = 0;
+          start_payload.codec = 0;
+          start_payload.quality_mode = 0;
+          std::strncpy(start_payload.save_dir, test_dir_350.c_str(),
+                       sizeof(start_payload.save_dir) - 1);
+
+          send(client_fd_350, &start_hdr, sizeof(start_hdr), MSG_NOSIGNAL);
+          send(client_fd_350, &start_payload, sizeof(start_payload), MSG_NOSIGNAL);
+
+          std::this_thread::sleep_for(std::chrono::milliseconds(350));
+
+          IpcPacketHeader stop_hdr{};
+          stop_hdr.magic = kRecorderIpcMagic;
+          stop_hdr.command = static_cast<uint32_t>(RecorderCommand::StopRecord);
+          stop_hdr.payload_size = 0;
+          send(client_fd_350, &stop_hdr, sizeof(stop_hdr), MSG_NOSIGNAL);
+
+          IpcStatusResponse resp{};
+          recv(client_fd_350, &resp, sizeof(resp), 0);
+          close(client_fd_350);
+
+          bool has_hw_accel_350 = false;
+          for (int node_id = 128; node_id <= 135; ++node_id) {
+            std::string dev = "/dev/dri/renderD" + std::to_string(node_id);
+            if (access(dev.c_str(), R_OK | W_OK) == 0) {
+              has_hw_accel_350 = true;
+              break;
+            }
+          }
+          if (access("/dev/nvidia0", R_OK) == 0 || access("/dev/nvidiactl", R_OK) == 0) {
+            has_hw_accel_350 = true;
+          }
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+          constexpr bool kIsTsanBuild350 = true;
+#else
+          constexpr bool kIsTsanBuild350 = false;
+#endif
+          bool is_headless_or_ci_350 =
+              (!has_hw_accel_350 || kIsTsanBuild350 || std::getenv("CI") != nullptr ||
+               std::getenv("GITHUB_ACTIONS") != nullptr);
+
+          auto stop_wait_start = std::chrono::steady_clock::now();
+          while (std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - stop_wait_start)
+                     .count() < 3000) {
+            int wstatus = 0;
+            pid_t res = waitpid(child_pid_350, &wstatus, WNOHANG);
+            if (res == child_pid_350) {
+              if (WIFEXITED(wstatus)) {
+                int exit_stat = WEXITSTATUS(wstatus);
+                if (exit_stat == 0 || (is_headless_or_ci_350 && exit_stat == 1)) {
+                  child_stopped_cleanly_350 = true;
+                }
+              }
+              break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        }
+
+        if (!child_stopped_cleanly_350 && child_pid_350 > 0) {
+          kill(child_pid_350, SIGKILL);
+          waitpid(child_pid_350, nullptr, 0);
+        }
+
+        CHECK_MESSAGE(child_stopped_cleanly_350, "Recorder daemon stops cleanly on 350ms run");
+
+        std::string err_output_350 = read_text_file(stderr_350);
+        if (pulse_accessible) {
+          CHECK_MESSAGE(err_output_350.find("Audio capture initialized on:") != std::string::npos,
+                        "Audio capture must be initialized on live PulseAudio daemon");
+        } else {
+          CHECK_MESSAGE(err_output_350.find("timeout") == std::string::npos,
+                        "Headless run must not report timeout");
+        }
       }
     } else {
       CHECK(!rec_path.empty());

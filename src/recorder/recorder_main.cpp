@@ -40,6 +40,7 @@ extern "C" {
 // PulseAudio Asynchronous API for lightweight desktop/game audio recording
 #include <pulse/error.h>
 #include <pulse/pulseaudio.h>
+#include "pulse_audio_util.hpp"
 
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
 extern "C" const char* __lsan_default_suppressions() {
@@ -74,44 +75,6 @@ std::string generate_timestamp_filename(const std::string& prefix, const std::st
   return prefix + "_" + buf + ext;
 }
 
-// Automatically discovers the active default monitor audio device name
-std::string get_default_monitor_source() {
-  // 1. Try pactl get-default-sink
-  FILE* fp = popen("pactl get-default-sink 2>/dev/null", "r");
-  if (fp) {
-    char buf[256] = {0};
-    if (std::fgets(buf, sizeof(buf), fp)) {
-      std::string s(buf);
-      while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-      if (!s.empty()) {
-        pclose(fp);
-        return s + ".monitor";
-      }
-    }
-    pclose(fp);
-  }
-  // 2. PulseAudio / PipeWire standard fallback alias
-  return "@DEFAULT_MONITOR@";
-}
-
-// Automatically discovers the active default microphone input source
-std::string get_default_mic_source() {
-  FILE* fp = popen("pactl get-default-source 2>/dev/null", "r");
-  if (fp) {
-    char buf[256] = {0};
-    if (std::fgets(buf, sizeof(buf), fp)) {
-      std::string s(buf);
-      while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-      if (!s.empty() && s.rfind(".monitor") == std::string::npos) {
-        pclose(fp);
-        return s;
-      }
-    }
-    pclose(fp);
-  }
-  return "@DEFAULT_SOURCE@";
-}
-
 AVBufferRef* create_vaapi_device() {
   for (int node_id = 128; node_id <= 135; ++node_id) {
     std::string dev_node = "/dev/dri/renderD" + std::to_string(node_id);
@@ -131,6 +94,7 @@ struct PulseAudioCapture {
   pa_mainloop* ml = nullptr;
   pa_context* ctx = nullptr;
   pa_stream* stream = nullptr;
+  std::string source_name;
 
   PulseAudioCapture() = default;
   ~PulseAudioCapture() { cleanup(); }
@@ -152,55 +116,155 @@ struct PulseAudioCapture {
       pa_mainloop_free(ml);
       ml = nullptr;
     }
+    source_name.clear();
   }
 
-  bool init(const std::string& monitor_source, const std::atomic<bool>& running) {
+  fpshud::PulseInitResult init(fpshud::AudioRole role, const std::atomic<bool>& running) {
+    if (!running.load(std::memory_order_relaxed)) {
+      return {fpshud::PulseInitStatus::Cancelled, {}};
+    }
+
     ml = pa_mainloop_new();
-    if (!ml) return false;
+    if (!ml) {
+      return {fpshud::PulseInitStatus::Error, "Failed to allocate PulseAudio mainloop"};
+    }
+
     pa_mainloop_api* api = pa_mainloop_get_api(ml);
     ctx = pa_context_new(api, "FPSHUD_Recorder");
     if (!ctx) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Error, "Failed to allocate PulseAudio context"};
     }
 
     if (pa_context_connect(ctx, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error,
+              (str && *str) ? str : "Failed to connect PulseAudio context"};
     }
 
-    auto start = std::chrono::steady_clock::now();
-    while (running.load(std::memory_order_relaxed)) {
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto kTimeout = std::chrono::milliseconds(1500);
+
+    // 1. Wait for PA_CONTEXT_READY
+    while (true) {
+      if (!running.load(std::memory_order_relaxed)) {
+        cleanup();
+        return {fpshud::PulseInitStatus::Cancelled, {}};
+      }
       pa_context_state_t state = pa_context_get_state(ctx);
-      if (state == PA_CONTEXT_READY) break;
+      if (state == PA_CONTEXT_READY) {
+        break;
+      }
       if (!PA_CONTEXT_IS_GOOD(state)) {
+        int err = pa_context_errno(ctx);
         cleanup();
-        return false;
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "PulseAudio context state failed"};
       }
-      pa_mainloop_iterate(ml, 0, nullptr);
       if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                start)
-              .count() > 500) {
+                                                                start_time) > kTimeout) {
         cleanup();
-        return false;
+        return {fpshud::PulseInitStatus::TimedOut, "PulseAudio context connection timed out"};
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (pa_mainloop_prepare(ml, 20000) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_mainloop_prepare failed"};
+      }
+      pa_mainloop_poll(ml);
+      if (pa_mainloop_dispatch(ml) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "pa_mainloop_dispatch failed"};
+      }
+    }
+
+    // 2. Query Server Info to resolve default sink / source names
+    struct ServerInfoData {
+      std::string default_sink;
+      std::string default_source;
+      bool done = false;
+    };
+    ServerInfoData info_data;
+
+    pa_operation* op = pa_context_get_server_info(
+        ctx,
+        [](pa_context*, const pa_server_info* info, void* userdata) {
+          auto* d = static_cast<ServerInfoData*>(userdata);
+          if (info) {
+            if (info->default_sink_name) d->default_sink = info->default_sink_name;
+            if (info->default_source_name) d->default_source = info->default_source_name;
+          }
+          d->done = true;
+        },
+        &info_data);
+
+    if (op) {
+      while (!info_data.done && pa_operation_get_state(op) == PA_OPERATION_RUNNING) {
+        if (!running.load(std::memory_order_relaxed)) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          cleanup();
+          return {fpshud::PulseInitStatus::Cancelled, {}};
+        }
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                  start_time) > kTimeout) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          cleanup();
+          return {fpshud::PulseInitStatus::TimedOut, "pa_context_get_server_info timed out"};
+        }
+        pa_context_state_t state = pa_context_get_state(ctx);
+        if (!PA_CONTEXT_IS_GOOD(state)) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          int err = pa_context_errno(ctx);
+          cleanup();
+          const char* str = pa_strerror(err);
+          return {fpshud::PulseInitStatus::Error,
+                  (str && *str) ? str : "PulseAudio context state failed"};
+        }
+        if (pa_mainloop_prepare(ml, 20000) < 0) break;
+        pa_mainloop_poll(ml);
+        pa_mainloop_dispatch(ml);
+      }
+      pa_operation_unref(op);
     }
 
     if (!running.load(std::memory_order_relaxed)) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Cancelled, {}};
     }
 
+    if (role == fpshud::AudioRole::Microphone) {
+      source_name = fpshud::resolve_mic_source_name(
+          info_data.default_source.empty() ? nullptr : info_data.default_source.c_str(),
+          info_data.default_sink.empty() ? nullptr : info_data.default_sink.c_str());
+    } else {
+      source_name = fpshud::resolve_monitor_source_name(
+          info_data.default_sink.empty() ? nullptr : info_data.default_sink.c_str());
+    }
+
+    // 3. Connect Record Stream
     pa_sample_spec ss{};
     ss.format = PA_SAMPLE_S16LE;
     ss.rate = 48000;
     ss.channels = 2;
 
-    stream = pa_stream_new(ctx, "Gameplay Audio", &ss, nullptr);
+    const char* stream_title =
+        (role == fpshud::AudioRole::Microphone) ? "FPSHUD Microphone" : "FPSHUD Audio";
+    stream = pa_stream_new(ctx, stream_title, &ss, nullptr);
     if (!stream) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_stream_new failed"};
     }
 
     pa_buffer_attr attr{};
@@ -210,37 +274,58 @@ struct PulseAudioCapture {
     attr.prebuf = static_cast<uint32_t>(-1);
     attr.minreq = static_cast<uint32_t>(-1);
 
-    if (pa_stream_connect_record(stream, monitor_source.c_str(), &attr, PA_STREAM_ADJUST_LATENCY) <
+    if (pa_stream_connect_record(stream, source_name.c_str(), &attr, PA_STREAM_ADJUST_LATENCY) <
         0) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error,
+              (str && *str) ? str : "pa_stream_connect_record failed"};
     }
 
-    start = std::chrono::steady_clock::now();
-    while (running.load(std::memory_order_relaxed)) {
+    while (true) {
+      if (!running.load(std::memory_order_relaxed)) {
+        cleanup();
+        return {fpshud::PulseInitStatus::Cancelled, {}};
+      }
       pa_stream_state_t state = pa_stream_get_state(stream);
-      if (state == PA_STREAM_READY) break;
+      if (state == PA_STREAM_READY) {
+        break;
+      }
       if (!PA_STREAM_IS_GOOD(state)) {
+        int err = pa_context_errno(ctx);
         cleanup();
-        return false;
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_stream state error"};
       }
-      pa_mainloop_iterate(ml, 0, nullptr);
       if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                start)
-              .count() > 500) {
+                                                                start_time) > kTimeout) {
         cleanup();
-        return false;
+        return {fpshud::PulseInitStatus::TimedOut, "pa_stream connection timed out"};
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (pa_mainloop_prepare(ml, 20000) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_mainloop_prepare failed"};
+      }
+      pa_mainloop_poll(ml);
+      if (pa_mainloop_dispatch(ml) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "pa_mainloop_dispatch failed"};
+      }
     }
 
     if (!running.load(std::memory_order_relaxed) ||
         pa_stream_get_state(stream) != PA_STREAM_READY) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Cancelled, {}};
     }
 
-    return true;
+    return {fpshud::PulseInitStatus::Connected, {}};
   }
 };
 
@@ -664,8 +749,6 @@ int main(int argc, char* argv[]) {
   AVStream* astream = nullptr;
   AVCodecContext* actx = nullptr;
   bool audio_enabled = (start_cfg.audio_source != 3);  // 3 = Mute
-  std::string monitor_source;
-  std::string mic_source;
 
   if (audio_enabled) {
     const AVCodec* acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -685,14 +768,6 @@ int main(int argc, char* argv[]) {
             astream->id = 1;
             astream->time_base = actx->time_base;
             avcodec_parameters_from_context(astream->codecpar, actx);
-            if (start_cfg.audio_source == 1) {
-              monitor_source = get_default_mic_source();
-            } else if (start_cfg.audio_source == 2) {
-              monitor_source = get_default_monitor_source();
-              mic_source = get_default_mic_source();
-            } else {
-              monitor_source = get_default_monitor_source();
-            }
           } else {
             avcodec_free_context(&actx);
             audio_enabled = false;
@@ -849,21 +924,33 @@ int main(int argc, char* argv[]) {
 
   // Spawn Audio Capture Thread (Asynchronous libpulse)
   std::thread audio_thread([&]() {
-    if (!actx || !audio_enabled || monitor_source.empty()) return;
+    if (!actx || !audio_enabled) return;
 
     PulseAudioCapture pulse;
-    if (!pulse.init(monitor_source, g_running)) {
-      std::fprintf(
-          stderr,
-          "[FPSHUD Recorder] PulseAudio connection failed or timeout, audio capture disabled.\n");
+    PulseAudioCapture pulse_mic;
+
+    fpshud::AudioRole primary_role =
+        (start_cfg.audio_source == 1) ? fpshud::AudioRole::Microphone : fpshud::AudioRole::Monitor;
+    fpshud::PulseInitResult res = pulse.init(primary_role, g_running);
+    if (res.status == fpshud::PulseInitStatus::Cancelled) {
+      return;
+    }
+    if (fpshud::should_log_pulse_init_failure(res.status)) {
+      std::string warn = fpshud::format_pulse_init_warning(res);
+      std::fputs(warn.c_str(), stderr);
       return;
     }
 
-    PulseAudioCapture pulse_mic;
-    bool has_mic = (!mic_source.empty() && pulse_mic.init(mic_source, g_running));
+    bool has_mic = false;
+    if (start_cfg.audio_source == 2) {
+      fpshud::PulseInitResult mic_res = pulse_mic.init(fpshud::AudioRole::Microphone, g_running);
+      if (mic_res.status == fpshud::PulseInitStatus::Connected) {
+        has_mic = true;
+      }
+    }
 
     std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s%s\n",
-                 monitor_source.c_str(), has_mic ? (" + " + mic_source).c_str() : "");
+                 pulse.source_name.c_str(), has_mic ? (" + " + pulse_mic.source_name).c_str() : "");
 
     constexpr int kAudioSamplesPerFrame = 1024;
     std::vector<int16_t> pcm_ring;

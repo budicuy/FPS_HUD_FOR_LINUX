@@ -684,6 +684,7 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_playback_protocol.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/pulse_audio_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.cpp
