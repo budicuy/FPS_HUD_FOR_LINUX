@@ -21,16 +21,16 @@ jobs:
       AR: llvm-ar
       RANLIB: llvm-ranlib
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Install Toolchain & Build Dependencies (Arch Linux)
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pacman -Syu --noconfirm --needed \
             clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
             vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
             shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Configure, Lint, Build & Test (Pure Clang Release + LLD)
         run: |
@@ -109,16 +109,16 @@ jobs:
       AR: llvm-ar
       RANLIB: llvm-ranlib
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Install Toolchain & Dependencies for Sanitizers (Arch Linux)
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pacman -Syu --noconfirm --needed \
             clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
             vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
             shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Run Memory Safety, Thread Safety & Undefined Behavior Suite (ASan + UBSan & TSan)
         run: |
