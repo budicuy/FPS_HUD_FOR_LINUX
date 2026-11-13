@@ -505,7 +505,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 | Requirement | Minimum Version / Specification | Purpose |
 | :--- | :--- | :--- |
-| **C++ Compiler** | **Clang 19+** (Clang 23 recommended) or **GCC 15+** | Pure ISO C++26 (`-std=c++26`) native implementation |
+| **C++ Compiler** | **Clang 19+** (Clang 23 recommended) | Pure ISO C++26 (`-std=c++26`) native implementation |
 | **Build System** | **CMake >= 3.25** & **Ninja** | Fast multi-threaded build orchestration |
 | **Linker** | **LLD (`lld`)** | Fast linking with ThinLTO (`-flto=thin`) optimization |
 | **Graphics APIs** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Swapchain presentation hooking |
@@ -516,7 +516,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 > [!NOTE]
 > **ISO C++26 Architecture**
-> - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ or GCC 15+.
+> - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ (Clang 23 recommended).
 > - **Zero Polyfills & Shims:** Zero polyfills or legacy standard fallbacks. Enforced via CMake `FATAL_ERROR` gates to ensure modern language standards and strict compile-time verification.
 > - **Why C++26?** Guarantees zero heap allocation churn in the per-frame render loop via fixed inline vector storage and compile-time metric layout serialization.
 

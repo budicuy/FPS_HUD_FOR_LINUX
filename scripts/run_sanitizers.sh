@@ -7,5 +7,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${ROOT_DIR}"
 
+export CC="${CC:-clang}"
+export CXX="${CXX:-clang++}"
+
 cmake --workflow --preset asan-ubsan
 cmake --workflow --preset tsan

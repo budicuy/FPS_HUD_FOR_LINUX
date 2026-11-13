@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(FPSHUD VERSION 1.0.0 LANGUAGES CXX)
 
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "FPSHUD requires LLVM/Clang compiler (Clang 19+ or 23+ recommended). Non-Clang compiler '${CMAKE_CXX_COMPILER_ID}' is not supported.")
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -15,8 +19,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "-std=c++26")
 check_cxx_source_compiles("
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"
+#ifdef __clang__
+#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"
 #endif
 #include <inplace_vector>
 int main() {
@@ -26,7 +30,7 @@ int main() {
 }
 " FPSHUD_HAS_CXX26_INPLACE_VECTOR)
 if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
-    message(FATAL_ERROR "FPSHUD requires pure native ISO C++26 <inplace_vector> support (Clang 19+ or GCC 15+). Polyfill has been deprecated.")
+    message(FATAL_ERROR "FPSHUD requires pure native ISO C++26 <inplace_vector> support (Clang 19+ or 23+). Polyfill has been deprecated.")
 endif()
 
 check_cxx_source_compiles("
@@ -94,6 +98,7 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
     set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
         -Wl,--wrap=acosf
         -Wl,--wrap=atan2f
+        -Wl,--wrap=fmod
         -Wl,--wrap=fmodf
         -Wl,--wrap=sinh
         -Wl,--wrap=cosh
@@ -152,6 +157,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -ftrivial-auto-var-init=pattern
             ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
+        add_link_options(-fuse-ld=lld)
     else()
         message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build + STL Hardening]")
         add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
@@ -163,58 +169,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -ftrivial-auto-var-init=pattern
             ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
-    endif()
-else()
-    set(FPSHUD_MEMORY_SAFETY_WARNINGS
-        -Wall
-        -Wextra
-        -Werror=return-local-addr
-        -Werror=dangling-pointer
-        -Werror=use-after-free
-        -Werror=self-move
-        -Werror=uninitialized
-    )
-    if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-        add_compile_options(
-            -O3
-            -DNDEBUG
-            -ffunction-sections
-            -fdata-sections
-            -fstack-protector-strong
-            -ftrivial-auto-var-init=zero
-            -fno-math-errno
-            -fno-trapping-math
-            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
-        )
-        add_link_options(
-            -Wl,--gc-sections
-            -Wl,-O2
-            -Wl,--as-needed
-            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
-            -static-libgcc
-        )
-    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build + STL Hardening]")
-        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
-        add_compile_options(
-            -O0
-            -g3
-            -ftrivial-auto-var-init=pattern
-            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
-        )
-    else()
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build + STL Hardening]")
-        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
-        add_compile_options(
-            -O1
-            -g
-            -fno-omit-frame-pointer
-            -fno-optimize-sibling-calls
-            -ftrivial-auto-var-init=pattern
-            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
-        )
+        add_link_options(-fuse-ld=lld)
     endif()
 endif()
 

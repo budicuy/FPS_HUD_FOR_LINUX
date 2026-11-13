@@ -85,7 +85,7 @@ SimdStatsResult reduce_frametime_simd_impl(const float* data, size_t n) noexcept
   return SimdStatsResult{total, scalar_min, scalar_max};
 }
 
-#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#if defined(__x86_64__) && defined(__clang__)
 [[gnu::target("avx2")]]
 SimdStatsResult reduce_frametime_avx2(const float* data, size_t n) noexcept {
   return reduce_frametime_simd_impl<8>(data, n);
@@ -103,7 +103,7 @@ SimdStatsResult compute_frametime_stats_simd(const std::vector<float>& data) {
   if (data.empty()) return SimdStatsResult{};
 
 #if defined(FPSHUD_HAS_SIMD)
-#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#if defined(__x86_64__) && defined(__clang__)
   static const bool s_has_avx2 = __builtin_cpu_supports("avx2");
   if (s_has_avx2) {
     return reduce_frametime_avx2(data.data(), data.size());

@@ -11,6 +11,7 @@ extern "C" {
 
 __asm__(".symver compat_acosf, acosf@GLIBC_2.2.5");
 __asm__(".symver compat_atan2f, atan2f@GLIBC_2.2.5");
+__asm__(".symver compat_fmod, fmod@GLIBC_2.2.5");
 __asm__(".symver compat_fmodf, fmodf@GLIBC_2.2.5");
 __asm__(".symver compat_sinh, sinh@GLIBC_2.2.5");
 __asm__(".symver compat_cosh, cosh@GLIBC_2.2.5");
@@ -23,6 +24,7 @@ __asm__(".symver compat_strtoll, strtoll@GLIBC_2.2.5");
 
 extern float compat_acosf(float x);
 extern float compat_atan2f(float y, float x);
+extern double compat_fmod(double x, double y);
 extern float compat_fmodf(float x, float y);
 extern double compat_sinh(double x);
 extern double compat_cosh(double x);
@@ -36,6 +38,7 @@ extern long long compat_strtoll(const char* nptr, char** endptr, int base);
 // NOLINTBEGIN(bugprone-reserved-identifier)
 __attribute__((used)) float __wrap_acosf(float x) { return compat_acosf(x); }
 __attribute__((used)) float __wrap_atan2f(float y, float x) { return compat_atan2f(y, x); }
+__attribute__((used)) double __wrap_fmod(double x, double y) { return compat_fmod(x, y); }
 __attribute__((used)) float __wrap_fmodf(float x, float y) { return compat_fmodf(x, y); }
 __attribute__((used)) double __wrap_sinh(double x) { return compat_sinh(x); }
 __attribute__((used)) double __wrap_cosh(double x) { return compat_cosh(x); }
@@ -67,7 +70,7 @@ __attribute__((used)) long long __wrap___isoc23_strtoll(const char* nptr, char**
   return compat_strtoll(nptr, endptr, base);
 }
 
-/* GCC 16's static libstdc++ (random.o, pulled in by std::random_device /
+/* Static libstdc++ 16 under Clang (random.o, pulled in by std::random_device /
  * std::filesystem temp helpers) references arc4random@GLIBC_2.36. Provide a
  * GLIBC_2.2.5-only replacement backed by the getrandom(2) syscall. */
 __attribute__((used)) uint32_t __wrap_arc4random(void) {

@@ -505,7 +505,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 | Kebutuhan | Versi Minimum / Spesifikasi | Fungsi |
 | :--- | :--- | :--- |
-| **Kompiler C++** | **Clang 19+** (Direkomendasikan Clang 23) atau **GCC 15+** | Implementasi murni native ISO C++26 (`-std=c++26`) |
+| **Kompiler C++** | **Clang 19+** (Direkomendasikan Clang 23) | Implementasi murni native ISO C++26 (`-std=c++26`) |
 | **Sistem Build** | **CMake >= 3.25** & **Ninja** | Orkestrasi kompilasi multi-threaded cepat |
 | **Linker** | **LLD (`lld`)** | Fast linking dengan optimasi ThinLTO (`-flto=thin`) |
 | **API Grafis** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Intersepsi swapchain presentasi frame |
@@ -516,7 +516,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 > [!NOTE]
 > **Arsitektur ISO C++26**
-> - **Dukungan Standar Library Native:** Menggunakan murni native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) dan Pack Indexing bahasa (`Types...[N]` dan `args...[N]`), membutuhkan Clang 19+ atau GCC 15+.
+> - **Dukungan Standar Library Native:** Menggunakan murni native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) dan Pack Indexing bahasa (`Types...[N]` dan `args...[N]`), membutuhkan Clang 19+ (Direkomendasikan Clang 23).
 > - **Nol Polyfill & Shim:** Bebas dari polyfill atau fallback standar lama. Ditegakkan melalui gerbang `FATAL_ERROR` CMake untuk menjamin standar bahasa modern dan verifikasi waktu kompilasi yang ketat.
 > - **Mengapa C++26?** Menjamin nol alokasi heap (*zero-heap churn*) di loop render per frame melalui penyimpanan vektor inline dan ekspansi pack saat kompilasi.
 
