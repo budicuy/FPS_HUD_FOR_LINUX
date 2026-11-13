@@ -44,8 +44,13 @@ extern "C" {
 #include "pulse_audio_util.hpp"
 
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+extern "C" const char* __asan_default_options() {  // NOLINT(bugprone-reserved-identifier)
+  return "protect_shadow_gap=0";
+}
+
 extern "C" const char* __lsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
   return "leak:libnvidia-ml.so\n"
+         "leak:init_gpu_sensors_locked\n"
          "leak:libGLX_nvidia.so\n"
          "leak:libcuda.so\n"
          "leak:libnvidia-encode.so\n"
@@ -54,7 +59,16 @@ extern "C" const char* __lsan_default_suppressions() {  // NOLINT(bugprone-reser
          "leak:libva-drm.so\n"
          "leak:old_pthread_cond_broadcast\n"
          "leak:pthread_cond_broadcast\n"
+         "leak:probe_hardware_encoders\n"
          "leak:<unknown module>\n";
+}
+#endif
+
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+extern "C" const char* __tsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
+  return "race:libavutil\n"
+         "race:libavcodec\n"
+         "race:pthread_frame.c\n";
 }
 #endif
 

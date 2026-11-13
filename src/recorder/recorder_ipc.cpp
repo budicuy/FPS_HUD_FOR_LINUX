@@ -1082,9 +1082,20 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
     return false;
   }
 
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer)) || \
+    defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+  constexpr int kShmWaitMs = 4000;
+  constexpr int kSockWaitMs = 1500;
+#else
+  constexpr int kShmWaitMs = 1500;
+  constexpr int kSockWaitMs = 500;
+#endif
+
   bool shm_ready = false;
   auto start_wait = std::chrono::steady_clock::now();
-  while (std::chrono::steady_clock::now() - start_wait < std::chrono::milliseconds(1500)) {
+  while (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               start_wait)
+             .count() < kShmWaitMs) {
     int status = 0;
     pid_t wp = ::waitpid(worker_pid_, &status, WNOHANG);
     if (wp > 0) {
@@ -1140,7 +1151,9 @@ bool VideoPlayerController::open(const std::string& filepath, const std::string&
     std::strncpy(saddr.sun_path, socket_path_.c_str(), sizeof(saddr.sun_path) - 1);
     auto sock_wait = std::chrono::steady_clock::now();
     bool connected = false;
-    while (std::chrono::steady_clock::now() - sock_wait < std::chrono::milliseconds(500)) {
+    while (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                 sock_wait)
+               .count() < kSockWaitMs) {
       if (::connect(sock_fd_, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) == 0) {
         connected = true;
         break;

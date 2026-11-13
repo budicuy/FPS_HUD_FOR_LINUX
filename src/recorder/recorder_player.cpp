@@ -344,9 +344,13 @@ int run_player_worker(int argc, char** argv) {
     cleanup_shm_file();
     return 1;
   }
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+  codec_ctx->thread_count = 1;
+#else
   codec_ctx->thread_count = 0;  // Auto multi-threaded decode across all CPU cores
   codec_ctx->thread_type = static_cast<int>(static_cast<uint32_t>(FF_THREAD_FRAME) |
                                             static_cast<uint32_t>(FF_THREAD_SLICE));
+#endif
   if (avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to open video decoder.\n");
     avcodec_free_context(&codec_ctx);

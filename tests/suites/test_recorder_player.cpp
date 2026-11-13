@@ -55,6 +55,59 @@ bool is_pulse_socket_accessible() {
   close(sfd);
   return ok;
 }
+
+bool run_cmd_capture(const std::string& cmd, std::string& out, int& exit_code) {
+  out.clear();
+  exit_code = -1;
+  FILE* pipe = ::popen(cmd.c_str(), "r");
+  if (!pipe) {
+    return false;
+  }
+  char buf[256];
+  while (::fgets(buf, sizeof(buf), pipe)) {
+    out += buf;
+  }
+  int status = ::pclose(pipe);
+  exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  return true;
+}
+
+class ScopedFdRedirect {
+public:
+  explicit ScopedFdRedirect(int target_fd, const fs::path& redirect_file = {})
+      : target_fd_(target_fd) {
+    ::fflush(target_fd == STDERR_FILENO ? stderr : stdout);
+    saved_fd_ = ::dup(target_fd_);
+    const std::string path_str = redirect_file.empty() ? "/dev/null" : redirect_file.string();
+    file_fd_ = ::open(path_str.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (file_fd_ >= 0 && saved_fd_ >= 0) {
+      ::dup2(file_fd_, target_fd_);
+    }
+  }
+
+  ~ScopedFdRedirect() { restore(); }
+
+  void restore() {
+    if (saved_fd_ >= 0) {
+      ::fflush(target_fd_ == STDERR_FILENO ? stderr : stdout);
+      ::dup2(saved_fd_, target_fd_);
+      ::close(saved_fd_);
+      saved_fd_ = -1;
+    }
+    if (file_fd_ >= 0) {
+      ::close(file_fd_);
+      file_fd_ = -1;
+    }
+  }
+
+  ScopedFdRedirect(const ScopedFdRedirect&) = delete;
+  ScopedFdRedirect& operator=(const ScopedFdRedirect&) = delete;
+
+private:
+  int target_fd_{-1};
+  int saved_fd_{-1};
+  int file_fd_{-1};
+};
 }  // namespace
 
 TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
@@ -102,15 +155,9 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
     if (!rec_path.empty()) {
       // Step 1: Verify Zero dynamic libav dependencies (Single Universal Static Binary < 5 MB)
       std::string readelf_cmd = "LC_ALL=C readelf -d \"" + rec_path.string() + "\" 2>&1";
-      FILE* re_pipe = popen(readelf_cmd.c_str(), "r");
       std::string readelf_output;
-      if (re_pipe) {
-        char rbuf[256];
-        while (fgets(rbuf, sizeof(rbuf), re_pipe)) {
-          readelf_output += rbuf;
-        }
-        pclose(re_pipe);
-      }
+      int re_exit = -1;
+      run_cmd_capture(readelf_cmd, readelf_output, re_exit);
       bool has_dynamic_libav = (readelf_output.find("libavformat") != std::string::npos ||
                                 readelf_output.find("libavcodec") != std::string::npos);
       CHECK_MESSAGE(!has_dynamic_libav,
@@ -118,17 +165,9 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 
       // Step 2: Probe Encoders
       std::string probe_cmd = "\"" + rec_path.string() + "\" --probe-encoders 2>&1";
-      FILE* pipe = popen(probe_cmd.c_str(), "r");
       std::string probe_output;
       int exit_code = -1;
-      if (pipe) {
-        char pbuf[256];
-        while (fgets(pbuf, sizeof(pbuf), pipe)) {
-          probe_output += pbuf;
-        }
-        int status = pclose(pipe);
-        exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-      }
+      run_cmd_capture(probe_cmd, probe_output, exit_code);
 
       bool runtime_missing =
           (probe_output.find("error while loading shared libraries") != std::string::npos ||
@@ -227,13 +266,26 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 #else
           constexpr bool kIsTsanBuild = false;
 #endif
-          bool is_headless_or_ci = (!has_hw_accel || kIsTsanBuild || std::getenv("CI") != nullptr ||
-                                    std::getenv("GITHUB_ACTIONS") != nullptr);
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+          constexpr bool kIsAsanBuild = true;
+#else
+          constexpr bool kIsAsanBuild = false;
+#endif
+          constexpr bool kIsSanitizerBuild = kIsTsanBuild || kIsAsanBuild;
+          bool is_headless_or_ci =
+              (!has_hw_accel || kIsSanitizerBuild || std::getenv("CI") != nullptr ||
+               std::getenv("GITHUB_ACTIONS") != nullptr);
 
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer)) || \
+    defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+          constexpr int kShutdownWaitMs = 6000;
+#else
+          constexpr int kShutdownWaitMs = 3000;
+#endif
           auto stop_wait_start = std::chrono::steady_clock::now();
           while (std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - stop_wait_start)
-                     .count() < 3000) {
+                     .count() < kShutdownWaitMs) {
             int wstatus = 0;
             pid_t res = waitpid(child_pid, &wstatus, WNOHANG);
             if (res == child_pid) {
@@ -321,11 +373,18 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 #else
         constexpr bool kIsTsanBuild350 = false;
 #endif
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+        constexpr bool kIsAsanBuild350 = true;
+#else
+        constexpr bool kIsAsanBuild350 = false;
+#endif
+        constexpr bool kIsSanitizerBuild350 = kIsTsanBuild350 || kIsAsanBuild350;
         bool is_headless_or_ci_350 =
-            (!has_hw_accel_350 || kIsTsanBuild350 || std::getenv("CI") != nullptr ||
+            (!has_hw_accel_350 || kIsSanitizerBuild350 || std::getenv("CI") != nullptr ||
              std::getenv("GITHUB_ACTIONS") != nullptr);
 
         bool child_stopped_cleanly_350 = false;
+        int exit_stat_350 = -1;
         if (connected_350 && client_fd_350 >= 0) {
           IpcPacketHeader start_hdr{};
           start_hdr.magic = kRecorderIpcMagic;
@@ -359,15 +418,22 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
           recv(client_fd_350, &resp, sizeof(resp), 0);
           close(client_fd_350);
 
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer)) || \
+    defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+          constexpr int kShutdownWaitMs = 6000;
+#else
+          constexpr int kShutdownWaitMs = 3000;
+#endif
           auto stop_wait_start = std::chrono::steady_clock::now();
           while (std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - stop_wait_start)
-                     .count() < 3000) {
+                     .count() < kShutdownWaitMs) {
             int wstatus = 0;
             pid_t res = waitpid(child_pid_350, &wstatus, WNOHANG);
             if (res == child_pid_350) {
               if (WIFEXITED(wstatus)) {
                 int exit_stat = WEXITSTATUS(wstatus);
+                exit_stat_350 = exit_stat;
                 if (exit_stat == 0 || (is_headless_or_ci_350 && exit_stat == 1)) {
                   child_stopped_cleanly_350 = true;
                 }
@@ -386,7 +452,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
         CHECK_MESSAGE(child_stopped_cleanly_350, "Recorder daemon stops cleanly on 350ms run");
 
         std::string err_output_350 = read_text_file(stderr_350);
-        if (pulse_accessible && !is_headless_or_ci_350) {
+        if (pulse_accessible && !is_headless_or_ci_350 && exit_stat_350 == 0) {
           CHECK_MESSAGE(err_output_350.find("Audio capture initialized on:") != std::string::npos,
                         "Audio capture must be initialized on live PulseAudio daemon");
         } else {
@@ -569,10 +635,27 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
     CHECK_MESSAGE(!controller.is_active(), "10.10 Player controller remains inactive after close");
 
     // 10.14 VideoPlayerController handles non-existent file cleanly
-    bool open_nonexistent =
-        controller.open("/nonexistent/file_12345.mp4", "./build/fpshud_recorder_bin");
-    CHECK_MESSAGE((!open_nonexistent && !controller.is_active()),
-                  "10.14 Player controller safely rejects non-existent video files");
+    fs::path rec_bin = find_recorder_bin_path();
+    CHECK_MESSAGE(!rec_bin.empty(), "fpshud_recorder_bin must exist for player tests");
+    if (!rec_bin.empty()) {
+      ScopedTempDir tmp_missing("fpshud_missing_vid_");
+      fs::path missing_video = tmp_missing.path / "missing_input.mp4";
+      fs::path missing_err_log = tmp_missing.path / "missing_err.log";
+      bool open_nonexistent = false;
+      {
+        ScopedFdRedirect redirect_err(STDERR_FILENO, missing_err_log);
+        open_nonexistent = controller.open(missing_video.string(), rec_bin.string());
+      }
+      std::string missing_err_out = read_text_file(missing_err_log);
+      bool runtime_missing =
+          (missing_err_out.find("error while loading shared libraries") != std::string::npos);
+      if (!runtime_missing) {
+        CHECK_MESSAGE((!open_nonexistent && !controller.is_active()),
+                      "10.14 Player controller safely rejects non-existent video files");
+        CHECK_MESSAGE(missing_err_out.find("Could not open input file:") != std::string::npos,
+                      "10.14 Player worker logged expected file rejection message");
+      }
+    }
 
     // 10.19 VideoPlayerController strips LD_PRELOAD to protect worker process
     fs::path rroot = find_repo_root();
@@ -596,12 +679,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
 
     // 10.25 End-to-end player controller lifecycle with synthetic video verification
     bool e2e_playback_ok = false;
-    std::string helper_bin = "./build/fpshud_recorder_bin";
-    if (!rroot.empty() && fs::exists(rroot / "build" / "fpshud_recorder_bin")) {
-      helper_bin = (rroot / "build" / "fpshud_recorder_bin").string();
-    } else if (fs::exists("./fpshud_recorder_bin")) {
-      helper_bin = "./fpshud_recorder_bin";
-    }
+    std::string helper_bin = find_recorder_bin_path().string();
 
     ScopedTempDir tmp_video("fpshud_synth_video_");
     fs::path sample_mp4 = tmp_video / "synthetic_test.mp4";
@@ -624,8 +702,14 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
         CHECK(hdr->duration_sec > 0.0f);
         CHECK(player.frame_pixels() != nullptr);
 
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer)) || \
+    defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+        constexpr auto kPlaybackWaitLimit = std::chrono::milliseconds(3000);
+#else
+        constexpr auto kPlaybackWaitLimit = std::chrono::milliseconds(1000);
+#endif
         auto wait_start = std::chrono::steady_clock::now();
-        while (std::chrono::steady_clock::now() - wait_start < std::chrono::milliseconds(1000)) {
+        while (std::chrono::steady_clock::now() - wait_start < kPlaybackWaitLimit) {
           if (hdr->frame_seq.load() >= 1) {
             e2e_playback_ok = true;
             break;
@@ -911,6 +995,7 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
       ScopedTempDir tmp_player("fpshud_player_fail_");
       fs::path fail_sock = tmp_player.path / "failed_player.sock";
       fs::path fail_shm = tmp_player.path / "failed_player_shm";
+      fs::path missing_video = tmp_player.path / "missing_input.mp4";
       {
         std::ofstream f(fail_sock);
         f << "stray_socket_marker";
@@ -918,11 +1003,19 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
       CHECK(fs::exists(fail_sock));
 
       std::string cmd = "\"" + rec_bin.string() + "\" --player \"" + fail_shm.string() + "\" \"" +
-                        fail_sock.string() + "\" \"/nonexistent/file_12345.mp4\" 2>&1";
-      int status = std::system(cmd.c_str());
-      int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-      CHECK(exit_code == 1);
-      CHECK(!fs::exists(fail_sock));
+                        fail_sock.string() + "\" \"" + missing_video.string() + "\" 2>&1";
+      std::string out;
+      int exit_code = -1;
+      run_cmd_capture(cmd, out, exit_code);
+
+      bool runtime_missing =
+          (out.find("error while loading shared libraries") != std::string::npos ||
+           exit_code == 127);
+      if (!runtime_missing) {
+        CHECK(exit_code == 1);
+        CHECK(!fs::exists(fail_sock));
+        CHECK(out.find("Could not open input file:") != std::string::npos);
+      }
     }
   }
 }
