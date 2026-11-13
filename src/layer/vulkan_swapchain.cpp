@@ -16,6 +16,8 @@ std::mutex g_map_mutex;
 std::mutex g_vulkan_imgui_mutex;
 std::unordered_map<void*, InstanceData*> g_instance_map;
 std::unordered_map<void*, DeviceData*> g_device_map;
+std::vector<InstanceData*> g_instances;
+std::vector<DeviceData*> g_devices;
 std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainData>> g_swapchain_map;
 std::atomic<bool> g_bound_discrete_gpu{false};
 
@@ -165,6 +167,25 @@ void destroy_swapchain_data(const std::shared_ptr<SwapchainData>& sd) {
   sd->device_data = nullptr;
 }
 
+namespace {
+ImGui_ImplVulkan_InitInfo make_imgui_vulkan_init_info(DeviceData* dd, SwapchainData* sd,
+                                                      uint32_t img_count) {
+  ImGui_ImplVulkan_InitInfo info;
+  std::memset(&info, 0, sizeof(info));
+  info.Instance = dd->instance_data->instance;
+  info.PhysicalDevice = dd->physical_device;
+  info.Device = dd->device;
+  info.QueueFamily = dd->graphics_queue_family;
+  info.Queue = dd->graphics_queue;
+  info.RenderPass = sd->render_pass;
+  info.MinImageCount = img_count >= 2 ? img_count : 2;
+  info.ImageCount = img_count >= 2 ? img_count : 2;
+  info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  info.DescriptorPoolSize = 16;
+  return info;
+}
+}  // namespace
+
 bool init_swapchain_overlay(SwapchainData* sd) {
   DeviceData* dd = sd->device_data;
   if (!dd || !dd->graphics_queue) return false;
@@ -186,15 +207,17 @@ bool init_swapchain_overlay(SwapchainData* sd) {
     return false;
   }
 
-  VkAttachmentDescription attachment{};
-  attachment.format = sd->format;
-  attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-  attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  attachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-  attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  VkAttachmentDescription attachment{
+      .flags = 0,
+      .format = sd->format,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+      .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  };
 
   VkAttachmentReference color_attachment{};
   color_attachment.attachment = 0;
@@ -321,17 +344,7 @@ bool init_swapchain_overlay(SwapchainData* sd) {
 
     ImGui_ImplVulkan_LoadFunctions(&imgui_vk_loader, dd);
 
-    ImGui_ImplVulkan_InitInfo init_info{};
-    init_info.Instance = dd->instance_data->instance;
-    init_info.PhysicalDevice = dd->physical_device;
-    init_info.Device = dd->device;
-    init_info.QueueFamily = dd->graphics_queue_family;
-    init_info.Queue = dd->graphics_queue;
-    init_info.RenderPass = sd->render_pass;
-    init_info.MinImageCount = img_count >= 2 ? img_count : 2;
-    init_info.ImageCount = img_count >= 2 ? img_count : 2;
-    init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.DescriptorPoolSize = 16;
+    ImGui_ImplVulkan_InitInfo init_info = make_imgui_vulkan_init_info(dd, sd, img_count);
 
     sd->imgui_initialized = ImGui_ImplVulkan_Init(&init_info);
     if (sd->imgui_initialized) {

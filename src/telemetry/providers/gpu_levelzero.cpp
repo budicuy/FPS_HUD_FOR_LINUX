@@ -248,7 +248,7 @@ void LevelZeroGpuProvider::poll(HardwareTelemetryData& out_data) {
   if (ze_temp_ && ze_dispatch_.zesTemperatureGetState) {
     double temp_val = 0.0;
     if (ze_dispatch_.zesTemperatureGetState(ze_temp_, &temp_val) == intel_ze::ZE_RESULT_SUCCESS) {
-      out_data.gpu_temp_c = static_cast<int>(temp_val + 0.5);
+      out_data.gpu_temp_c = static_cast<int>(std::lround(temp_val));
     }
   }
   if (out_data.gpu_temp_c <= 0 && !temp_input_path_.empty()) {

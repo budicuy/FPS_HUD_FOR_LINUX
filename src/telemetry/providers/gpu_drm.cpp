@@ -120,12 +120,14 @@ bool DrmGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id, ui
     }
 
     uint64_t card_vram = 0;
-    if (read_sysfs_buf((dev_dir / "mem_info_vram_total").c_str(), buf, sizeof(buf))) {
-      card_vram = std::strtoull(buf, nullptr, 10);
-    } else if (read_sysfs_buf((card_root / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
-      card_vram = std::strtoull(buf, nullptr, 10);
-    } else if (read_sysfs_buf((dev_dir / "lmem_total_bytes").c_str(), buf, sizeof(buf))) {
-      card_vram = std::strtoull(buf, nullptr, 10);
+    const fs::path vram_candidates[] = {dev_dir / "mem_info_vram_total",
+                                        card_root / "lmem_total_bytes",
+                                        dev_dir / "lmem_total_bytes"};
+    for (const auto& path : vram_candidates) {
+      if (read_sysfs_buf(path.c_str(), buf, sizeof(buf))) {
+        card_vram = std::strtoull(buf, nullptr, 10);
+        break;
+      }
     }
 
     // If explicitly bound to this vendor/device, immediate preference
@@ -162,13 +164,7 @@ bool DrmGpuProvider::init(const std::string& root_prefix, uint32_t vendor_id, ui
   bool is_intel = (best_vendor_num == 0x8086);
   bool is_nvidia = (best_vendor_num == 0x10de);
 
-  if (is_amd) {
-    backend_type_ = GpuBackendType::AmdSysfs;
-  } else if (is_intel) {
-    backend_type_ = GpuBackendType::IntelSysfs;
-  } else {
-    backend_type_ = GpuBackendType::AmdSysfs;  // generic DRM sysfs for Nouveau
-  }
+  backend_type_ = is_intel ? GpuBackendType::IntelSysfs : GpuBackendType::AmdSysfs;
 
   std::snprintf(gpu_vendor_, sizeof(gpu_vendor_), "%s",
                 is_amd ? "AMD" : (is_intel ? "Intel" : (is_nvidia ? "NVIDIA" : "Unknown")));
@@ -396,12 +392,13 @@ void DrmGpuProvider::poll(HardwareTelemetryData& out_data) {
               if (rn > 0) {
                 fdbuf[rn] = '\0';
                 const char* tag = std::strstr(fdbuf, "drm-engine-render:");
+                const char* rcs_tag = tag ? nullptr : std::strstr(fdbuf, "drm-cycles-rcs:");
                 if (tag) {
                   uint64_t ns = std::strtoull(tag + 18, nullptr, 10);
                   total_render_ns += ns;
                   found_drm_fd = true;
-                } else if ((tag = std::strstr(fdbuf, "drm-cycles-rcs:"))) {
-                  uint64_t ns = std::strtoull(tag + 15, nullptr, 10);
+                } else if (rcs_tag) {
+                  uint64_t ns = std::strtoull(rcs_tag + 15, nullptr, 10);
                   total_render_ns += ns;
                   found_drm_fd = true;
                 }

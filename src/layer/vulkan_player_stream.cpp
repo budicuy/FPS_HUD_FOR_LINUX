@@ -146,18 +146,23 @@ ImTextureID vulkan_player_texture_provider(const uint8_t* rgba, uint32_t w, uint
       state.staging[i].is_coherent = is_coherent;
     }
 
-    VkImageCreateInfo img_info{};
-    img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    img_info.imageType = VK_IMAGE_TYPE_2D;
-    img_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-    img_info.extent = {w, h, 1};
-    img_info.mipLevels = 1;
-    img_info.arrayLayers = 1;
-    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    img_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageCreateInfo img_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .extent = {w, h, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
     if (dd->CreateImage(dd->device, &img_info, nullptr, &state.image) != VK_SUCCESS) {
       vulkan_player_release(dd, state);
       return 0;

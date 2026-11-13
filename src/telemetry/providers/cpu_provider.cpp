@@ -163,13 +163,14 @@ void CpuProvider::init() {
     std::string candidate = root_prefix_ + rel;
     fs::path parent_dir = fs::path(candidate).parent_path();
 
-    uint64_t tdp_uw = 0;
-    if (read_sysfs_u64((parent_dir / "constraint_0_max_power_uw").c_str(), tdp_uw) &&
-        tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
-      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
-    } else if (read_sysfs_u64((parent_dir / "constraint_0_power_limit_uw").c_str(), tdp_uw) &&
-               tdp_uw >= 5'000'000ULL && tdp_uw <= 500'000'000ULL) {
-      cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
+    const char* const tdp_files[] = {"constraint_0_max_power_uw", "constraint_0_power_limit_uw"};
+    for (const char* tdp_file : tdp_files) {
+      uint64_t tdp_uw = 0;
+      if (read_sysfs_u64((parent_dir / tdp_file).c_str(), tdp_uw) && tdp_uw >= 5'000'000ULL &&
+          tdp_uw <= 500'000'000ULL) {
+        cpu_tdp_watts_ = static_cast<float>(tdp_uw) / 1'000'000.0f;
+        break;
+      }
     }
 
     if (is_sysfs_readable(candidate.c_str())) {
@@ -316,7 +317,7 @@ void CpuProvider::poll_cpu_clock(HardwareTelemetryData& out_data) {
             const char* colon = std::strchr(p, ':');
             if (colon) {
               float mhz_f = std::strtof(colon + 1, nullptr);
-              int mhz = static_cast<int>(mhz_f + 0.5f);
+              int mhz = static_cast<int>(std::lround(mhz_f));
               if (mhz > max_mhz) max_mhz = mhz;
               if (cur_processor < static_cast<int>(TelemetryData::kMaxCpuCores)) {
                 core_clocks[cur_processor] = static_cast<uint16_t>(std::clamp(mhz, 0, 65535));

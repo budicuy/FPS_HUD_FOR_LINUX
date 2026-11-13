@@ -106,7 +106,9 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateInstance(const VkInstanceCreateInfo* p
     }
 
     std::lock_guard<std::mutex> lock(g_map_mutex);
-    g_instance_map[get_dispatch_key(*pInstance)] = id.release();
+    InstanceData* raw_id = id.release();
+    g_instance_map[get_dispatch_key(*pInstance)] = raw_id;
+    g_instances.push_back(raw_id);
     return VK_SUCCESS;
   } catch (...) {
     return VK_ERROR_INITIALIZATION_FAILED;
@@ -130,15 +132,16 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
       if (it != g_instance_map.end()) {
         id = it->second;
       } else {
-        for (auto& kv : g_instance_map) {
-          if (kv.second && kv.second->instance == instance) {
-            id = kv.second;
+        for (InstanceData* item : g_instances) {
+          if (item && item->instance == instance) {
+            id = item;
             break;
           }
         }
       }
 
       if (id) {
+        std::erase(g_instances, id);
         for (auto iter = g_instance_map.begin(); iter != g_instance_map.end();) {
           if (iter->second == id) {
             iter = g_instance_map.erase(iter);
@@ -263,8 +266,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
     dd->instance_data = find_instance_data(get_dispatch_key(physicalDevice));
     if (!dd->instance_data) {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      if (!g_instance_map.empty()) {
-        dd->instance_data = g_instance_map.begin()->second;
+      if (!g_instances.empty()) {
+        dd->instance_data = g_instances.front();
       }
     }
 
@@ -469,7 +472,8 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(VkPhysicalDevice physicalDevice
       if (dd->graphics_queue) {
         g_device_map[get_dispatch_key(dd->graphics_queue)] = dd.get();
       }
-      dd.release();
+      g_devices.push_back(dd.get());
+      [[maybe_unused]] DeviceData* released_dd = dd.release();
     }
 
     return VK_SUCCESS;
@@ -492,15 +496,16 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device,
       if (it != g_device_map.end()) {
         dd = it->second;
       } else {
-        for (auto& kv : g_device_map) {
-          if (kv.second && kv.second->device == device) {
-            dd = kv.second;
+        for (DeviceData* item : g_devices) {
+          if (item && item->device == device) {
+            dd = item;
             break;
           }
         }
       }
 
       if (dd) {
+        std::erase(g_devices, dd);
         // 1. Gather all swapchains for this device and remove from map
         for (auto sit = g_swapchain_map.begin(); sit != g_swapchain_map.end();) {
           if (sit->second && sit->second->device_data == dd) {

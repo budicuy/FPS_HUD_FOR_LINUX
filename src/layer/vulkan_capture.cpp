@@ -36,7 +36,8 @@ bool ensure_frame_capture_buffer(DeviceData* dd, SwapchainData* sd, FrameResourc
   }
   frame.buffer_size = 0;
 
-  if (!dd->CreateBuffer || !dd->AllocateMemory || !dd->BindBufferMemory || !dd->MapMemory) {
+  if (!dd->CreateBuffer || !dd->GetBufferMemoryRequirements || !dd->DestroyBuffer ||
+      !dd->AllocateMemory || !dd->FreeMemory || !dd->BindBufferMemory || !dd->MapMemory) {
     return false;
   }
 

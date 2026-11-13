@@ -149,6 +149,8 @@ extern std::mutex g_map_mutex;
 extern std::mutex g_vulkan_imgui_mutex;
 extern std::unordered_map<void*, InstanceData*> g_instance_map;
 extern std::unordered_map<void*, DeviceData*> g_device_map;
+extern std::vector<InstanceData*> g_instances;
+extern std::vector<DeviceData*> g_devices;
 extern std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainData>> g_swapchain_map;
 extern std::atomic<bool> g_bound_discrete_gpu;
 
