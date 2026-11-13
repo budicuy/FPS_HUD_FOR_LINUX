@@ -565,8 +565,8 @@ FPS_HUD_FOR_LINUX/
 │   ├── core/                            # Config manager, INI parser, native C++26 pack_indexing
 │   ├── experimental-feature/            # Pure 1:1 Adaptive VFR controller & Experimental GUI menu
 │   ├── input/                           # In-process Wayland + X11 hooks & Linux evdev mouse lock
-│   ├── layer/                           # Vulkan Implicit Layer, OpenGL GLX/EGL hooks & glibc_compat.c
-│   ├── recorder/                        # FFmpeg daemon, Instant Replay, PNG writer & recorder_launcher.c
+│   ├── layer/                           # Vulkan Implicit Layer, OpenGL GLX/EGL hooks & glibc_compat.cpp
+│   ├── recorder/                        # FFmpeg daemon, Instant Replay, PNG writer & recorder_launcher.cpp
 │   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
 │   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/

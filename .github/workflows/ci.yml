@@ -36,7 +36,7 @@ jobs:
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
             fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev \
-            libva-dev libdrm-dev upx-ucl \
+            libva-dev libdrm-dev zlib1g-dev upx-ucl \
             mesa-vulkan-drivers vulkan-tools xvfb
 
       - name: Build Minimal Hardware Static FFmpeg (< 4 MB)
@@ -94,6 +94,10 @@ jobs:
               exit 1
             fi
             echo "[✓] Static minimal recorder verified: $REC_SIZE bytes (< 5 MB), 0 dynamic libav dependencies."
+          fi
+          if LC_ALL=C readelf -d build/fpshud_recorder | grep NEEDED | grep "libstdc++"; then
+            echo "::error::Dynamic libstdc++ dependency detected in fpshud_recorder!"
+            exit 1
           fi
 
       - name: Run Multi-Device Simulation & Feature Verification Suite
@@ -195,7 +199,7 @@ jobs:
             $EXTRA_COMPILER build-essential cmake ninja-build pkg-config \
             libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev pci.ids \
             fonts-open-sans ttf-bitstream-vera fonts-dejavu-core python3 \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libpulse-dev
+            libpulse-dev libva-dev libdrm-dev zlib1g-dev
 
       - name: Run Memory Safety & Undefined Behavior Suite (ASan + UBSan)
         run: |

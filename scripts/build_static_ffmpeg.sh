@@ -17,6 +17,13 @@ if [ -f "$OUT_DIR/lib/libavformat.a" ] && [ -f "$OUT_DIR/lib/libavcodec.a" ] && 
     exit 0
 fi
 
+for tool in curl git tar xz sha256sum make; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "[!] ERROR: Utilitas build wajib '$tool' tidak ditemukan di PATH. Harap instal '$tool' terlebih dahulu." >&2
+        exit 1
+    fi
+done
+
 echo "=================================================================="
 echo "  Building Minimal Hardware-Only Static FFmpeg (< 4 MB)"
 echo "  Target Output: $OUT_DIR"
@@ -98,8 +105,9 @@ echo "[*] Configuring ultra-minimal static FFmpeg (Hardware NVENC + VAAPI + MP4 
     --disable-alsa \
     --disable-sndio \
     --disable-libxcb \
-    --extra-cflags="-O3 -fPIC -ffunction-sections -fdata-sections" \
-    --extra-cxxflags="-O3 -fPIC -ffunction-sections -fdata-sections"
+    --enable-small \
+    --extra-cflags="-fPIC -ffunction-sections -fdata-sections" \
+    --extra-cxxflags="-fPIC -ffunction-sections -fdata-sections"
 
 echo "[*] Compiling minimal static FFmpeg with $(nproc) parallel threads..."
 make -j"$(nproc)"

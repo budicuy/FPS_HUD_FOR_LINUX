@@ -565,8 +565,8 @@ FPS_HUD_FOR_LINUX/
 │   ├── core/                            # Pengelola konfigurasi, parser INI, pack_indexing native C++26
 │   ├── experimental-feature/            # Pengendali Pure 1:1 Adaptive VFR & menu GUI Experimental
 │   ├── input/                           # Hook Wayland + X11 in-process & pengunci mouse Linux evdev
-│   ├── layer/                           # Vulkan Implicit Layer, hook OpenGL GLX/EGL & glibc_compat.c
-│   ├── recorder/                        # Daemon FFmpeg, Instant Replay, penulis PNG & recorder_launcher.c
+│   ├── layer/                           # Vulkan Implicit Layer, hook OpenGL GLX/EGL & glibc_compat.cpp
+│   ├── recorder/                        # Daemon FFmpeg, Instant Replay, penulis PNG & recorder_launcher.cpp
 │   ├── telemetry/                       # Telemetri GPU/CPU/Storage/Net multi-vendor & benchmark CSV
 │   └── ui/                              # Menu GUI 3-kolom Dear ImGui, HUD two-tone & font embedded
 └── tests/

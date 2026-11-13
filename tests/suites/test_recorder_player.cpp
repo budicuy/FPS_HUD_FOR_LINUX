@@ -28,6 +28,7 @@ using namespace fpshud;
 TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
   SUBCASE("Hardware Video Encoders & Host Container Probe") {
     fs::path rec_path = find_recorder_bin_path();
+    CHECK_MESSAGE(!rec_path.empty(), "fpshud_recorder_bin must exist on disk");
     if (!rec_path.empty()) {
       // Step 1: Verify Zero dynamic libav dependencies (Single Universal Static Binary < 5 MB)
       std::string readelf_cmd = "LC_ALL=C readelf -d \"" + rec_path.string() + "\" 2>&1";
@@ -233,6 +234,28 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
     CHECK_MESSAGE(va_has_lib64, "Container host LIBVA_DRIVERS_PATH contains lib64");
 
     fs::path launcher_path = find_recorder_launcher_path();
+    CHECK_MESSAGE(!launcher_path.empty(), "fpshud_recorder launcher must exist on disk");
+#if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__) &&        \
+    !(defined(__has_feature) &&                                               \
+      (__has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+       __has_feature(undefined_behavior_sanitizer)))
+    if (!launcher_path.empty()) {
+      std::string readelf_cmd = "LC_ALL=C readelf -d \"" + launcher_path.string() + "\" 2>&1";
+      FILE* re_pipe = popen(readelf_cmd.c_str(), "r");
+      std::string readelf_output;
+      if (re_pipe) {
+        char rbuf[256];
+        while (fgets(rbuf, sizeof(rbuf), re_pipe)) {
+          readelf_output += rbuf;
+        }
+        pclose(re_pipe);
+      }
+      bool has_libstdcxx = (readelf_output.find("libstdc++.so.6") != std::string::npos);
+      CHECK_MESSAGE(!has_libstdcxx,
+                    "fpshud_recorder must not have dynamic libstdc++.so.6 dependency in "
+                    "non-sanitizer builds");
+    }
+#endif
     bool launcher_ok = false;
     std::string launcher_output;
     int launcher_exit = -1;
@@ -254,8 +277,6 @@ TEST_CASE("Recorder: Hardware Encoder & In-Game Player") {
                  launcher_exit == 127 || launcher_exit == -1) {
         launcher_ok = true;
       }
-    } else {
-      launcher_ok = true;
     }
     CHECK_MESSAGE(launcher_ok, "Multiarch launcher --probe-encoders executed successfully");
   }

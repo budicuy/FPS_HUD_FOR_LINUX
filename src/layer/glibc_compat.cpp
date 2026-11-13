@@ -1,7 +1,13 @@
 #if defined(__linux__) && defined(__x86_64__)
 #include <features.h>
 #if defined(__GLIBC__)
-#include <stdarg.h>
+#include <cstdarg>
+#include <cstdint>
+#include <ctime>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+extern "C" {
 
 __asm__(".symver compat_acosf, acosf@GLIBC_2.2.5");
 __asm__(".symver compat_atan2f, atan2f@GLIBC_2.2.5");
@@ -63,29 +69,28 @@ __attribute__((used)) long long __wrap___isoc23_strtoll(const char* nptr, char**
 /* GCC 16's static libstdc++ (random.o, pulled in by std::random_device /
  * std::filesystem temp helpers) references arc4random@GLIBC_2.36. Provide a
  * GLIBC_2.2.5-only replacement backed by the getrandom(2) syscall. */
-#include <stdint.h>
-#include <time.h>
-#include <unistd.h>
-#include <sys/syscall.h>
-
 __attribute__((used)) uint32_t __wrap_arc4random(void) {
   uint32_t val = 0;
 #if defined(SYS_getrandom)
-  if (syscall(SYS_getrandom, &val, sizeof(val), 0) == (long)sizeof(val)) {
+  if (syscall(SYS_getrandom, &val, sizeof(val), 0) == static_cast<long>(sizeof(val))) {
     return val;
   }
 #endif
   /* Fallback for kernels < 3.17 / seccomp-filtered sandboxes: mix clock + pid */
-  struct timespec ts;
+  struct timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  uint64_t x = ((uint64_t)ts.tv_sec * 1000000007ULL) ^ (uint64_t)ts.tv_nsec ^
-               ((uint64_t)getpid() << 32) ^ (uint64_t)(uintptr_t)&val;
+  uint64_t x = (static_cast<uint64_t>(ts.tv_sec) * 1000000007ULL) ^
+               static_cast<uint64_t>(ts.tv_nsec) ^ (static_cast<uint64_t>(getpid()) << 32) ^
+               static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&val));
   x ^= x >> 33;
   x *= 0xff51afd7ed558ccdULL;
   x ^= x >> 33;
   x *= 0xc4ceb9fe1a85ec53ULL;
   x ^= x >> 33;
-  return (uint32_t)x;
+  return static_cast<uint32_t>(x);
 }
+
+}  // extern "C"
+
 #endif
 #endif

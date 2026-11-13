@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(FPSHUD VERSION 1.0.0 LANGUAGES C CXX)
+project(FPSHUD VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -89,8 +89,8 @@ check_symbol_exists(__GLIBC__ "features.h" FPSHUD_IS_GLIBC)
 set(FPSHUD_GLIBC_COMPAT_SOURCES "")
 set(FPSHUD_GLIBC_COMPAT_LINK_OPTS "")
 if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
-    set_source_files_properties(src/layer/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
-    set(FPSHUD_GLIBC_COMPAT_SOURCES src/layer/glibc_compat.c)
+    set_source_files_properties(src/layer/glibc_compat.cpp PROPERTIES COMPILE_OPTIONS "-fno-lto")
+    set(FPSHUD_GLIBC_COMPAT_SOURCES src/layer/glibc_compat.cpp)
     set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
         -Wl,--wrap=acosf
         -Wl,--wrap=atan2f
@@ -249,9 +249,11 @@ FetchContent_MakeAvailable(imgui)
 
 find_package(Vulkan REQUIRED)
 find_path(FPSHUD_GL_INCLUDE_DIR NAMES GL/gl.h REQUIRED)
+find_path(FPSHUD_GLX_INCLUDE_DIR NAMES GL/glx.h REQUIRED)
 find_path(FPSHUD_EGL_INCLUDE_DIR NAMES EGL/egl.h REQUIRED)
+find_path(FPSHUD_X11_INCLUDE_DIR NAMES X11/Xlib.h X11/keysym.h REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 # Automatically generate src/ui/embedded_fonts.hpp if not already present
 if(Python3_Interpreter_FOUND)
@@ -302,7 +304,6 @@ add_library(fpshud_common_obj OBJECT
 set_target_properties(fpshud_common_obj PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden
-    C_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
 
@@ -320,6 +321,10 @@ target_include_directories(fpshud_common_obj PRIVATE
     ${FPSHUD_EXPERIMENTAL_INCLUDES}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
+    ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
 )
 
 add_library(fpshud SHARED
@@ -350,7 +355,9 @@ target_include_directories(fpshud PRIVATE
     ${imgui_SOURCE_DIR}/backends
     ${Vulkan_INCLUDE_DIRS}
     ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
     ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
 )
 
 target_compile_definitions(fpshud PRIVATE
@@ -372,7 +379,6 @@ target_link_options(fpshud PRIVATE
 # Hide internal symbols except exported Vulkan Layer & OpenGL hook entrypoints
 set_target_properties(fpshud PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-    C_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
     PREFIX "lib"
     OUTPUT_NAME "fpshud"
@@ -407,6 +413,10 @@ target_include_directories(fpshud_test PRIVATE
     ${FPSHUD_EXPERIMENTAL_INCLUDES}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
+    ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
 )
 
 target_link_libraries(fpshud_test PRIVATE
@@ -447,157 +457,124 @@ if(FPSHUD_CTEST_ENV)
     set_property(TEST fpshud_test PROPERTY ENVIRONMENT ${FPSHUD_CTEST_ENV})
 endif()
 
-# Screen Recorder Helper Daemon (On-Demand)
+# Screen Recorder Helper Daemon (Mandatory Minimal Hardware Static FFmpeg - Opsi A)
 set(FFMPEG_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/ffmpeg_minimal" CACHE PATH "Path to minimal static FFmpeg build")
-set(FPSHUD_STATIC_RECORDER "AUTO" CACHE STRING "Statically link recorder binary with minimal FFmpeg (AUTO/ON/OFF)")
 
-set(BUILD_STATIC_RECORDER FALSE)
-if(FPSHUD_STATIC_RECORDER STREQUAL "ON" OR
-   (FPSHUD_STATIC_RECORDER STREQUAL "AUTO" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswscale.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswresample.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavutil.a"))
-    set(BUILD_STATIC_RECORDER TRUE)
-endif()
+find_package(PkgConfig REQUIRED)
+find_package(ZLIB REQUIRED)
 
-find_package(PkgConfig QUIET)
-if (PKG_CONFIG_FOUND)
-    pkg_check_modules(AVFORMAT IMPORTED_TARGET libavformat)
-    pkg_check_modules(AVCODEC IMPORTED_TARGET libavcodec)
-    pkg_check_modules(AVUTIL IMPORTED_TARGET libavutil)
-    pkg_check_modules(SWSCALE IMPORTED_TARGET libswscale)
-    pkg_check_modules(SWRESAMPLE IMPORTED_TARGET libswresample)
-    pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
-    pkg_check_modules(LIBVA IMPORTED_TARGET libva)
-    pkg_check_modules(LIBVA_DRM IMPORTED_TARGET libva-drm)
-    pkg_check_modules(LIBDRM IMPORTED_TARGET libdrm)
-endif()
+pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
+pkg_check_modules(LIBVA REQUIRED IMPORTED_TARGET libva)
+pkg_check_modules(LIBVA_DRM REQUIRED IMPORTED_TARGET libva-drm)
+pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
 
-if (BUILD_STATIC_RECORDER)
-    add_executable(fpshud_recorder_bin
-        src/recorder/recorder_main.cpp
-        src/recorder/recorder_player.cpp
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-
-    target_compile_definitions(fpshud_recorder_bin PRIVATE
-        FPSHUD_RECORDER_DAEMON=1
-    )
-
-    target_include_directories(fpshud_recorder_bin PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-        ${FFMPEG_MINIMAL_DIR}/include
-    )
-
-    target_compile_options(fpshud_recorder_bin PRIVATE
-        -ffunction-sections
-        -fdata-sections
-    )
-
-    target_link_libraries(fpshud_recorder_bin PRIVATE
-        ${FFMPEG_MINIMAL_DIR}/lib/libavformat.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libswscale.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libswresample.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libavutil.a
-        $<$<TARGET_EXISTS:PkgConfig::PULSE>:PkgConfig::PULSE>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::PULSE>>:pulse>
-        $<$<TARGET_EXISTS:PkgConfig::LIBVA>:PkgConfig::LIBVA>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA>>:va>
-        $<$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>:PkgConfig::LIBVA_DRM>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>>:va-drm>
-        $<$<TARGET_EXISTS:PkgConfig::LIBDRM>:PkgConfig::LIBDRM>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBDRM>>:drm>
-        z
-        m
-        Threads::Threads
-        ${CMAKE_DL_LIBS}
-    )
-
-    target_link_options(fpshud_recorder_bin PRIVATE
-        -Wl,--gc-sections
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-    if(NOT USE_SANITIZERS)
-        target_link_options(fpshud_recorder_bin PRIVATE
-            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
-            -static-libgcc
+set(FFMPEG_LIBS_FOUND FALSE)
+if(EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswscale.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswresample.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavutil.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/include/libavformat/avformat.h")
+    find_program(NM_EXE NAMES nm llvm-nm)
+    if(NM_EXE)
+        execute_process(
+            COMMAND ${NM_EXE} "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a"
+            COMMAND grep -q "ff_mov_demuxer"
+            RESULT_VARIABLE NM_RES
         )
+        if(NM_RES EQUAL 0)
+            set(FFMPEG_LIBS_FOUND TRUE)
+        endif()
+    else()
+        set(FFMPEG_LIBS_FOUND TRUE)
     endif()
-
-    # Universal lightweight container-aware launcher
-    add_executable(fpshud_recorder
-        src/recorder/recorder_launcher.c
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-    target_link_libraries(fpshud_recorder PRIVATE
-        ${CMAKE_DL_LIBS}
-        m
-    )
-    target_link_options(fpshud_recorder PRIVATE
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    message(STATUS "Screen Recorder: ENABLED [Minimal Hardware Static FFmpeg < 5 MB] (fpshud_recorder & fpshud_recorder_bin)")
-elseif (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
-        TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
-    add_executable(fpshud_recorder_bin
-        src/recorder/recorder_main.cpp
-        src/recorder/recorder_player.cpp
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-
-    target_compile_definitions(fpshud_recorder_bin PRIVATE
-        FPSHUD_RECORDER_DAEMON=1
-    )
-
-    target_include_directories(fpshud_recorder_bin PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-    )
-
-    target_link_libraries(fpshud_recorder_bin PRIVATE
-        PkgConfig::AVFORMAT
-        PkgConfig::AVCODEC
-        PkgConfig::AVUTIL
-        PkgConfig::SWSCALE
-        PkgConfig::SWRESAMPLE
-        PkgConfig::PULSE
-        Threads::Threads
-        ${CMAKE_DL_LIBS}
-    )
-
-    set_target_properties(fpshud_recorder_bin PROPERTIES
-        BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
-        INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
-    )
-    target_link_options(fpshud_recorder_bin PRIVATE
-        "-Wl,--disable-new-dtags"
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    # Universal lightweight container-aware launcher
-    add_executable(fpshud_recorder
-        src/recorder/recorder_launcher.c
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-    target_link_libraries(fpshud_recorder PRIVATE
-        ${CMAKE_DL_LIBS}
-        m
-    )
-    target_link_options(fpshud_recorder PRIVATE
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    message(STATUS "Screen Recorder: ENABLED [Dynamic System FFmpeg] (fpshud_recorder & fpshud_recorder_bin will be built)")
-else()
-    message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse not found)")
 endif()
+
+if(NOT FFMPEG_LIBS_FOUND)
+    message(STATUS "Building minimal static FFmpeg dependency via scripts/build_static_ffmpeg.sh...")
+    execute_process(
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_static_ffmpeg.sh" "${FFMPEG_MINIMAL_DIR}"
+        RESULT_VARIABLE FFMPEG_BUILD_RES
+    )
+    if(NOT FFMPEG_BUILD_RES EQUAL 0)
+        message(FATAL_ERROR "Failed to build minimal static FFmpeg! Check output above.")
+    endif()
+endif()
+
+add_executable(fpshud_recorder_bin
+    src/recorder/recorder_main.cpp
+    src/recorder/recorder_player.cpp
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
+)
+
+target_compile_definitions(fpshud_recorder_bin PRIVATE
+    FPSHUD_RECORDER_DAEMON=1
+)
+
+target_include_directories(fpshud_recorder_bin PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${FFMPEG_MINIMAL_DIR}/include
+)
+
+target_compile_options(fpshud_recorder_bin PRIVATE
+    -ffunction-sections
+    -fdata-sections
+)
+
+target_link_libraries(fpshud_recorder_bin PRIVATE
+    ${FFMPEG_MINIMAL_DIR}/lib/libavformat.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libswscale.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libswresample.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libavutil.a
+    PkgConfig::PULSE
+    PkgConfig::LIBVA
+    PkgConfig::LIBVA_DRM
+    PkgConfig::LIBDRM
+    ZLIB::ZLIB
+    m
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+)
+
+target_link_options(fpshud_recorder_bin PRIVATE
+    -Wl,--gc-sections
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+)
+if(NOT USE_SANITIZERS)
+    target_link_options(fpshud_recorder_bin PRIVATE
+        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+        -static-libgcc
+    )
+endif()
+
+# Universal lightweight container-aware launcher
+add_executable(fpshud_recorder
+    src/recorder/recorder_launcher.cpp
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
+)
+target_include_directories(fpshud_recorder PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+target_link_libraries(fpshud_recorder PRIVATE
+    ${CMAKE_DL_LIBS}
+    m
+)
+target_link_options(fpshud_recorder PRIVATE
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+)
+if(NOT USE_SANITIZERS)
+    target_link_options(fpshud_recorder PRIVATE
+        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+        -static-libgcc
+    )
+endif()
+
+message(STATUS "Screen Recorder: ENABLED [Minimal Hardware Static FFmpeg < 5 MB] (fpshud_recorder & fpshud_recorder_bin)")
 
 # Generate Vulkan Implicit Layer JSON manifest with absolute path to libfpshud.so
 set(FPSHUD_LIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/libfpshud.so")
@@ -645,17 +622,11 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_core.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_hardware.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_analytics.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_layer_abi.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_recorder_player.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_input.cpp
     )
     add_custom_target(clang-tidy
         COMMAND ${CLANG_TIDY_EXE}
@@ -715,7 +686,7 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_playback_protocol.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.cpp
@@ -727,7 +698,7 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_common.hpp
