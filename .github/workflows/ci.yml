@@ -20,17 +20,35 @@ jobs:
       CXX: clang++
       AR: llvm-ar
       RANLIB: llvm-ranlib
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
     steps:
       - name: Install Toolchain & Build Dependencies (Arch Linux)
         run: |
           pacman -Syu --noconfirm --needed \
-            clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
+            clang lld llvm compiler-rt ccache cmake ninja pkgconf git curl python tar xz zlib \
             vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
-            shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
+            libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Cache Minimal Static FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg_minimal
+          key: ffmpeg-minimal-${{ runner.arch }}-${{ hashFiles('scripts/build_static_ffmpeg.sh') }}
+
+      - name: Cache Compiler Cache (ccache)
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-release-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-release-${{ runner.arch }}-
 
       - name: Configure, Lint, Build & Test (Pure Clang Release + LLD)
         run: |
@@ -110,17 +128,35 @@ jobs:
       CXX: clang++
       AR: llvm-ar
       RANLIB: llvm-ranlib
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
     steps:
       - name: Install Toolchain & Dependencies for Sanitizers (Arch Linux)
         run: |
           pacman -Syu --noconfirm --needed \
-            clang lld llvm compiler-rt cmake ninja pkgconf git curl python tar xz zlib \
-            vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
-            shaderc glslang libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
+            clang lld llvm compiler-rt ccache cmake ninja pkgconf git curl python tar xz zlib \
+            vulkan-headers vulkan-icd-loader \
+            libx11 libglvnd libdrm libpulse libva wayland wayland-protocols ffmpeg
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Cache Minimal Static FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg_minimal
+          key: ffmpeg-minimal-${{ runner.arch }}-${{ hashFiles('scripts/build_static_ffmpeg.sh') }}
+
+      - name: Cache Compiler Cache (ccache)
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-sanitizers-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-sanitizers-${{ runner.arch }}-
 
       - name: Run Address, Leak & Undefined Behavior Sanitizers (ASan + LSan + UBSan)
         run: |

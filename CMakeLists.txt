@@ -583,15 +583,37 @@ if(CLANG_TIDY_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
     )
-    add_custom_target(clang-tidy
-        COMMAND ${CLANG_TIDY_EXE}
-            -p ${CMAKE_CURRENT_BINARY_DIR}
-            ${SRC_FILES_FOR_TIDY}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Running clang-tidy static analysis on src/..."
-        VERBATIM
-    )
-    message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
+    find_program(RUN_CLANG_TIDY_EXE NAMES run-clang-tidy run-clang-tidy-23 run-clang-tidy-20)
+    if(RUN_CLANG_TIDY_EXE)
+        include(ProcessorCount)
+        ProcessorCount(FPSHUD_TIDY_JOBS)
+        if(FPSHUD_TIDY_JOBS EQUAL 0)
+            set(FPSHUD_TIDY_JOBS 4)
+        endif()
+        string(REGEX REPLACE "([.+*?^$()\\[\\]{}|\\\\])" "\\\\\\1" FPSHUD_TIDY_SRC_REGEX "${CMAKE_CURRENT_SOURCE_DIR}/src/")
+        add_custom_target(clang-tidy
+            COMMAND ${RUN_CLANG_TIDY_EXE}
+                -p ${CMAKE_CURRENT_BINARY_DIR}
+                -clang-tidy-binary ${CLANG_TIDY_EXE}
+                -j ${FPSHUD_TIDY_JOBS}
+                -quiet
+                "^${FPSHUD_TIDY_SRC_REGEX}"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Running parallel clang-tidy (${FPSHUD_TIDY_JOBS} threads) on src/..."
+            VERBATIM
+        )
+        message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy', parallel via run-clang-tidy)")
+    else()
+        add_custom_target(clang-tidy
+            COMMAND ${CLANG_TIDY_EXE}
+                -p ${CMAKE_CURRENT_BINARY_DIR}
+                ${SRC_FILES_FOR_TIDY}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Running clang-tidy static analysis on src/..."
+            VERBATIM
+        )
+        message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
+    endif()
 endif()
 
 # Automated Code Formatting with clang-format (Google Style)
