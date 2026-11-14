@@ -1,6 +1,8 @@
 # Build directories
 build/
 build_asan/
+build_tsan/
+build_debug/
 cmake-build-*/
 out/
 
@@ -27,6 +29,10 @@ compile_commands.json
 *.swp
 *~
 .DS_Store
+
+# Sockets
+*.sock
+*_sock
 
 # Benchmark CSV outputs in workspace
 *.csv

@@ -166,7 +166,36 @@ sha256sum -c fpshud-linux-x86_64.tar.gz.sha256
 # 3. Ekstrak pustaka dan biner ke folder pengguna (~/.local):
 mkdir -p ~/.local/lib/fpshud ~/.local/bin ~/.local/share/vulkan/implicit_layer.d
 tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
-ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
+cp -f ~/.local/lib/fpshud/fpshud ~/.local/bin/fpshud
+cp -f ~/.local/lib/fpshud/fpshud_recorder ~/.local/bin/fpshud_recorder 2>/dev/null || true
+cp -f ~/.local/lib/fpshud/fpshud_recorder_bin ~/.local/bin/fpshud_recorder_bin 2>/dev/null || true
+chmod 755 ~/.local/bin/fpshud* ~/.local/lib/fpshud/libfpshud.so
+
+# 4. Hasilkan berkas manifes Vulkan implicit layer:
+cat > ~/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json << EOF
+{
+    "file_format_version": "1.2.1",
+    "layer": {
+        "name": "VK_LAYER_FPSHUD_overlay",
+        "type": "GLOBAL",
+        "library_path": "$HOME/.local/lib/fpshud/libfpshud.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "FPSHUD Minimalist Performance Overlay Layer",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion",
+            "vkGetInstanceProcAddr": "vkGetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "vkGetDeviceProcAddr"
+        },
+        "enable_environment": {
+            "FPS_HUD": "1"
+        },
+        "disable_environment": {
+            "DISABLE_FPS_HUD": "1"
+        }
+    }
+}
+EOF
 ```
 
 ### Izin Akses Perangkat Keras, Transparansi `sudo` & Model Keamanan
@@ -462,7 +491,7 @@ Untuk transparansi penuh tanpa spekulasi, beban overhead FPSHUD diuji secara ter
 > **Ringkasan Konsumsi Sumber Daya**
 > - **Rentang Penggunaan CPU:** **0,01% – 0,05% dari 1 core CPU** saat bermain game pada 60 FPS (**0,03% – 0,11% @ 144 FPS**); thread telemetri hardware menambah **~0,045% dari 1 core**. Beban terhadap total prosesor multi-core adalah **< 0,01% dari total kapasitas CPU**.
 > - **Rentang Pemakaian Memori (RAM):** **~4,5 MB** memori internal & font atlas (**~17 MB** total VmRSS proses terisolasi), dengan **0 byte/frame** alokasi heap saat gameplay berjalan.
-> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite simulasi pengujian otomatis 99-check (`./build/fpshud_test 1`). Kontribusi hasil pengujian pada perangkat keras AMD dan Intel Arc dapat dikirimkan melalui issues atau pull requests.
+> - **Transparansi Perangkat Uji:** Tolok ukur empiris langsung di atas diukur pada sistem uji referensi Linux kami (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). Implementasi telemetri AMD Radeon (`amdgpu`/`hwmon`) dan Intel Arc (`i915`/`xe`/Level Zero) divalidasi menggunakan suite modular pengujian otomatis doctest (`./build/fpshud_test`). Kontribusi hasil pengujian pada perangkat keras AMD dan Intel Arc dapat dikirimkan melalui issues atau pull requests.
 
 ---
 
@@ -476,7 +505,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 | Kebutuhan | Versi Minimum / Spesifikasi | Fungsi |
 | :--- | :--- | :--- |
-| **Kompiler C++** | **Clang 19+** (Direkomendasikan Clang 23) atau **GCC 15+** | Implementasi murni native ISO C++26 (`-std=c++26`) |
+| **Kompiler C++** | **Clang 19+** (Direkomendasikan Clang 23) | Implementasi murni native ISO C++26 (`-std=c++26`) |
 | **Sistem Build** | **CMake >= 3.25** & **Ninja** | Orkestrasi kompilasi multi-threaded cepat |
 | **Linker** | **LLD (`lld`)** | Fast linking dengan optimasi ThinLTO (`-flto=thin`) |
 | **API Grafis** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Intersepsi swapchain presentasi frame |
@@ -487,7 +516,7 @@ Untuk mengompilasi FPSHUD dari kode sumber, pastikan lingkungan Anda memenuhi sp
 
 > [!NOTE]
 > **Arsitektur ISO C++26**
-> - **Dukungan Standar Library Native:** Menggunakan murni native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) dan Pack Indexing bahasa (`Types...[N]` dan `args...[N]`), membutuhkan Clang 19+ atau GCC 15+.
+> - **Dukungan Standar Library Native:** Menggunakan murni native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) dan Pack Indexing bahasa (`Types...[N]` dan `args...[N]`), membutuhkan Clang 19+ (Direkomendasikan Clang 23).
 > - **Nol Polyfill & Shim:** Bebas dari polyfill atau fallback standar lama. Ditegakkan melalui gerbang `FATAL_ERROR` CMake untuk menjamin standar bahasa modern dan verifikasi waktu kompilasi yang ketat.
 > - **Mengapa C++26?** Menjamin nol alokasi heap (*zero-heap churn*) di loop render per frame melalui penyimpanan vektor inline dan ekspansi pack saat kompilasi.
 
@@ -499,8 +528,8 @@ cd FPS_HUD_FOR_LINUX
 # 1. Kompilasi Performa Ekstrem dengan Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Jalankan 99 pengujian otomatis pada 5 profil perangkat + pengujian ketahanan memori:
-./build/fpshud_test 1
+# 2. Jalankan rangkaian pengujian otomatis modular doctest pada profil perangkat, verifikasi ABI, dan ketahanan memori:
+./build/fpshud_test
 
 # 3. (Opsional) Instal build lokal langsung ke ~/.local (offline / tanpa download):
 ./scripts/install.sh
@@ -536,12 +565,15 @@ FPS_HUD_FOR_LINUX/
 │   ├── core/                            # Pengelola konfigurasi, parser INI, pack_indexing native C++26
 │   ├── experimental-feature/            # Pengendali Pure 1:1 Adaptive VFR & menu GUI Experimental
 │   ├── input/                           # Hook Wayland + X11 in-process & pengunci mouse Linux evdev
-│   ├── layer/                           # Vulkan Implicit Layer, hook OpenGL GLX/EGL & glibc_compat.c
-│   ├── recorder/                        # Daemon FFmpeg, Instant Replay, penulis PNG & recorder_launcher.c
+│   ├── layer/                           # Vulkan Implicit Layer, hook OpenGL GLX/EGL & glibc_compat.cpp
+│   ├── recorder/                        # Daemon FFmpeg, Instant Replay, penulis PNG & recorder_launcher.cpp
 │   ├── telemetry/                       # Telemetri GPU/CPU/Storage/Net multi-vendor & benchmark CSV
 │   └── ui/                              # Menu GUI 3-kolom Dear ImGui, HUD two-tone & font embedded
 └── tests/
-    └── test_cli.cpp                     # Suite pengujian 99-check simulasi 5-perangkat, sensor probe & memori
+    ├── test_main.cpp                    # Entrypoint doctest, CLI filter & dispatcher flag probe
+    ├── test_common.hpp                  # RAII ScopedTempDir, binary locator & shim doctest
+    ├── suites/                          # Suite pengujian modular (core, telemetri, layer ABI, recorder, input)
+    └── tools/                           # Tool CLI diagnostik sensor probe hardware
 ```
 
 ---
@@ -567,7 +599,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Kontribusi, Kredit & Lisensi
 
 ### Kontribusi
-Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh 99 pengujian multi-perangkat dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test 1`.
+Kontribusi kode, laporan kendala (*Issues*), maupun masukan pengujian di berbagai perangkat sangat disambut! Sebelum mengirimkan *Pull Request*, pastikan seluruh rangkaian pengujian modular doctest dan pengujian ketahanan memori lulus (`PASS`) dengan menjalankan `./build/fpshud_test`.
 
 ### Kredit & Penghargaan
 - **[Dear ImGui](https://github.com/ocornut/imgui)** oleh Omar Cornut — Pustaka antarmuka grafis *Immediate Mode* yang menjadi fondasi tampilan HUD dan menu interaktif.

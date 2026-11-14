@@ -5,131 +5,14 @@
 
 #include "imgui.h"
 
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-#ifdef None
-#undef None
-#endif
-#include <dlfcn.h>
-#include <fcntl.h>
 #include <linux/input.h>
-#include <pthread.h>
-#include <sys/ioctl.h>
-#include <sys/resource.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cfloat>
-#include <cstring>
-#include <filesystem>
-
-namespace fs = std::filesystem;
 
 namespace fpshud {
 
-// ----------------------------------------------------------------------------
-// Pure Dynamic Wayland Client API Definitions (Zero DT_NEEDED)
-// ----------------------------------------------------------------------------
-struct wl_display;
-struct wl_event_queue;
-struct wl_proxy;
-struct wl_registry;
-struct wl_seat;
-struct wl_keyboard;
-struct wl_pointer;
-struct wl_surface;
-struct wl_array;
-
-struct wl_interface {
-  const char* name;
-  int version;
-  int method_count;
-  const void* methods;
-  int event_count;
-  const void* events;
-};
-
-struct wl_registry_listener {
-  void (*global)(void* data, struct wl_registry* registry, uint32_t name, const char* interface,
-                 uint32_t version);
-  void (*global_remove)(void* data, struct wl_registry* registry, uint32_t name);
-};
-
-struct wl_seat_listener {
-  void (*capabilities)(void* data, struct wl_seat* seat, uint32_t capabilities);
-  void (*name)(void* data, struct wl_seat* seat, const char* name);
-};
-
-struct wl_keyboard_listener {
-  void (*keymap)(void* data, struct wl_keyboard* keyboard, uint32_t format, int32_t fd,
-                 uint32_t size);
-  void (*enter)(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                struct wl_surface* surface, struct wl_array* keys);
-  void (*leave)(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                struct wl_surface* surface);
-  void (*key)(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time,
-              uint32_t key, uint32_t state);
-  void (*modifiers)(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                    uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked,
-                    uint32_t group);
-  void (*repeat_info)(void* data, struct wl_keyboard* keyboard, int32_t rate, int32_t delay);
-};
-
-struct wl_pointer_listener {
-  void (*enter)(void* data, struct wl_pointer* pointer, uint32_t serial, struct wl_surface* surface,
-                int32_t sx, int32_t sy);
-  void (*leave)(void* data, struct wl_pointer* pointer, uint32_t serial,
-                struct wl_surface* surface);
-  void (*motion)(void* data, struct wl_pointer* pointer, uint32_t time, int32_t sx, int32_t sy);
-  void (*button)(void* data, struct wl_pointer* pointer, uint32_t serial, uint32_t time,
-                 uint32_t button, uint32_t state);
-  void (*axis)(void* data, struct wl_pointer* pointer, uint32_t time, uint32_t axis, int32_t value);
-  void (*frame)(void* data, struct wl_pointer* pointer);
-  void (*axis_source)(void* data, struct wl_pointer* pointer, uint32_t axis_source);
-  void (*axis_stop)(void* data, struct wl_pointer* pointer, uint32_t time, uint32_t axis);
-  void (*axis_discrete)(void* data, struct wl_pointer* pointer, uint32_t axis, int32_t discrete);
-  void (*axis_value120)(void* data, struct wl_pointer* pointer, uint32_t axis, int32_t value120);
-  void (*axis_relative_direction)(void* data, struct wl_pointer* pointer, uint32_t axis,
-                                  uint32_t direction);
-};
-
-struct WaylandClientApi {
-  using PFN_create_queue = struct wl_event_queue* (*)(struct wl_display*);
-  using PFN_destroy_queue = void (*)(struct wl_event_queue*);
-  using PFN_roundtrip_queue = int (*)(struct wl_display*, struct wl_event_queue*);
-  using PFN_dispatch_queue_pending = int (*)(struct wl_display*, struct wl_event_queue*);
-  using PFN_proxy_set_queue = void (*)(struct wl_proxy*, struct wl_event_queue*);
-  using PFN_proxy_destroy = void (*)(struct wl_proxy*);
-  using PFN_proxy_add_listener = int (*)(struct wl_proxy*, void (**)(void), void*);
-  using PFN_proxy_marshal_constructor = struct wl_proxy* (*)(struct wl_proxy*, uint32_t,
-                                                             const struct wl_interface*, ...);
-  using PFN_proxy_marshal_constructor_versioned = struct wl_proxy* (*)(struct wl_proxy*, uint32_t,
-                                                                       const struct wl_interface*,
-                                                                       uint32_t, ...);
-
-  PFN_create_queue fn_display_create_queue = nullptr;
-  PFN_destroy_queue fn_event_queue_destroy = nullptr;
-  PFN_roundtrip_queue fn_display_roundtrip_queue = nullptr;
-  PFN_dispatch_queue_pending fn_display_dispatch_queue_pending = nullptr;
-  PFN_proxy_set_queue fn_proxy_set_queue = nullptr;
-  PFN_proxy_destroy fn_proxy_destroy = nullptr;
-  PFN_proxy_add_listener fn_proxy_add_listener = nullptr;
-  PFN_proxy_marshal_constructor fn_marshal_constructor = nullptr;
-  PFN_proxy_marshal_constructor_versioned fn_marshal_versioned = nullptr;
-
-  const struct wl_interface* registry_interface = nullptr;
-  const struct wl_interface* seat_interface = nullptr;
-  const struct wl_interface* keyboard_interface = nullptr;
-  const struct wl_interface* pointer_interface = nullptr;
-};
-
-static WaylandClientApi g_wl;
-
 namespace {
-
-bool test_bit(int bit, const unsigned long* array) {
-  return (array[bit / (sizeof(unsigned long) * 8)] >> (bit % (sizeof(unsigned long) * 8))) & 1;
-}
 
 void release_imgui_inputs(ImGuiIO& io) {
   io.MouseDrawCursor = false;
@@ -138,7 +21,9 @@ void release_imgui_inputs(ImGuiIO& io) {
   io.AddMouseButtonEvent(2, false);
   io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
   io.ClearInputKeys();
-  io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags =
+      static_cast<ImGuiConfigFlags>(static_cast<uint32_t>(io.ConfigFlags) &
+                                    ~static_cast<uint32_t>(ImGuiConfigFlags_NavEnableKeyboard));
 }
 
 bool is_gui_toggle_key(unsigned int code, int mode) {
@@ -231,222 +116,35 @@ bool matches_keybind(uint32_t code, const Keybind& kb, const std::bitset<512>& k
            keys_down.test(KEY_LEFTMETA) || keys_down.test(KEY_RIGHTMETA));
 }
 
-namespace {
-
-// Forward-declared listener callback trampolines
-void wl_reg_global(void* data, struct wl_registry* registry, uint32_t name, const char* interface,
-                   uint32_t version);
-void wl_reg_global_remove(void* data, struct wl_registry* registry, uint32_t name);
-
-void wl_seat_caps(void* data, struct wl_seat* seat, uint32_t capabilities);
-void wl_seat_name(void* data, struct wl_seat* seat, const char* name);
-
-void wl_kbd_keymap(void* data, struct wl_keyboard* keyboard, uint32_t format, int32_t fd,
-                   uint32_t size);
-void wl_kbd_enter(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                  struct wl_surface* surface, struct wl_array* keys);
-void wl_kbd_leave(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                  struct wl_surface* surface);
-void wl_kbd_key(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time,
-                uint32_t key, uint32_t state);
-void wl_kbd_modifiers(void* data, struct wl_keyboard* keyboard, uint32_t serial,
-                      uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked,
-                      uint32_t group);
-void wl_kbd_repeat_info(void* data, struct wl_keyboard* keyboard, int32_t rate, int32_t delay);
-
-void wl_ptr_enter(void* data, struct wl_pointer* pointer, uint32_t serial,
-                  struct wl_surface* surface, int32_t sx, int32_t sy);
-void wl_ptr_leave(void* data, struct wl_pointer* pointer, uint32_t serial,
-                  struct wl_surface* surface);
-void wl_ptr_motion(void* data, struct wl_pointer* pointer, uint32_t time, int32_t sx, int32_t sy);
-void wl_ptr_button(void* data, struct wl_pointer* pointer, uint32_t serial, uint32_t time,
-                   uint32_t button, uint32_t state);
-void wl_ptr_axis(void* data, struct wl_pointer* pointer, uint32_t time, uint32_t axis,
-                 int32_t value);
-void wl_ptr_frame(void* data, struct wl_pointer* pointer);
-void wl_ptr_axis_source(void* data, struct wl_pointer* pointer, uint32_t axis_source);
-void wl_ptr_axis_stop(void* data, struct wl_pointer* pointer, uint32_t time, uint32_t axis);
-void wl_ptr_axis_discrete(void* data, struct wl_pointer* pointer, uint32_t axis, int32_t discrete);
-void wl_ptr_axis_value120(void* data, struct wl_pointer* pointer, uint32_t axis, int32_t value120);
-void wl_ptr_axis_relative_direction(void* data, struct wl_pointer* pointer, uint32_t axis,
-                                    uint32_t direction);
-
-struct wl_registry_listener g_registry_listener = {
-    wl_reg_global,
-    wl_reg_global_remove,
-};
-
-struct wl_seat_listener g_seat_listener = {
-    wl_seat_caps,
-    wl_seat_name,
-};
-
-struct wl_keyboard_listener g_keyboard_listener = {
-    wl_kbd_keymap, wl_kbd_enter, wl_kbd_leave, wl_kbd_key, wl_kbd_modifiers, wl_kbd_repeat_info,
-};
-
-struct wl_pointer_listener g_pointer_listener = {
-    wl_ptr_enter,
-    wl_ptr_leave,
-    wl_ptr_motion,
-    wl_ptr_button,
-    wl_ptr_axis,
-    wl_ptr_frame,
-    wl_ptr_axis_source,
-    wl_ptr_axis_stop,
-    wl_ptr_axis_discrete,
-    wl_ptr_axis_value120,
-    wl_ptr_axis_relative_direction,
-};
-
-}  // namespace
+InputManager::InputManager()
+    : evdev_backend_(std::make_unique<EvdevBackend>()),
+      wayland_backend_(std::make_unique<WaylandBackend>()),
+      x11_backend_(std::make_unique<X11Backend>()) {
+  wayland_backend_->set_input_manager(this);
+}
 
 InputManager::~InputManager() {
   set_mouse_grab(false);
-  close_evdev_devices();
-  stop_x11_worker();
-  {
-    std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-    teardown_wayland_locked();
-    if (wayland_lib_) {
-      dlclose(wayland_lib_);
-      wayland_lib_ = nullptr;
-    }
-  }
-  {
-    std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
-    if (x11_display_ && fn_xclose_display_) {
-      fn_xclose_display_(x11_display_);
-      x11_display_ = nullptr;
-    }
-  }
-  if (x11_lib_) {
-    dlclose(x11_lib_);
-    x11_lib_ = nullptr;
-  }
+  set_x11_grab(false);
+  if (evdev_backend_) evdev_backend_->shutdown();
+  if (wayland_backend_) wayland_backend_->shutdown();
+  if (x11_backend_) x11_backend_->shutdown();
 }
 
 bool InputManager::has_wayland_display() const noexcept {
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  return wayland_attached_;
-}
-
-void InputManager::init_wayland_client_api() noexcept {
-  if (wayland_attempted_) return;
-  wayland_attempted_ = true;
-
-  wayland_lib_ = dlopen("libwayland-client.so.0", RTLD_LAZY | RTLD_LOCAL);
-  if (!wayland_lib_) {
-    wayland_lib_ = dlopen("libwayland-client.so", RTLD_LAZY | RTLD_LOCAL);
-  }
-  if (!wayland_lib_) return;
-
-  g_wl.fn_display_create_queue = reinterpret_cast<WaylandClientApi::PFN_create_queue>(
-      dlsym(wayland_lib_, "wl_display_create_queue"));
-  g_wl.fn_event_queue_destroy = reinterpret_cast<WaylandClientApi::PFN_destroy_queue>(
-      dlsym(wayland_lib_, "wl_event_queue_destroy"));
-  g_wl.fn_display_roundtrip_queue = reinterpret_cast<WaylandClientApi::PFN_roundtrip_queue>(
-      dlsym(wayland_lib_, "wl_display_roundtrip_queue"));
-  g_wl.fn_display_dispatch_queue_pending =
-      reinterpret_cast<WaylandClientApi::PFN_dispatch_queue_pending>(
-          dlsym(wayland_lib_, "wl_display_dispatch_queue_pending"));
-  g_wl.fn_proxy_set_queue = reinterpret_cast<WaylandClientApi::PFN_proxy_set_queue>(
-      dlsym(wayland_lib_, "wl_proxy_set_queue"));
-  g_wl.fn_proxy_destroy = reinterpret_cast<WaylandClientApi::PFN_proxy_destroy>(
-      dlsym(wayland_lib_, "wl_proxy_destroy"));
-  g_wl.fn_proxy_add_listener = reinterpret_cast<WaylandClientApi::PFN_proxy_add_listener>(
-      dlsym(wayland_lib_, "wl_proxy_add_listener"));
-  g_wl.fn_marshal_constructor = reinterpret_cast<WaylandClientApi::PFN_proxy_marshal_constructor>(
-      dlsym(wayland_lib_, "wl_proxy_marshal_constructor"));
-  g_wl.fn_marshal_versioned =
-      reinterpret_cast<WaylandClientApi::PFN_proxy_marshal_constructor_versioned>(
-          dlsym(wayland_lib_, "wl_proxy_marshal_constructor_versioned"));
-
-  g_wl.registry_interface =
-      static_cast<const struct wl_interface*>(dlsym(wayland_lib_, "wl_registry_interface"));
-  g_wl.seat_interface =
-      static_cast<const struct wl_interface*>(dlsym(wayland_lib_, "wl_seat_interface"));
-  g_wl.keyboard_interface =
-      static_cast<const struct wl_interface*>(dlsym(wayland_lib_, "wl_keyboard_interface"));
-  g_wl.pointer_interface =
-      static_cast<const struct wl_interface*>(dlsym(wayland_lib_, "wl_pointer_interface"));
-}
-
-void InputManager::teardown_wayland_locked() noexcept {
-  if (wayland_pointer_ && g_wl.fn_proxy_destroy) {
-    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_pointer_));
-    wayland_pointer_ = nullptr;
-  }
-  if (wayland_keyboard_ && g_wl.fn_proxy_destroy) {
-    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_keyboard_));
-    wayland_keyboard_ = nullptr;
-  }
-  if (wayland_seat_ && g_wl.fn_proxy_destroy) {
-    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_seat_));
-    wayland_seat_ = nullptr;
-  }
-  if (wayland_registry_ && g_wl.fn_proxy_destroy) {
-    g_wl.fn_proxy_destroy(static_cast<struct wl_proxy*>(wayland_registry_));
-    wayland_registry_ = nullptr;
-  }
-  if (wayland_queue_ && g_wl.fn_event_queue_destroy) {
-    g_wl.fn_event_queue_destroy(static_cast<struct wl_event_queue*>(wayland_queue_));
-    wayland_queue_ = nullptr;
-  }
-  wayland_display_ = nullptr;
-  wayland_attached_ = false;
+  return wayland_backend_ ? wayland_backend_->has_display() : false;
 }
 
 void InputManager::attach_wayland_display(void* display) noexcept {
-  if (!display) return;
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (wayland_display_ == display) return;
-
-  teardown_wayland_locked();
-  wayland_display_ = display;
-  wayland_attached_ = true;
-
-  // Mock / dummy pointer for test harness
-  if (display == reinterpret_cast<void*>(0x5678)) {
-    return;
-  }
-
-  init_wayland_client_api();
-  if (!wayland_lib_ || !g_wl.fn_display_create_queue || !g_wl.fn_marshal_constructor ||
-      !g_wl.registry_interface) {
-    return;
-  }
-
-  auto* dpy = static_cast<struct wl_display*>(display);
-  wayland_queue_ = g_wl.fn_display_create_queue(dpy);
-  if (!wayland_queue_) return;
-
-  // Opcode 1 = wl_display.get_registry
-  struct wl_proxy* reg = g_wl.fn_marshal_constructor(reinterpret_cast<struct wl_proxy*>(dpy), 1,
-                                                     g_wl.registry_interface, nullptr);
-  if (!reg) return;
-
-  if (g_wl.fn_proxy_set_queue) {
-    g_wl.fn_proxy_set_queue(reg, static_cast<struct wl_event_queue*>(wayland_queue_));
-  }
-  if (g_wl.fn_proxy_add_listener) {
-    g_wl.fn_proxy_add_listener(reg, reinterpret_cast<void (**)(void)>(&g_registry_listener), this);
-  }
-  wayland_registry_ = reg;
-
-  // Initial roundtrip to discover seat globals and bind keyboard
-  if (g_wl.fn_display_roundtrip_queue) {
-    g_wl.fn_display_roundtrip_queue(dpy, static_cast<struct wl_event_queue*>(wayland_queue_));
-    if (wayland_seat_) {
-      g_wl.fn_display_roundtrip_queue(dpy, static_cast<struct wl_event_queue*>(wayland_queue_));
-    }
+  if (wayland_backend_) {
+    wayland_backend_->attach_display(display, this);
   }
 }
 
 void InputManager::detach_wayland_display(void* display) noexcept {
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (display && wayland_display_ != display) return;
-  teardown_wayland_locked();
+  if (wayland_backend_) {
+    wayland_backend_->detach_display(display);
+  }
 }
 
 void InputManager::start_keybind_capture(KeybindTarget target) noexcept {
@@ -462,6 +160,9 @@ void InputManager::cancel_keybind_capture() noexcept {
 void InputManager::handle_key_event(uint32_t code, bool down, HudConfig& cfg, float display_width,
                                     float display_height, ImGuiIO* io) noexcept {
   if (code < 512) {
+    if (keys_down_.test(code) == down) {
+      return;
+    }
     keys_down_.set(code, down);
   }
   if (code == KEY_LEFTALT || code == KEY_RIGHTALT) {
@@ -621,6 +322,9 @@ void InputManager::handle_pointer_button(uint32_t button, bool down, const HudCo
     btn_idx = 2;
 
   if (btn_idx >= 0) {
+    if (mouse_buttons_[btn_idx] == down) {
+      return;
+    }
     mouse_buttons_[btn_idx] = down;
     if (io && (cfg.gui_open || !down)) {
       io->AddMouseButtonEvent(btn_idx, down);
@@ -640,450 +344,20 @@ void InputManager::handle_pointer_wheel(float x, float y, const HudConfig& cfg,
   }
 }
 
-void InputManager::register_wayland_seat(void* seat, uint32_t id) noexcept {
-  (void)id;
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_) return;
-  wayland_seat_ = seat;
-  if (g_wl.fn_proxy_set_queue) {
-    g_wl.fn_proxy_set_queue(static_cast<struct wl_proxy*>(seat),
-                            static_cast<struct wl_event_queue*>(wayland_queue_));
-  }
-  if (g_wl.fn_proxy_add_listener) {
-    g_wl.fn_proxy_add_listener(static_cast<struct wl_proxy*>(seat),
-                               reinterpret_cast<void (**)(void)>(&g_seat_listener), this);
-  }
-}
-
-void InputManager::register_wayland_keyboard(void* seat) noexcept {
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_ || wayland_keyboard_ || !g_wl.keyboard_interface) return;
-  if (!g_wl.fn_marshal_constructor) return;
-
-  struct wl_proxy* kbd = g_wl.fn_marshal_constructor(static_cast<struct wl_proxy*>(seat), 1,
-                                                     g_wl.keyboard_interface, nullptr);
-  if (!kbd) return;
-
-  if (g_wl.fn_proxy_set_queue) {
-    g_wl.fn_proxy_set_queue(kbd, static_cast<struct wl_event_queue*>(wayland_queue_));
-  }
-  if (g_wl.fn_proxy_add_listener) {
-    g_wl.fn_proxy_add_listener(kbd, reinterpret_cast<void (**)(void)>(&g_keyboard_listener), this);
-  }
-  wayland_keyboard_ = kbd;
-}
-
-void InputManager::register_wayland_pointer(void* seat) noexcept {
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!seat || !wayland_queue_ || wayland_pointer_ || !g_wl.pointer_interface) return;
-  if (!g_wl.fn_marshal_constructor) return;
-
-  struct wl_proxy* ptr = g_wl.fn_marshal_constructor(static_cast<struct wl_proxy*>(seat), 0,
-                                                     g_wl.pointer_interface, nullptr);
-  if (!ptr) return;
-
-  if (g_wl.fn_proxy_set_queue) {
-    g_wl.fn_proxy_set_queue(ptr, static_cast<struct wl_event_queue*>(wayland_queue_));
-  }
-  if (g_wl.fn_proxy_add_listener) {
-    g_wl.fn_proxy_add_listener(ptr, reinterpret_cast<void (**)(void)>(&g_pointer_listener), this);
-  }
-  wayland_pointer_ = ptr;
-}
-
-void InputManager::poll_wayland(ImGuiIO& /*io*/, HudConfig& /*cfg*/, float /*display_width*/,
-                                float /*display_height*/) noexcept {
-  std::lock_guard<std::recursive_mutex> lock(wayland_mutex_);
-  if (!wayland_display_ || !wayland_queue_ || !g_wl.fn_display_dispatch_queue_pending) {
-    return;
-  }
-
-  g_wl.fn_display_dispatch_queue_pending(static_cast<struct wl_display*>(wayland_display_),
-                                         static_cast<struct wl_event_queue*>(wayland_queue_));
-}
-
-namespace {
-
-void wl_reg_global(void* data, struct wl_registry* registry, uint32_t name, const char* interface,
-                   uint32_t version) {
-  auto* self = static_cast<InputManager*>(data);
-  if (!self || !interface) return;
-  if (std::strcmp(interface, "wl_seat") == 0 && g_wl.seat_interface) {
-    uint32_t bind_ver = std::min(version, 7u);
-    struct wl_proxy* seat = nullptr;
-    if (g_wl.fn_marshal_versioned) {
-      seat = g_wl.fn_marshal_versioned(reinterpret_cast<struct wl_proxy*>(registry), 0,
-                                       g_wl.seat_interface, bind_ver, name,
-                                       g_wl.seat_interface->name, bind_ver, nullptr);
-    } else if (g_wl.fn_marshal_constructor) {
-      seat = g_wl.fn_marshal_constructor(reinterpret_cast<struct wl_proxy*>(registry), 0,
-                                         g_wl.seat_interface, name, g_wl.seat_interface->name,
-                                         bind_ver, nullptr);
-    }
-    if (seat) {
-      self->register_wayland_seat(seat, name);
-    }
-  }
-}
-
-void wl_reg_global_remove(void* /*data*/, struct wl_registry* /*registry*/, uint32_t /*name*/) {}
-
-void wl_seat_caps(void* data, struct wl_seat* seat, uint32_t capabilities) {
-  auto* self = static_cast<InputManager*>(data);
-  if (!self || !seat) return;
-  if (capabilities & 1) {
-    self->register_wayland_keyboard(seat);
-  }
-  if (capabilities & 2) {
-    self->register_wayland_pointer(seat);
-  }
-}
-
-void wl_seat_name(void* /*data*/, struct wl_seat* /*seat*/, const char* /*name*/) {}
-
-void wl_kbd_keymap(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*format*/,
-                   int32_t fd, uint32_t /*size*/) {
-  if (fd >= 0) close(fd);
-}
-
-void wl_kbd_enter(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
-                  struct wl_surface* /*surface*/, struct wl_array* /*keys*/) {}
-
-void wl_kbd_leave(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
-                  struct wl_surface* /*surface*/) {}
-
-void wl_kbd_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
-                uint32_t /*time*/, uint32_t key, uint32_t state) {
-  auto* self = static_cast<InputManager*>(data);
-  if (!self) return;
-  // Route key event through handle_key_event
-  HudConfig& cfg = get_mutable_config();
-  self->handle_key_event(key, state == 1, cfg, 0.0f, 0.0f, nullptr);
-}
-
-void wl_kbd_modifiers(void* /*data*/, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/,
-                      uint32_t /*mods_depressed*/, uint32_t /*mods_latched*/,
-                      uint32_t /*mods_locked*/, uint32_t /*group*/) {}
-
-void wl_kbd_repeat_info(void* /*data*/, struct wl_keyboard* /*keyboard*/, int32_t /*rate*/,
-                        int32_t /*delay*/) {}
-
-void wl_ptr_enter(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
-                  struct wl_surface* /*surface*/, int32_t /*sx*/, int32_t /*sy*/) {}
-
-void wl_ptr_leave(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
-                  struct wl_surface* /*surface*/) {}
-
-void wl_ptr_motion(void* data, struct wl_pointer* /*pointer*/, uint32_t /*time*/, int32_t sx,
-                   int32_t sy) {
-  auto* self = static_cast<InputManager*>(data);
-  if (!self) return;
-  float x = static_cast<float>(sx) / 256.0f;
-  float y = static_cast<float>(sy) / 256.0f;
-  self->handle_pointer_motion(x, y, get_global_config(), nullptr);
-}
-
-void wl_ptr_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/,
-                   uint32_t /*time*/, uint32_t button, uint32_t state) {
-  auto* self = static_cast<InputManager*>(data);
-  if (!self) return;
-  self->handle_pointer_button(button, state == 1, get_global_config(), nullptr);
-}
-
-void wl_ptr_axis(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,
-                 uint32_t /*axis*/, int32_t /*value*/) {}
-void wl_ptr_frame(void* /*data*/, struct wl_pointer* /*pointer*/) {}
-void wl_ptr_axis_source(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*axis_source*/) {}
-void wl_ptr_axis_stop(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*time*/,
-                      uint32_t /*axis*/) {}
-void wl_ptr_axis_discrete(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*axis*/,
-                          int32_t /*discrete*/) {}
-void wl_ptr_axis_value120(void* /*data*/, struct wl_pointer* /*pointer*/, uint32_t /*axis*/,
-                          int32_t /*val120*/) {}
-void wl_ptr_axis_relative_direction(void* /*data*/, struct wl_pointer* /*pointer*/,
-                                    uint32_t /*axis*/, uint32_t /*dir*/) {}
-
-}  // namespace
-
-void InputManager::scan_evdev_devices() {
-  close_evdev_devices();
-  std::error_code ec;
-  if (!fs::exists("/dev/input", ec)) return;
-
-  for (const auto& entry : fs::directory_iterator("/dev/input", ec)) {
-    std::string fname = entry.path().filename().string();
-    if (fname.rfind("event", 0) != 0) continue;
-
-    int fd = open(entry.path().c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0) continue;
-
-    unsigned long evbit[(EV_MAX + sizeof(unsigned long) * 8 - 1) / (sizeof(unsigned long) * 8)] = {
-        0};
-    unsigned long relbit[(REL_MAX + sizeof(unsigned long) * 8 - 1) / (sizeof(unsigned long) * 8)] =
-        {0};
-    unsigned long keybit[(KEY_MAX + sizeof(unsigned long) * 8 - 1) / (sizeof(unsigned long) * 8)] =
-        {0};
-
-    if (ioctl(fd, EVIOCGBIT(0, sizeof(evbit)), evbit) >= 0) {
-      bool has_key = test_bit(EV_KEY, evbit);
-      bool has_rel = test_bit(EV_REL, evbit);
-      if (has_rel) ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relbit)), relbit);
-      if (has_key) ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybit)), keybit);
-
-      bool is_mouse_dev = has_rel && test_bit(REL_X, relbit) && test_bit(BTN_LEFT, keybit);
-      if (has_key || has_rel) {
-        evdev_devices_.push_back({fd, is_mouse_dev, false});
-        continue;
-      }
-    }
-    close(fd);
-  }
-}
-
-void InputManager::close_evdev_devices() {
-  for (auto& dev : evdev_devices_) {
-    if (dev.fd >= 0) {
-      if (dev.is_grabbed) {
-        ioctl(dev.fd, EVIOCGRAB, 0);
-        dev.is_grabbed = false;
-      }
-      close(dev.fd);
-    }
-  }
-  evdev_devices_.clear();
+bool InputManager::is_mouse_grabbed() const noexcept {
+  return (evdev_backend_ && evdev_backend_->is_mouse_grabbed()) ||
+         (x11_backend_ && x11_backend_->is_grabbed());
 }
 
 void InputManager::set_mouse_grab(bool grab) {
-  for (auto& dev : evdev_devices_) {
-    if (!dev.is_mouse || dev.fd < 0) continue;
-    if (grab && !dev.is_grabbed) {
-      if (ioctl(dev.fd, EVIOCGRAB, 1) == 0) {
-        dev.is_grabbed = true;
-      }
-    } else if (!grab && dev.is_grabbed) {
-      ioctl(dev.fd, EVIOCGRAB, 0);
-      dev.is_grabbed = false;
-    }
+  if (evdev_backend_) {
+    evdev_backend_->set_grab(grab);
   }
-}
-
-bool InputManager::is_mouse_grabbed() const noexcept {
-  for (const auto& dev : evdev_devices_) {
-    if (dev.is_mouse && dev.is_grabbed) {
-      return true;
-    }
-  }
-  return false;
 }
 
 void InputManager::set_x11_grab(bool grab) {
-  init_x11_fallback();
-  if (!x11_display_ || !x11_lib_) return;
-
-  using PFN_XDefaultRootWindow = Window (*)(Display*);
-  using PFN_XGrabPointer =
-      int (*)(Display*, Window, Bool, unsigned int, int, int, Window, Cursor, Time);
-  using PFN_XUngrabPointer = int (*)(Display*, Time);
-  using PFN_XFlush = int (*)(Display*);
-
-  auto* dpy = static_cast<Display*>(x11_display_);
-  auto fnFlush = reinterpret_cast<PFN_XFlush>(dlsym(x11_lib_, "XFlush"));
-
-  std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
-  if (grab) {
-    auto fnDefaultRoot =
-        reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
-    auto fnGrab = reinterpret_cast<PFN_XGrabPointer>(dlsym(x11_lib_, "XGrabPointer"));
-    if (fnDefaultRoot && fnGrab) {
-      Window root = fnDefaultRoot(dpy);
-      // PointerMotionMask (64) | ButtonPressMask (4) | ButtonReleaseMask (8) = 76
-      // GrabModeAsync (1)
-      fnGrab(dpy, root, False, 76, 1, 1, 0, 0, 0);
-    }
-  } else {
-    auto fnUngrab = reinterpret_cast<PFN_XUngrabPointer>(dlsym(x11_lib_, "XUngrabPointer"));
-    if (fnUngrab) {
-      fnUngrab(dpy, 0);
-    }
-  }
-  if (fnFlush) {
-    fnFlush(dpy);
-  }
-}
-
-void InputManager::poll_evdev(ImGuiIO& io, HudConfig& cfg, float display_width,
-                              float display_height) {
-  struct input_event ev;
-  for (auto& dev : evdev_devices_) {
-    while (read(dev.fd, &ev, sizeof(ev)) == static_cast<ssize_t>(sizeof(ev))) {
-      if (ev.type == EV_KEY) {
-        bool down = (ev.value != 0);
-
-        if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
-          handle_pointer_button(ev.code, down, cfg, &io);
-        } else {
-          handle_key_event(ev.code, down, cfg, display_width, display_height, &io);
-        }
-      } else if (ev.type == EV_REL && cfg.gui_open) {
-        if (ev.code == REL_X) {
-          cursor_x_ = std::clamp(cursor_x_ + static_cast<float>(ev.value), 0.0f, display_width);
-          io.AddMousePosEvent(cursor_x_, cursor_y_);
-        } else if (ev.code == REL_Y) {
-          cursor_y_ = std::clamp(cursor_y_ + static_cast<float>(ev.value), 0.0f, display_height);
-          io.AddMousePosEvent(cursor_x_, cursor_y_);
-        } else if (ev.code == REL_WHEEL) {
-          io.AddMouseWheelEvent(0.0f, static_cast<float>(ev.value));
-        }
-      }
-    }
-  }
-
-  // If ungrab was deferred until mouse button release, complete it now
-  if (pending_ungrab_ && !mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
-    set_mouse_grab(false);
-    set_x11_grab(false);
-    pending_ungrab_ = false;
-  }
-}
-
-void InputManager::init_x11_fallback() {
-  if (x11_attempted_) return;
-  x11_attempted_ = true;
-
-  x11_lib_ = dlopen("libX11.so.6", RTLD_LAZY | RTLD_LOCAL);
-  if (!x11_lib_) return;
-
-  using PFN_XOpenDisplay = Display* (*)(const char*);
-  using PFN_XInitThreads = int (*)();
-  auto fnInitThreads = reinterpret_cast<PFN_XInitThreads>(dlsym(x11_lib_, "XInitThreads"));
-  if (fnInitThreads) {
-    fnInitThreads();
-  }
-
-  auto fnOpen = reinterpret_cast<PFN_XOpenDisplay>(dlsym(x11_lib_, "XOpenDisplay"));
-  fn_xclose_display_ = reinterpret_cast<PFN_XCloseDisplay>(dlsym(x11_lib_, "XCloseDisplay"));
-  fn_xquery_keymap_ = reinterpret_cast<PFN_XQueryKeymap>(dlsym(x11_lib_, "XQueryKeymap"));
-  fn_xdefault_root_ =
-      reinterpret_cast<PFN_XDefaultRootWindow>(dlsym(x11_lib_, "XDefaultRootWindow"));
-  fn_xquery_pointer_ = reinterpret_cast<PFN_XQueryPointer>(dlsym(x11_lib_, "XQueryPointer"));
-
-  if (fnOpen) {
-    x11_display_ = fnOpen(nullptr);
-  }
-
-  if (x11_display_ && fn_xquery_keymap_) {
-    x11_worker_running_.store(true, std::memory_order_release);
-    x11_worker_thread_ = std::thread(&InputManager::x11_worker_loop, this);
-  }
-}
-
-void InputManager::stop_x11_worker() {
-  if (x11_worker_running_.exchange(false, std::memory_order_acq_rel)) {
-    if (x11_worker_thread_.joinable()) {
-      x11_worker_thread_.join();
-    }
-  }
-}
-
-void InputManager::x11_worker_loop() {
-#if defined(__linux__)
-  pthread_setname_np(pthread_self(), "fpshud_x11");
-  setpriority(PRIO_PROCESS, 0, 10);
-#endif
-  while (x11_worker_running_.load(std::memory_order_relaxed)) {
-    if (!x11_display_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      continue;
-    }
-
-    auto* dpy = static_cast<Display*>(x11_display_);
-
-    // 1. Poll keys via background worker thread (zero render thread stalling)
-    if (fn_xquery_keymap_) {
-      char keys[32] = {0};
-      {
-        std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
-        fn_xquery_keymap_(dpy, keys);
-      }
-
-      std::vector<PendingKeyEvent> batch;
-      for (unsigned int xkc = 8; xkc < 256; ++xkc) {
-        bool down = (keys[xkc >> 3] & (1 << (xkc & 7))) != 0;
-        bool prev_down = (prev_x11_keymap_[xkc >> 3] & (1 << (xkc & 7))) != 0;
-        if (down != prev_down) {
-          batch.push_back({xkc - 8, down});
-        }
-      }
-      std::memcpy(prev_x11_keymap_, keys, sizeof(prev_x11_keymap_));
-
-      if (!batch.empty()) {
-        std::lock_guard<std::mutex> lock(x11_event_mutex_);
-        pending_key_events_.insert(pending_key_events_.end(), batch.begin(), batch.end());
-      }
-    }
-
-    // 2. Poll pointer coordinates and mouse buttons if HUD GUI is active
-    if (x11_gui_active_.load(std::memory_order_relaxed) && fn_xdefault_root_ &&
-        fn_xquery_pointer_) {
-      Window root = 0;
-      Window ret_root = 0, ret_child = 0;
-      int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
-      unsigned int mask = 0;
-      int ok = 0;
-      {
-        std::lock_guard<std::mutex> dpy_lock(x11_dpy_mutex_);
-        root = fn_xdefault_root_(dpy);
-        ok = fn_xquery_pointer_(dpy, root, &ret_root, &ret_child, &root_x, &root_y, &win_x, &win_y,
-                                &mask);
-      }
-      if (ok) {
-        x11_cursor_x_.store(static_cast<float>(root_x), std::memory_order_relaxed);
-        x11_cursor_y_.store(static_cast<float>(root_y), std::memory_order_relaxed);
-        x11_mouse_down_[0].store((mask & Button1Mask) != 0, std::memory_order_relaxed);
-        x11_mouse_down_[1].store((mask & Button3Mask) != 0, std::memory_order_relaxed);
-        x11_mouse_down_[2].store((mask & Button2Mask) != 0, std::memory_order_relaxed);
-      }
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(16));
-  }
-}
-
-void InputManager::poll_x11_fallback(ImGuiIO& io, HudConfig& cfg, float display_width,
-                                     float display_height) {
-  if (!evdev_devices_.empty()) return;
-  init_x11_fallback();
-  if (!x11_worker_running_.load(std::memory_order_relaxed)) return;
-
-  x11_gui_active_.store(cfg.gui_open, std::memory_order_relaxed);
-
-  std::vector<PendingKeyEvent> local_events;
-  {
-    std::lock_guard<std::mutex> lock(x11_event_mutex_);
-    if (!pending_key_events_.empty()) {
-      local_events.swap(pending_key_events_);
-    }
-  }
-
-  for (const auto& ev : local_events) {
-    handle_key_event(ev.code, ev.down, cfg, display_width, display_height, &io);
-  }
-
-  if (cfg.gui_open && display_width > 0.0f && display_height > 0.0f) {
-    float raw_x = x11_cursor_x_.load(std::memory_order_relaxed);
-    float raw_y = x11_cursor_y_.load(std::memory_order_relaxed);
-    if (raw_x >= 0.0f && raw_y >= 0.0f) {
-      int dw = static_cast<int>(display_width);
-      int dh = static_cast<int>(display_height);
-      cursor_x_ = std::clamp(static_cast<float>(dw > 0 ? (static_cast<int>(raw_x) % dw) : 0), 0.0f,
-                             display_width);
-      cursor_y_ = std::clamp(static_cast<float>(dh > 0 ? (static_cast<int>(raw_y) % dh) : 0), 0.0f,
-                             display_height);
-      io.AddMousePosEvent(cursor_x_, cursor_y_);
-      io.AddMouseButtonEvent(0, x11_mouse_down_[0].load(std::memory_order_relaxed));
-      io.AddMouseButtonEvent(1, x11_mouse_down_[1].load(std::memory_order_relaxed));
-      io.AddMouseButtonEvent(2, x11_mouse_down_[2].load(std::memory_order_relaxed));
-    }
+  if (x11_backend_) {
+    x11_backend_->set_grab(grab);
   }
 }
 
@@ -1095,10 +369,15 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
       cursor_y_ = io.DisplaySize.y * 0.5f;
     }
     io.AddMousePosEvent(cursor_x_, cursor_y_);
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags =
+        static_cast<ImGuiConfigFlags>(static_cast<uint32_t>(io.ConfigFlags) |
+                                      static_cast<uint32_t>(ImGuiConfigFlags_NavEnableKeyboard));
     pending_ungrab_ = false;
     set_mouse_grab(true);
-    set_x11_grab(true);
+    if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) &&
+        (!wayland_backend_ || !wayland_backend_->has_display())) {
+      set_x11_grab(true);
+    }
     // Draw software cursor ONLY when physical mouse is grabbed by kernel.
     // In fallback mode, the OS hardware cursor is already visible so drawing
     // a second cursor causes double cursor.
@@ -1143,25 +422,38 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
     cursor_y_ = display_height * 0.5f;
   }
 
-  // 1. Wayland in-process client polling (zero sudo, native Wayland)
-  if (wayland_attached_) {
-    poll_wayland(io, cfg, display_width, display_height);
+  active_io_ = &io;
+  active_cfg_ = &cfg;
+  display_width_ = display_width;
+  display_height_ = display_height;
+
+  // 1. Evdev device polling (preferred when /dev/input permissions are available;
+  //    supports hardware EVIOCGRAB mouse isolation across Wayland, Xwayland, and X11)
+  bool polled_evdev = false;
+  if (evdev_backend_) {
+    if (evdev_backend_->devices().empty()) {
+      evdev_backend_->init();
+    }
+    if (!evdev_backend_->devices().empty()) {
+      evdev_backend_->poll(*this);
+      polled_evdev = true;
+    }
   }
 
-  // 2. Evdev device polling (if /dev/input permissions available)
-  if (!evdev_scanned_) {
-    evdev_scanned_ = true;
-    scan_evdev_devices();
-  }
-
-  if (!evdev_devices_.empty()) {
-    poll_evdev(io, cfg, display_width, display_height);
-  } else if (!wayland_attached_) {
-    // 3. X11 fallback (X11 / Xwayland desktops)
-    poll_x11_fallback(io, cfg, display_width, display_height);
+  // 2. Wayland in-process client fallback (zero-sudo when /dev/input is unavailable)
+  if (!polled_evdev) {
+    if (wayland_backend_ && wayland_backend_->has_display()) {
+      wayland_backend_->poll(*this);
+    } else if (x11_backend_) {
+      // 3. X11 fallback (zero-sudo on X11 / Xwayland desktops)
+      x11_backend_->poll(*this);
+    }
   }
 
   sync_grab_state(io, cfg);
+
+  active_io_ = nullptr;
+  active_cfg_ = nullptr;
 }
 
 InputManager& get_input_manager() {

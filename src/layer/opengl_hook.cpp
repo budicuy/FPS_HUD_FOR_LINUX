@@ -4,6 +4,7 @@
 #endif
 #include "gui_menu.hpp"
 #include "input_manager.hpp"
+#include "logger.hpp"
 #include "overlay_ui.hpp"
 #include "recorder_ipc.hpp"
 #include "telemetry.hpp"
@@ -21,6 +22,21 @@
 #include <vector>
 #include <chrono>
 
+#ifndef GL_TEXTURE_BINDING_2D
+#define GL_TEXTURE_BINDING_2D 0x8069
+#endif
+#ifndef GL_PIXEL_UNPACK_BUFFER
+#define GL_PIXEL_UNPACK_BUFFER 0x88EC
+#endif
+#ifndef GL_PIXEL_UNPACK_BUFFER_BINDING
+#define GL_PIXEL_UNPACK_BUFFER_BINDING 0x88EF
+#endif
+#ifndef GL_UNPACK_ROW_LENGTH
+#define GL_UNPACK_ROW_LENGTH 0x0CF2
+#endif
+#ifndef GL_UNPACK_ALIGNMENT
+#define GL_UNPACK_ALIGNMENT 0x0CF5
+#endif
 #ifndef GL_PIXEL_PACK_BUFFER
 #define GL_PIXEL_PACK_BUFFER 0x88EB
 #endif
@@ -88,7 +104,10 @@ static EGLDisplay Hook_eglGetPlatformDisplay(EGLenum platform, void* native_disp
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_KHR
       fpshud::get_input_manager().attach_wayland_display(native_display);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglGetPlatformDisplay
              ? real_eglGetPlatformDisplay(platform, native_display, attrib_list)
@@ -102,7 +121,10 @@ static EGLDisplay Hook_eglGetPlatformDisplayEXT(EGLenum platform, void* native_d
     if (platform == 0x31D8 && native_display) {  // EGL_PLATFORM_WAYLAND_EXT
       fpshud::get_input_manager().attach_wayland_display(native_display);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglGetPlatformDisplayEXT
              ? real_eglGetPlatformDisplayEXT(platform, native_display, attrib_list)
@@ -404,6 +426,20 @@ public:
     m_owner_ctx = nullptr;
   }
 
+  void abandon_context() noexcept {
+    m_pbos[0] = 0;
+    m_pbos[1] = 0;
+    m_width = 0;
+    m_height = 0;
+    m_buffer_size = 0;
+    m_write_idx = 0;
+    m_read_idx = 0;
+    m_pending_frames = 0;
+    m_initialized = false;
+    m_owner_ctx = nullptr;
+    m_last_capture_time = {};
+  }
+
   void reset_pending() noexcept {
     m_pending_frames = 0;
     m_write_idx = 0;
@@ -553,7 +589,10 @@ private:
   std::chrono::steady_clock::time_point m_last_capture_time{};
 };
 
-GlAsyncPboRing g_gl_pbo_ring;
+inline GlAsyncPboRing& gl_pbo_ring() {
+  static GlAsyncPboRing ring;
+  return ring;
+}
 
 static GLuint g_player_gl_tex = 0;
 static uint32_t g_player_tex_w = 0;
@@ -565,6 +604,26 @@ static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t 
   if (!rgba || w == 0 || h == 0 || !g_gl.glGenTextures || !g_gl.glBindTexture) {
     return 0;
   }
+
+  GLint prev_tex = 0;
+  GLint prev_unpack_pbo = 0;
+  GLint prev_row_length = 0;
+  GLint prev_alignment = 4;
+  if (g_gl.glGetIntegerv) {
+    g_gl.glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+    g_gl.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prev_unpack_pbo);
+    g_gl.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &prev_row_length);
+    g_gl.glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
+  }
+
+  if (g_gl.glBindBuffer && prev_unpack_pbo != 0) {
+    g_gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  }
+  if (g_gl.glPixelStorei) {
+    g_gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    g_gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  }
+
   if (g_player_gl_tex == 0) {
     g_gl.glGenTextures(1, &g_player_gl_tex);
     g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
@@ -584,18 +643,30 @@ static ImTextureID opengl_player_texture_provider(const uint8_t* rgba, uint32_t 
     g_player_tex_h = h;
     g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
     if (g_gl.glTexImage2D) {
-      g_gl.glTexImage2D(GL_TEXTURE_2D, 0, 0x1908 /* GL_RGBA */, w, h, 0, 0x1908 /* GL_RGBA */,
-                        GL_UNSIGNED_BYTE, rgba);
+      g_gl.glTexImage2D(GL_TEXTURE_2D, 0, 0x1908 /* GL_RGBA */, static_cast<GLsizei>(w),
+                        static_cast<GLsizei>(h), 0, 0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE, rgba);
     }
     g_player_last_seq = seq;
   } else if (seq != g_player_last_seq) {
     g_gl.glBindTexture(GL_TEXTURE_2D, g_player_gl_tex);
     if (g_gl.glTexSubImage2D) {
-      g_gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, 0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE,
-                           rgba);
+      g_gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                           0x1908 /* GL_RGBA */, GL_UNSIGNED_BYTE, rgba);
     }
     g_player_last_seq = seq;
   }
+
+  if (g_gl.glPixelStorei) {
+    g_gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, prev_row_length);
+    g_gl.glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
+  }
+  if (g_gl.glBindBuffer && prev_unpack_pbo != 0) {
+    g_gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(prev_unpack_pbo));
+  }
+  if (g_gl.glBindTexture) {
+    g_gl.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
+  }
+
   return static_cast<ImTextureID>(g_player_gl_tex);
 }
 
@@ -614,15 +685,21 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   std::lock_guard<std::mutex> lock(g_gl_mutex);
 
   if (g_last_gl_context != current_ctx) {
+    FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::OpenGL, "OpenGL context switched: %p -> %p",
+                     g_last_gl_context, current_ctx);
     if (g_gl_backend_initialized && g_gl_imgui_ctx) {
       ImGui::SetCurrentContext(g_gl_imgui_ctx);
       ImGui_ImplOpenGL3_Shutdown();
       ImGui::DestroyContext(g_gl_imgui_ctx);
       g_gl_imgui_ctx = nullptr;
       g_gl_backend_initialized = false;
-      opengl_player_texture_releaser();
     }
-    g_gl_pbo_ring.cleanup(g_gl);
+    g_player_gl_tex = 0;
+    g_player_tex_w = 0;
+    g_player_tex_h = 0;
+    g_player_last_seq = 0;
+    g_player_gl_pending_release = false;
+    gl_pbo_ring().abandon_context();
     g_core_gl_resolved = false;
     g_last_gl_context = current_ctx;
   }
@@ -657,7 +734,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
   ImGui::SetCurrentContext(g_gl_imgui_ctx);
 
   GLint vp[4] = {0, 0, 0, 0};
-  if (g_gl.glGetIntegerv) {
+  if ((fallback_w == 0 || fallback_h == 0) && g_gl.glGetIntegerv) {
     g_gl.glGetIntegerv(GL_VIEWPORT, vp);
   }
   float width = (fallback_w > 0) ? static_cast<float>(fallback_w)
@@ -766,7 +843,7 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
 #if FPSHUD_ENABLE_EXPERIMENTAL
     if (fpshud::experimental::AdaptiveVfrController::is_vfr_active(cfg)) {
       if (fpshud::experimental::AdaptiveVfrController::should_capture_frame(
-              now, g_gl_pbo_ring.last_capture_time(), cfg.record_vfr_max_fps)) {
+              now, gl_pbo_ring().last_capture_time(), cfg.record_vfr_max_fps)) {
         should_capture = true;
       }
     } else
@@ -775,22 +852,22 @@ void render_gl_frame(void* current_ctx, unsigned int fallback_w, unsigned int fa
       int rec_fps = (cfg.record_fps > 0) ? cfg.record_fps : 60;
       auto target_interval = std::chrono::microseconds(1000000 / rec_fps);
       auto min_interval = target_interval * 70 / 100;
-      if (g_gl_pbo_ring.last_capture_time() == std::chrono::steady_clock::time_point{} ||
-          now - g_gl_pbo_ring.last_capture_time() >= min_interval) {
+      if (gl_pbo_ring().last_capture_time() == std::chrono::steady_clock::time_point{} ||
+          now - gl_pbo_ring().last_capture_time() >= min_interval) {
         should_capture = true;
       }
     }
     if (should_capture) {
-      g_gl_pbo_ring.set_last_capture_time(now);
-      g_gl_pbo_ring.capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
+      gl_pbo_ring().set_last_capture_time(now);
+      gl_pbo_ring().capture_frame(g_gl, current_ctx, static_cast<uint32_t>(width),
                                   static_cast<uint32_t>(height));
     }
   } else {
-    g_gl_pbo_ring.reset_pending();
+    gl_pbo_ring().reset_pending();
   }
 
   if (g_gl.glGetError) {
-    while (g_gl.glGetError() != GL_NO_ERROR) {
+    for (int err_i = 0; err_i < 16 && g_gl.glGetError() != GL_NO_ERROR; ++err_i) {
     }
   }
 }
@@ -811,8 +888,10 @@ __attribute__((visibility("default"))) void glXSwapBuffers(Display* dpy, GLXDraw
       }
       render_gl_frame(reinterpret_cast<void*>(ctx), w, h);
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
-    // Exception safety at C ABI boundary
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   if (real_glXSwapBuffers) {
     real_glXSwapBuffers(dpy, drawable);
@@ -864,8 +943,10 @@ __attribute__((visibility("default"))) EGLBoolean eglSwapBuffers(EGLDisplay dpy,
       render_gl_frame(reinterpret_cast<void*>(ctx), static_cast<unsigned int>(w),
                       static_cast<unsigned int>(h));
     }
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(__func__, e.what());
   } catch (...) {
-    // Exception safety at C ABI boundary
+    fpshud::log::log_hook_exception(__func__, nullptr);
   }
   return real_eglSwapBuffers ? real_eglSwapBuffers(dpy, surface) : EGL_FALSE;
 }

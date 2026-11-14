@@ -3,3 +3,10 @@ leak:libnvidia-ml.so
 leak:init_gpu_sensors_locked
 leak:libGLX_nvidia.so
 leak:libcuda.so
+leak:libnvidia-encode.so
+leak:nvidia_drv_video.so
+leak:libva.so
+leak:libva-drm.so
+leak:old_pthread_cond_broadcast
+leak:pthread_cond_broadcast
+leak:probe_hardware_encoders

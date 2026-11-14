@@ -217,18 +217,32 @@ private:
   bool is_ready_{false};
 };
 
-void drain_audio(PulseAudioPlayback& pulse, std::vector<uint8_t>& pending) {
-  if (!pulse.is_ready() || pending.empty()) {
+void drain_audio(PulseAudioPlayback& pulse, std::vector<uint8_t>& pending,
+                 size_t& audio_read_offset) {
+  if (!pulse.is_ready() || pending.empty() || audio_read_offset >= pending.size()) {
+    if (audio_read_offset >= pending.size() && !pending.empty()) {
+      pending.clear();
+      audio_read_offset = 0;
+    }
     pulse.iterate();
     return;
   }
   pulse.iterate();
   size_t writable = pulse.writable_bytes();
   if (writable > 0) {
-    size_t to_write = std::min(writable, pending.size());
+    size_t available = pending.size() - audio_read_offset;
+    size_t to_write = std::min(writable, available);
     if (to_write > 0) {
-      if (pulse.write(pending.data(), to_write)) {
-        pending.erase(pending.begin(), pending.begin() + to_write);
+      if (pulse.write(pending.data() + audio_read_offset, to_write)) {
+        audio_read_offset += to_write;
+        if (audio_read_offset >= pending.size()) {
+          pending.clear();
+          audio_read_offset = 0;
+        } else if (audio_read_offset >= 4096) {
+          pending.erase(pending.begin(),
+                        pending.begin() + static_cast<std::ptrdiff_t>(audio_read_offset));
+          audio_read_offset = 0;
+        }
       }
     }
   }
@@ -258,6 +272,16 @@ int run_player_worker(int argc, char** argv) {
   }
   return 0;
 #else
+  auto cleanup_shm_file = [&]() {
+    if (!shm_name.empty()) {
+      if (shm_name.find('/') != std::string::npos) {
+        ::unlink(shm_name.c_str());
+      } else {
+        ::shm_unlink(shm_name.c_str());
+      }
+    }
+  };
+
   std::fprintf(stdout, "[FPSHUD Player] Starting playback engine for: %s\n", video_file.c_str());
 
   // 1. Open video container
@@ -268,13 +292,17 @@ int run_player_worker(int argc, char** argv) {
     av_strerror(open_res, errbuf, sizeof(errbuf));
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Could not open input file: %s (err %d: %s)\n",
                  video_file.c_str(), open_res, errbuf);
-    return 2;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to retrieve stream info.\n");
     avformat_close_input(&fmt_ctx);
-    return 3;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   int video_stream_idx = -1;
@@ -291,7 +319,9 @@ int run_player_worker(int argc, char** argv) {
   if (video_stream_idx < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: No video stream found in container.\n");
     avformat_close_input(&fmt_ctx);
-    return 4;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   AVStream* vid_stream = fmt_ctx->streams[video_stream_idx];
@@ -300,7 +330,9 @@ int run_player_worker(int argc, char** argv) {
   if (!decoder) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Unsupported codec ID: %d\n", codec_par->codec_id);
     avformat_close_input(&fmt_ctx);
-    return 5;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   AVCodecContext* codec_ctx = avcodec_alloc_context3(decoder);
@@ -308,15 +340,24 @@ int run_player_worker(int argc, char** argv) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to initialize video decoder context.\n");
     if (codec_ctx) avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 6;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+  codec_ctx->thread_count = 1;
+#else
   codec_ctx->thread_count = 0;  // Auto multi-threaded decode across all CPU cores
-  codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+  codec_ctx->thread_type = static_cast<int>(static_cast<uint32_t>(FF_THREAD_FRAME) |
+                                            static_cast<uint32_t>(FF_THREAD_SLICE));
+#endif
   if (avcodec_open2(codec_ctx, decoder, nullptr) < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: Failed to open video decoder.\n");
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 6;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   uint32_t width = static_cast<uint32_t>(codec_ctx->width);
@@ -340,6 +381,7 @@ int run_player_worker(int argc, char** argv) {
   AVChannelLayout out_ch_layout{};
   PulseAudioPlayback pulse_out;
   std::vector<uint8_t> audio_pending;
+  size_t audio_read_offset = 0;
 
   if (audio_stream_idx >= 0) {
     AVStream* aud_stream = fmt_ctx->streams[audio_stream_idx];
@@ -373,11 +415,17 @@ int run_player_worker(int argc, char** argv) {
     }
   }
 
-  // 2. Setup POSIX Shared Memory
+  // 2. Setup POSIX Shared Memory (Double-buffered: 2 slots)
   size_t pixel_bytes = static_cast<size_t>(width) * height * 4;
-  size_t shm_total_size = sizeof(PlaybackShmHeader) + pixel_bytes;
+  size_t shm_total_size = sizeof(PlaybackShmHeader) + 2 * pixel_bytes;
 
-  int shm_fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0600);
+  int shm_fd = -1;
+  if (shm_name.find('/') != std::string::npos) {
+    shm_fd = ::open(shm_name.c_str(), O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
+  } else {
+    shm_fd = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0600);
+  }
+
   if (shm_fd < 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: shm_open failed for %s\n", shm_name.c_str());
     if (swr_audio) swr_free(&swr_audio);
@@ -385,32 +433,36 @@ int run_player_worker(int argc, char** argv) {
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 7;
+    ::unlink(socket_path.c_str());
+    cleanup_shm_file();
+    return 1;
   }
 
   if (ftruncate(shm_fd, static_cast<off_t>(shm_total_size)) != 0) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: ftruncate failed.\n");
     close(shm_fd);
-    shm_unlink(shm_name.c_str());
+    cleanup_shm_file();
     if (swr_audio) swr_free(&swr_audio);
     av_channel_layout_uninit(&out_ch_layout);
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 8;
+    ::unlink(socket_path.c_str());
+    return 1;
   }
 
   void* map_ptr = mmap(nullptr, shm_total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (map_ptr == MAP_FAILED) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: mmap failed.\n");
     close(shm_fd);
-    shm_unlink(shm_name.c_str());
+    cleanup_shm_file();
     if (swr_audio) swr_free(&swr_audio);
     av_channel_layout_uninit(&out_ch_layout);
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 9;
+    ::unlink(socket_path.c_str());
+    return 1;
   }
 
   auto* header = reinterpret_cast<PlaybackShmHeader*>(map_ptr);
@@ -425,20 +477,21 @@ int run_player_worker(int argc, char** argv) {
   header->write_index.store(0, std::memory_order_relaxed);
 
   uint8_t* pixel_dest = reinterpret_cast<uint8_t*>(map_ptr) + sizeof(PlaybackShmHeader);
-  std::memset(pixel_dest, 0, pixel_bytes);
+  std::memset(pixel_dest, 0, 2 * pixel_bytes);
 
   // 3. Setup Unix Domain Socket for Commands
   int server_sock = socket(AF_UNIX, SOCK_STREAM, 0);
   if (server_sock < 0) {
     munmap(map_ptr, shm_total_size);
     close(shm_fd);
-    shm_unlink(shm_name.c_str());
+    cleanup_shm_file();
     if (swr_audio) swr_free(&swr_audio);
     av_channel_layout_uninit(&out_ch_layout);
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 10;
+    ::unlink(socket_path.c_str());
+    return 1;
   }
 
   sockaddr_un saddr{};
@@ -450,34 +503,35 @@ int run_player_worker(int argc, char** argv) {
     close(server_sock);
     munmap(map_ptr, shm_total_size);
     close(shm_fd);
-    shm_unlink(shm_name.c_str());
+    cleanup_shm_file();
     if (swr_audio) swr_free(&swr_audio);
     av_channel_layout_uninit(&out_ch_layout);
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 11;
+    ::unlink(socket_path.c_str());
+    return 1;
   }
   chmod(socket_path.c_str(), 0600);
   listen(server_sock, 1);
 
   // 4. Initialize SwsContext for RGBA conversion
-  SwsContext* sws =
-      sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt, width, height,
-                     AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+  SwsContext* sws = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+                                   static_cast<int>(width), static_cast<int>(height),
+                                   AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!sws) {
     std::fprintf(stderr, "[FPSHUD Player] ERROR: sws_getContext failed.\n");
     close(server_sock);
     unlink(socket_path.c_str());
     munmap(map_ptr, shm_total_size);
     close(shm_fd);
-    shm_unlink(shm_name.c_str());
+    cleanup_shm_file();
     if (swr_audio) swr_free(&swr_audio);
     av_channel_layout_uninit(&out_ch_layout);
     if (aud_codec_ctx) avcodec_free_context(&aud_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
-    return 12;
+    return 1;
   }
 
   AVFrame* raw_frame = av_frame_alloc();
@@ -522,6 +576,7 @@ int run_player_worker(int argc, char** argv) {
           avcodec_flush_buffers(aud_codec_ctx);
         }
         audio_pending.clear();
+        audio_read_offset = 0;
         pulse_out.flush();
         {
           std::lock_guard<std::mutex> lock(queue_mutex);
@@ -545,7 +600,7 @@ int run_player_worker(int argc, char** argv) {
       }
 
       // Continuously feed audio to PulseAudio
-      drain_audio(pulse_out, audio_pending);
+      drain_audio(pulse_out, audio_pending, audio_read_offset);
 
       // Keep reading packets into queue if not full
       bool should_read = false;
@@ -567,17 +622,23 @@ int run_player_worker(int argc, char** argv) {
           if (avcodec_send_packet(aud_codec_ctx, pkt) == 0) {
             while (avcodec_receive_frame(aud_codec_ctx, raw_audio_frame) == 0) {
               int in_rate = aud_codec_ctx->sample_rate > 0 ? aud_codec_ctx->sample_rate : 48000;
-              int max_out =
+              int max_out = static_cast<int>(
                   av_rescale_rnd(swr_get_delay(swr_audio, in_rate) + raw_audio_frame->nb_samples,
-                                 48000, in_rate, AV_ROUND_UP);
+                                 48000, in_rate, AV_ROUND_UP));
               if (max_out < 256) max_out = 256;
 
-              std::vector<int16_t> pcm_out(max_out * 2);
+              std::vector<int16_t> pcm_out(static_cast<size_t>(max_out) * 2);
               uint8_t* out_ptrs[1] = {reinterpret_cast<uint8_t*>(pcm_out.data())};
               int converted = swr_convert(swr_audio, out_ptrs, max_out,
                                           const_cast<const uint8_t**>(raw_audio_frame->data),
                                           raw_audio_frame->nb_samples);
               if (converted > 0) {
+                if (audio_read_offset >= 4096) {
+                  audio_pending.erase(
+                      audio_pending.begin(),
+                      audio_pending.begin() + static_cast<std::ptrdiff_t>(audio_read_offset));
+                  audio_read_offset = 0;
+                }
                 size_t sample_count = static_cast<size_t>(converted) * 2;
                 const uint8_t* bytes_ptr = reinterpret_cast<const uint8_t*>(pcm_out.data());
                 audio_pending.insert(audio_pending.end(), bytes_ptr,
@@ -586,7 +647,7 @@ int run_player_worker(int argc, char** argv) {
             }
           }
           av_packet_unref(pkt);
-          drain_audio(pulse_out, audio_pending);
+          drain_audio(pulse_out, audio_pending, audio_read_offset);
         } else if (pkt->stream_index == video_stream_idx) {
           AVPacket* vp = av_packet_clone(pkt);
           av_packet_unref(pkt);
@@ -612,7 +673,8 @@ int run_player_worker(int argc, char** argv) {
       struct pollfd pfd{};
       pfd.fd = server_sock;
       pfd.events = POLLIN;
-      if (poll(&pfd, 1, 1) > 0 && (pfd.revents & POLLIN)) {
+      if (poll(&pfd, 1, 1) > 0 &&
+          ((static_cast<uint32_t>(pfd.revents) & static_cast<uint32_t>(POLLIN)) != 0u)) {
         client_sock = accept(server_sock, nullptr, nullptr);
       }
     }
@@ -621,7 +683,8 @@ int run_player_worker(int argc, char** argv) {
       struct pollfd pfd{};
       pfd.fd = client_sock;
       pfd.events = POLLIN;
-      while (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+      while (poll(&pfd, 1, 0) > 0 &&
+             ((static_cast<uint32_t>(pfd.revents) & static_cast<uint32_t>(POLLIN)) != 0u)) {
         IpcPlaybackRequest req{};
         ssize_t n = recv(client_sock, &req, sizeof(req), MSG_DONTWAIT);
         if (n <= 0) {
@@ -696,9 +759,13 @@ int run_player_worker(int argc, char** argv) {
 
             if (seek_pending.load(std::memory_order_relaxed)) {
               // Immediately render initial frame or seek preview
+              uint32_t next_slot = (header->write_index.load(std::memory_order_relaxed) + 1u) & 1u;
+              uint8_t* dst = pixel_dest + next_slot * pixel_bytes;
+              rgba_buffers[0] = dst;
               sws_scale(sws, raw_frame->data, raw_frame->linesize, 0, codec_ctx->height,
                         rgba_buffers, rgba_linesizes);
               header->current_time_sec.store(frame_pts, std::memory_order_relaxed);
+              header->write_index.store(next_slot, std::memory_order_release);
               header->frame_seq.fetch_add(1, std::memory_order_release);
               clock_anchor_pts = frame_pts;
               clock_anchor_time = std::chrono::steady_clock::now();
@@ -730,9 +797,14 @@ int run_player_worker(int argc, char** argv) {
               if (is_late && has_more_in_queue) {
                 // Drop obsolete frame to let decoder rapidly catch up
               } else {
+                uint32_t next_slot =
+                    (header->write_index.load(std::memory_order_relaxed) + 1u) & 1u;
+                uint8_t* dst = pixel_dest + next_slot * pixel_bytes;
+                rgba_buffers[0] = dst;
                 sws_scale(sws, raw_frame->data, raw_frame->linesize, 0, codec_ctx->height,
                           rgba_buffers, rgba_linesizes);
                 header->current_time_sec.store(frame_pts, std::memory_order_relaxed);
+                header->write_index.store(next_slot, std::memory_order_release);
                 header->frame_seq.fetch_add(1, std::memory_order_release);
               }
             }
@@ -790,7 +862,7 @@ int run_player_worker(int argc, char** argv) {
 
   munmap(map_ptr, shm_total_size);
   close(shm_fd);
-  shm_unlink(shm_name.c_str());
+  cleanup_shm_file();
 
   std::fprintf(stdout, "[FPSHUD Player] Playback worker exited cleanly.\n");
   return 0;
