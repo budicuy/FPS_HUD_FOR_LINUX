@@ -36,9 +36,35 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
                                                 const VkDeviceQueueInfo2* pQueueInfo,
                                                 VkQueue* pQueue);
 
+struct FpshudVkXlibSurfaceCreateInfoKHR {
+  VkStructureType sType;
+  const void* pNext;
+  VkFlags flags;
+  void* dpy;
+  unsigned long window;
+};
+
+struct FpshudVkXcbSurfaceCreateInfoKHR {
+  VkStructureType sType;
+  const void* pNext;
+  VkFlags flags;
+  void* connection;
+  uint32_t window;
+};
+
 VKAPI_ATTR VkResult VKAPI_CALL
 Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
                              const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface);
+
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_CreateXlibSurfaceKHR(VkInstance instance, const FpshudVkXlibSurfaceCreateInfoKHR* pCreateInfo,
+                          const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface);
+
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_CreateXcbSurfaceKHR(VkInstance instance, const FpshudVkXcbSurfaceCreateInfoKHR* pCreateInfo,
+                         const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface);
+
+void notify_swapchain_surface(VkSurfaceKHR surface);
 
 VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                                                   const VkAllocationCallbacks* pAllocator);

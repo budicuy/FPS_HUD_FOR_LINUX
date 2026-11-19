@@ -661,3 +661,80 @@ TEST_CASE("Layer: ABI, Symbols, & Portability") {
     }
   }
 }
+
+#include "backends/x11_backend.hpp"
+#include "input_manager.hpp"
+
+TEST_CASE("Vulkan Xlib/XCB Surface Hooks & X11 Input Override") {
+  SUBCASE("vkGetInstanceProcAddr exposes Xlib and XCB surface creation hooks") {
+    const std::filesystem::path so_path = std::filesystem::exists("./libfpshud.so")
+                                              ? std::filesystem::path("./libfpshud.so")
+                                              : std::filesystem::path("build/libfpshud.so");
+    void* handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    REQUIRE(handle != nullptr);
+
+    using PFN_GIPA = PFN_vkVoidFunction(VKAPI_PTR*)(VkInstance, const char*);
+    using PFN_GDPA = PFN_vkVoidFunction(VKAPI_PTR*)(VkDevice, const char*);
+    auto pfn_gipa = reinterpret_cast<PFN_GIPA>(dlsym(handle, "vkGetInstanceProcAddr"));
+    auto pfn_gdpa = reinterpret_cast<PFN_GDPA>(dlsym(handle, "vkGetDeviceProcAddr"));
+    REQUIRE(pfn_gipa != nullptr);
+    REQUIRE(pfn_gdpa != nullptr);
+
+    CHECK(pfn_gipa(VK_NULL_HANDLE, "vkCreateXlibSurfaceKHR") != nullptr);
+    CHECK(pfn_gipa(VK_NULL_HANDLE, "vkCreateXcbSurfaceKHR") != nullptr);
+    CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkCreateXlibSurfaceKHR") == nullptr);
+    CHECK(pfn_gdpa(VK_NULL_HANDLE, "vkCreateXcbSurfaceKHR") == nullptr);
+
+    dlclose(handle);
+  }
+
+  SUBCASE("X11 swapchain notification overrides stale Wayland probe and resets cleanly") {
+    fpshud::InputManager im;
+    int fake_wl_display = 1;
+    CHECK(!im.is_x11_swapchain_active());
+
+    // Pure Wayland attachment without X11 swapchain preserves Wayland-first suppression
+    im.attach_wayland_display(&fake_wl_display);
+    CHECK(!im.is_x11_swapchain_active());
+
+    // Presenting an X11/Xwayland swapchain overrides stale Wayland probe
+    im.notify_x11_swapchain(0xCAFEBABEULL);
+    CHECK(im.is_x11_swapchain_active());
+
+    // Switching back to a native Wayland swapchain clears X11 override
+    im.notify_wayland_swapchain();
+    CHECK(!im.is_x11_swapchain_active());
+
+    // Reset clears both override and target window
+    im.notify_x11_swapchain(0x123456ULL);
+    CHECK(im.is_x11_swapchain_active());
+    im.reset_surface_hints();
+    CHECK(!im.is_x11_swapchain_active());
+    im.detach_wayland_display(nullptr);
+  }
+
+  SUBCASE("X11Backend mouse button edges forward through InputManager") {
+    fpshud::InputManager im;
+    fpshud::X11Backend x11;
+    fpshud::HudConfig cfg;
+    cfg.enabled = true;
+    cfg.gui_open = true;
+
+    x11.set_target_window(0xABCDEFULL);
+    CHECK(x11.target_window() == 0xABCDEFULL);
+    x11.clear_target_window_if_matches(0x999999ULL);
+    CHECK(x11.target_window() == 0xABCDEFULL);
+    x11.clear_target_window_if_matches(0xABCDEFULL);
+    CHECK(x11.target_window() == 0ULL);
+
+    // Simulate left button pressed while GUI open, then released after closing GUI
+    x11.dispatch_mouse_buttons(im, true, false, false, cfg, nullptr);
+    CHECK(im.is_mouse_button_down(0));
+    CHECK(!im.is_mouse_button_down(1));
+    CHECK(!im.is_mouse_button_down(2));
+
+    cfg.gui_open = false;
+    x11.dispatch_mouse_buttons(im, false, false, false, cfg, nullptr);
+    CHECK(!im.is_mouse_button_down(0));
+  }
+}

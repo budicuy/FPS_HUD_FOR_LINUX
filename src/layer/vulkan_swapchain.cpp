@@ -1,4 +1,5 @@
 #include "vulkan_swapchain.hpp"
+#include "vulkan_hooks.hpp"
 
 #include "config.hpp"
 #include "logger.hpp"
@@ -426,6 +427,10 @@ VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(VkDevice device,
       g_swapchain_map[*pSwapchain] = sd;
     } else {
       destroy_swapchain_data(sd);
+    }
+
+    if (pCreateInfo && pCreateInfo->surface != VK_NULL_HANDLE) {
+      notify_swapchain_surface(pCreateInfo->surface);
     }
 
     return VK_SUCCESS;

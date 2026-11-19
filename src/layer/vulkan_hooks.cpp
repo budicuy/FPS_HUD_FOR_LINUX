@@ -13,29 +13,71 @@
 namespace fpshud::vk {
 
 namespace {
-std::unordered_set<VkSurfaceKHR> g_wayland_surfaces;
+enum class SurfaceBackendType : uint8_t { Unknown = 0, Wayland = 1, X11 = 2 };
+
+struct TrackedSurfaceInfo {
+  SurfaceBackendType backend = SurfaceBackendType::Unknown;
+  uint64_t window_id = 0;
+};
+
+std::unordered_map<VkSurfaceKHR, TrackedSurfaceInfo> g_tracked_surfaces;
+size_t g_wayland_surface_count = 0;
 
 void register_wayland_surface(VkSurfaceKHR surface, void* display) {
   if (surface != VK_NULL_HANDLE) {
     std::lock_guard<std::mutex> lock(g_map_mutex);
-    g_wayland_surfaces.insert(surface);
+    auto [it, inserted] =
+        g_tracked_surfaces.emplace(surface, TrackedSurfaceInfo{SurfaceBackendType::Wayland, 0});
+    if (inserted) {
+      ++g_wayland_surface_count;
+    } else if (it->second.backend != SurfaceBackendType::Wayland) {
+      it->second = {SurfaceBackendType::Wayland, 0};
+      ++g_wayland_surface_count;
+    }
   }
   if (display) {
     fpshud::get_input_manager().attach_wayland_display(display);
   }
 }
 
-void release_wayland_surface(VkSurfaceKHR surface) {
+void register_x11_surface(VkSurfaceKHR surface, uint64_t window_id) {
+  if (surface != VK_NULL_HANDLE) {
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    auto [it, inserted] =
+        g_tracked_surfaces.emplace(surface, TrackedSurfaceInfo{SurfaceBackendType::X11, window_id});
+    if (!inserted) {
+      if (it->second.backend == SurfaceBackendType::Wayland && g_wayland_surface_count > 0) {
+        --g_wayland_surface_count;
+      }
+      it->second = {SurfaceBackendType::X11, window_id};
+    }
+  }
+}
+
+void release_tracked_surface(VkSurfaceKHR surface) {
   if (surface == VK_NULL_HANDLE) return;
   bool last_wayland_surface = false;
+  uint64_t released_x11_window = 0;
   {
     std::lock_guard<std::mutex> lock(g_map_mutex);
-    if (g_wayland_surfaces.erase(surface) > 0 && g_wayland_surfaces.empty()) {
-      last_wayland_surface = true;
+    auto it = g_tracked_surfaces.find(surface);
+    if (it != g_tracked_surfaces.end()) {
+      const bool was_wayland = (it->second.backend == SurfaceBackendType::Wayland);
+      if (it->second.backend == SurfaceBackendType::X11) {
+        released_x11_window = it->second.window_id;
+      }
+      g_tracked_surfaces.erase(it);
+      if (was_wayland && g_wayland_surface_count > 0) {
+        --g_wayland_surface_count;
+        last_wayland_surface = (g_wayland_surface_count == 0);
+      }
     }
   }
   if (last_wayland_surface) {
     fpshud::get_input_manager().detach_wayland_display(nullptr);
+  }
+  if (released_x11_window != 0) {
+    fpshud::get_input_manager().clear_x11_target_window_if_matches(released_x11_window);
   }
 }
 }  // namespace
@@ -120,9 +162,11 @@ VKAPI_ATTR void VKAPI_CALL Hook_DestroyInstance(VkInstance instance,
   try {
     {
       std::lock_guard<std::mutex> lock(g_map_mutex);
-      g_wayland_surfaces.clear();
+      g_tracked_surfaces.clear();
+      g_wayland_surface_count = 0;
     }
     fpshud::get_input_manager().detach_wayland_display(nullptr);
+    fpshud::get_input_manager().reset_surface_hints();
     if (!instance) return;
 
     InstanceData* id = nullptr;
@@ -599,6 +643,68 @@ VKAPI_ATTR void VKAPI_CALL Hook_GetDeviceQueue2(VkDevice device,
   }
 }
 
+namespace {
+template <typename CreateInfoT>
+VkResult dispatch_x11_surface_create(VkInstance instance, const CreateInfoT* pCreateInfo,
+                                     const VkAllocationCallbacks* pAllocator,
+                                     VkSurfaceKHR* pSurface, const char* func_name) {
+  using PFN_CreateSurface = VkResult(VKAPI_PTR*)(VkInstance, const CreateInfoT*,
+                                                 const VkAllocationCallbacks*, VkSurfaceKHR*);
+  try {
+    InstanceData* id = find_instance_data(get_dispatch_key(instance));
+    if (!id || !id->GetInstanceProcAddr) return VK_ERROR_INITIALIZATION_FAILED;
+    auto fp = reinterpret_cast<PFN_CreateSurface>(id->GetInstanceProcAddr(instance, func_name));
+    if (!fp) return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult res = fp(instance, pCreateInfo, pAllocator, pSurface);
+    if (res == VK_SUCCESS && pSurface && *pSurface != VK_NULL_HANDLE) {
+      const uint64_t window_id = pCreateInfo ? static_cast<uint64_t>(pCreateInfo->window) : 0ULL;
+      register_x11_surface(*pSurface, window_id);
+    }
+    return res;
+  } catch (const std::exception& e) {
+    fpshud::log::log_hook_exception(func_name, e.what());
+    return VK_ERROR_INITIALIZATION_FAILED;
+  } catch (...) {
+    fpshud::log::log_hook_exception(func_name, nullptr);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+}
+}  // namespace
+
+void notify_swapchain_surface(VkSurfaceKHR surface) {
+  if (surface == VK_NULL_HANDLE) return;
+  TrackedSurfaceInfo info{};
+  bool found = false;
+  {
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    auto it = g_tracked_surfaces.find(surface);
+    if (it != g_tracked_surfaces.end()) {
+      info = it->second;
+      found = true;
+    }
+  }
+  if (!found) return;
+  if (info.backend == SurfaceBackendType::X11) {
+    fpshud::get_input_manager().notify_x11_swapchain(info.window_id);
+  } else if (info.backend == SurfaceBackendType::Wayland) {
+    fpshud::get_input_manager().notify_wayland_swapchain();
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_CreateXlibSurfaceKHR(VkInstance instance, const FpshudVkXlibSurfaceCreateInfoKHR* pCreateInfo,
+                          const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
+  return dispatch_x11_surface_create(instance, pCreateInfo, pAllocator, pSurface,
+                                     "vkCreateXlibSurfaceKHR");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_CreateXcbSurfaceKHR(VkInstance instance, const FpshudVkXcbSurfaceCreateInfoKHR* pCreateInfo,
+                         const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
+  return dispatch_x11_surface_create(instance, pCreateInfo, pAllocator, pSurface,
+                                     "vkCreateXcbSurfaceKHR");
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateInfoKHR* pCreateInfo,
                              const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) {
@@ -622,7 +728,7 @@ Hook_CreateWaylandSurfaceKHR(VkInstance instance, const VkWaylandSurfaceCreateIn
 VKAPI_ATTR void VKAPI_CALL Hook_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                                                   const VkAllocationCallbacks* pAllocator) {
   try {
-    release_wayland_surface(surface);
+    release_tracked_surface(surface);
     InstanceData* id = find_instance_data(get_dispatch_key(instance));
     if (id && id->GetInstanceProcAddr) {
       auto fpDestroySurfaceKHR = reinterpret_cast<PFN_vkDestroySurfaceKHR>(
@@ -713,6 +819,10 @@ vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_DestroySwapchainKHR);
     if (std::strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_CreateWaylandSurfaceKHR);
+    if (std::strcmp(pName, "vkCreateXlibSurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_CreateXlibSurfaceKHR);
+    if (std::strcmp(pName, "vkCreateXcbSurfaceKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_CreateXcbSurfaceKHR);
     if (std::strcmp(pName, "vkDestroySurfaceKHR") == 0)
       return reinterpret_cast<PFN_vkVoidFunction>(&fpshud::vk::Hook_DestroySurfaceKHR);
     if (std::strcmp(pName, "vkQueuePresentKHR") == 0)

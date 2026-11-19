@@ -344,6 +344,49 @@ void InputManager::handle_pointer_wheel(float x, float y, const HudConfig& cfg,
   }
 }
 
+void InputManager::notify_x11_swapchain(uint64_t x11_window) noexcept {
+  x11_swapchain_active_.store(true, std::memory_order_relaxed);
+  if (x11_backend_) {
+    x11_backend_->set_target_window(x11_window);
+  }
+}
+
+void InputManager::notify_wayland_swapchain() noexcept {
+  x11_swapchain_active_.store(false, std::memory_order_relaxed);
+}
+
+void InputManager::clear_x11_target_window_if_matches(uint64_t x11_window) noexcept {
+  if (x11_window != 0 && x11_backend_) {
+    x11_backend_->clear_target_window_if_matches(x11_window);
+  }
+}
+
+void InputManager::reset_surface_hints() noexcept {
+  x11_swapchain_active_.store(false, std::memory_order_relaxed);
+  if (x11_backend_) {
+    x11_backend_->set_target_window(0);
+  }
+}
+
+void InputManager::handle_x11_mouse_button(size_t btn_index, bool down, const HudConfig& cfg,
+                                           ImGuiIO* io) noexcept {
+  uint32_t code = 0;
+  switch (btn_index) {
+    case 0:
+      code = BTN_LEFT;
+      break;
+    case 1:
+      code = BTN_RIGHT;
+      break;
+    case 2:
+      code = BTN_MIDDLE;
+      break;
+    default:
+      return;
+  }
+  handle_pointer_button(code, down, cfg, io);
+}
+
 bool InputManager::is_mouse_grabbed() const noexcept {
   return (evdev_backend_ && evdev_backend_->is_mouse_grabbed()) ||
          (x11_backend_ && x11_backend_->is_grabbed());
@@ -362,6 +405,15 @@ void InputManager::set_x11_grab(bool grab) {
 }
 
 void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
+  const bool wayland_has_display = (wayland_backend_ && wayland_backend_->has_display());
+  const bool x11_override = x11_swapchain_active_.load(std::memory_order_relaxed);
+  const bool use_x11_grab = (!wayland_has_display || x11_override);
+  auto should_draw_sw_cursor = [&]() noexcept {
+    const bool evdev_grabbed = (evdev_backend_ && evdev_backend_->is_mouse_grabbed());
+    const bool x11_cursor_hidden = (x11_backend_ && x11_backend_->is_pointer_cursor_hidden());
+    return evdev_grabbed || x11_cursor_hidden;
+  };
+
   if (cfg.gui_open && !prev_gui_open_) {
     // GUI just opened: center ImGui cursor and grab mouse device so clicks don't leak into game
     if (cursor_x_ < 0.0f || cursor_y_ < 0.0f) {
@@ -374,19 +426,18 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
                                       static_cast<uint32_t>(ImGuiConfigFlags_NavEnableKeyboard));
     pending_ungrab_ = false;
     set_mouse_grab(true);
-    if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) &&
-        (!wayland_backend_ || !wayland_backend_->has_display())) {
+    if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) && use_x11_grab) {
       set_x11_grab(true);
+      last_x11_grab_retry_ = std::chrono::steady_clock::now();
     }
-    // Draw software cursor ONLY when physical mouse is grabbed by kernel.
-    // In fallback mode, the OS hardware cursor is already visible so drawing
-    // a second cursor causes double cursor.
-    io.MouseDrawCursor = is_mouse_grabbed();
+    // Draw ImGui software cursor when evdev holds hardware grab OR X11 hid the native cursor.
+    io.MouseDrawCursor = should_draw_sw_cursor();
   } else if (!cfg.gui_open && prev_gui_open_) {
     // GUI just closed: auto-save current config, release ImGui cursor/inputs, and ungrab mouse back
     // to game
     save_config_to_disk(cfg);
     release_imgui_inputs(io);
+    io.MouseDrawCursor = false;
     if (!mouse_buttons_[0] && !mouse_buttons_[1] && !mouse_buttons_[2]) {
       set_mouse_grab(false);
       set_x11_grab(false);
@@ -400,6 +451,18 @@ void InputManager::sync_grab_state(ImGuiIO& io, const HudConfig& cfg) {
     set_mouse_grab(false);
     set_x11_grab(false);
     pending_ungrab_ = false;
+    io.MouseDrawCursor = false;
+  } else if (cfg.gui_open) {
+    if ((!evdev_backend_ || !evdev_backend_->is_mouse_grabbed()) && use_x11_grab &&
+        (!x11_backend_ || !x11_backend_->is_grabbed())) {
+      const auto now = std::chrono::steady_clock::now();
+      if (last_x11_grab_retry_ == std::chrono::steady_clock::time_point{} ||
+          (now - last_x11_grab_retry_) >= std::chrono::milliseconds(50)) {
+        set_x11_grab(true);
+        last_x11_grab_retry_ = now;
+      }
+    }
+    io.MouseDrawCursor = should_draw_sw_cursor();
   }
   prev_gui_open_ = cfg.gui_open;
 }
@@ -440,13 +503,15 @@ void InputManager::update_for_frame(ImGuiIO& io, HudConfig& cfg, float display_w
     }
   }
 
-  // 2. Wayland in-process client fallback (zero-sudo when /dev/input is unavailable)
+  // 2. Wayland in-process client fallback / X11 fallback (zero-sudo when /dev/input is
+  //    unavailable). An active X11/Xwayland swapchain overrides stale Wayland probes.
   if (!polled_evdev) {
-    if (wayland_backend_ && wayland_backend_->has_display()) {
-      wayland_backend_->poll(*this);
-    } else if (x11_backend_) {
-      // 3. X11 fallback (zero-sudo on X11 / Xwayland desktops)
+    const bool wayland_has_display = (wayland_backend_ && wayland_backend_->has_display());
+    const bool x11_override = x11_swapchain_active_.load(std::memory_order_relaxed);
+    if (x11_backend_ && (!wayland_has_display || x11_override)) {
       x11_backend_->poll(*this);
+    } else if (wayland_has_display) {
+      wayland_backend_->poll(*this);
     }
   }
 

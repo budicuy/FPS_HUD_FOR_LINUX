@@ -5,7 +5,10 @@
 #include "backends/x11_backend.hpp"
 #include "config.hpp"
 
+#include <atomic>
 #include <bitset>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -36,6 +39,17 @@ public:
   void attach_wayland_display(void* display) noexcept;
   void detach_wayland_display(void* display) noexcept;
   bool has_wayland_display() const noexcept;
+
+  // Swapchain surface hints (disambiguate active X11/Xwayland swapchains from stale Wayland probes)
+  void notify_x11_swapchain(uint64_t x11_window) noexcept;
+  void notify_wayland_swapchain() noexcept;
+  void clear_x11_target_window_if_matches(uint64_t x11_window) noexcept;
+  void reset_surface_hints() noexcept;
+  bool is_x11_swapchain_active() const noexcept {
+    return x11_swapchain_active_.load(std::memory_order_relaxed);
+  }
+  void handle_x11_mouse_button(size_t btn_index, bool down, const HudConfig& cfg,
+                               ImGuiIO* io) noexcept;
 
   // In-process event handler for keyboard inputs (evdev, Wayland, or test harness injection)
   void handle_key_event(uint32_t code, bool down, HudConfig& cfg, float display_width,
@@ -100,6 +114,9 @@ private:
   HudConfig* active_cfg_ = nullptr;
   float display_width_ = 0.0f;
   float display_height_ = 0.0f;
+
+  std::atomic<bool> x11_swapchain_active_{false};
+  std::chrono::steady_clock::time_point last_x11_grab_retry_{};
 };
 
 InputManager& get_input_manager();
