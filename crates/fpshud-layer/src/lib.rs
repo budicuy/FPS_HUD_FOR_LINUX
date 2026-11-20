@@ -1,6 +1,7 @@
 //! `cdylib libfpshud.so`: Pure-Rust Vulkan & OpenGL implicit overlay layer with strict 8-symbol C-ABI.
 
 pub mod launcher;
+pub mod opengl;
 pub mod runtime;
 pub mod vulkan;
 
@@ -70,22 +71,13 @@ pub unsafe extern "system" fn vkGetDeviceProcAddr(
     unsafe { lookup_device_proc(device, p_name) }
 }
 
-unsafe fn dlsym_next(sym: &std::ffi::CStr) -> *mut c_void {
-    unsafe { libc::dlsym(libc::RTLD_NEXT, sym.as_ptr()) }
-}
-
 /// GLX swap buffers hook exported by `libfpshud.so`.
 ///
 /// # Safety
 /// Arguments must satisfy GLX `glXSwapBuffers(Display*, GLXDrawable)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut c_void, drawable: *mut c_void) {
-    let p = unsafe { dlsym_next(c"glXSwapBuffers") };
-    if !p.is_null() {
-        let real: unsafe extern "C" fn(*mut c_void, *mut c_void) =
-            unsafe { std::mem::transmute(p) };
-        unsafe { real(dpy, drawable) };
-    }
+    unsafe { opengl::glx::hook_glx_swap_buffers(dpy, drawable) };
 }
 
 /// GLX proc address resolver hook exported by `libfpshud.so`.
@@ -94,14 +86,7 @@ pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut c_void, drawable: *mut c_void)
 /// `proc_name` must point to a valid NUL-terminated GLX symbol name.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn glXGetProcAddress(proc_name: *const u8) -> *const c_void {
-    let p = unsafe { dlsym_next(c"glXGetProcAddress") };
-    if !p.is_null() {
-        let real: unsafe extern "C" fn(*const u8) -> *const c_void =
-            unsafe { std::mem::transmute(p) };
-        unsafe { real(proc_name) }
-    } else {
-        std::ptr::null()
-    }
+    unsafe { opengl::glx::hook_glx_get_proc_address(proc_name, false) }
 }
 
 /// GLX ARB proc address resolver hook exported by `libfpshud.so`.
@@ -110,14 +95,7 @@ pub unsafe extern "C" fn glXGetProcAddress(proc_name: *const u8) -> *const c_voi
 /// `proc_name` must point to a valid NUL-terminated GLX symbol name.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn glXGetProcAddressARB(proc_name: *const u8) -> *const c_void {
-    let p = unsafe { dlsym_next(c"glXGetProcAddressARB") };
-    if !p.is_null() {
-        let real: unsafe extern "C" fn(*const u8) -> *const c_void =
-            unsafe { std::mem::transmute(p) };
-        unsafe { real(proc_name) }
-    } else {
-        unsafe { glXGetProcAddress(proc_name) }
-    }
+    unsafe { opengl::glx::hook_glx_get_proc_address(proc_name, true) }
 }
 
 /// EGL swap buffers hook exported by `libfpshud.so`.
@@ -126,14 +104,7 @@ pub unsafe extern "C" fn glXGetProcAddressARB(proc_name: *const u8) -> *const c_
 /// Arguments must satisfy EGL `eglSwapBuffers(EGLDisplay, EGLSurface)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn eglSwapBuffers(dpy: *mut c_void, surface: *mut c_void) -> u32 {
-    let p = unsafe { dlsym_next(c"eglSwapBuffers") };
-    if !p.is_null() {
-        let real: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32 =
-            unsafe { std::mem::transmute(p) };
-        unsafe { real(dpy, surface) }
-    } else {
-        0
-    }
+    unsafe { opengl::egl::hook_egl_swap_buffers(dpy, surface) }
 }
 
 /// EGL proc address resolver hook exported by `libfpshud.so`.
@@ -142,12 +113,5 @@ pub unsafe extern "C" fn eglSwapBuffers(dpy: *mut c_void, surface: *mut c_void) 
 /// `proc_name` must point to a valid NUL-terminated EGL symbol name.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn eglGetProcAddress(proc_name: *const c_char) -> *const c_void {
-    let p = unsafe { dlsym_next(c"eglGetProcAddress") };
-    if !p.is_null() {
-        let real: unsafe extern "C" fn(*const c_char) -> *const c_void =
-            unsafe { std::mem::transmute(p) };
-        unsafe { real(proc_name) }
-    } else {
-        std::ptr::null()
-    }
+    unsafe { opengl::egl::hook_egl_get_proc_address(proc_name) }
 }
