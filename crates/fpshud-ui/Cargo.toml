@@ -1,0 +1,21 @@
+[package]
+name = "fpshud-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fpshud-core = { path = "../fpshud-core" }
+fpshud-analytics = { path = "../fpshud-analytics" }
+fpshud-telemetry = { path = "../fpshud-telemetry" }
+fpshud-input = { path = "../fpshud-input" }
+fpshud-ipc = { path = "../fpshud-ipc" }
+gpui.workspace = true
+
+[dev-dependencies]
+fpshud-gpui-platform = { path = "../fpshud-gpui-platform" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

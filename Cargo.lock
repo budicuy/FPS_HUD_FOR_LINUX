@@ -831,6 +831,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "fpshud-ui"
+version = "0.1.0"
+dependencies = [
+ "fpshud-analytics",
+ "fpshud-core",
+ "fpshud-gpui-platform",
+ "fpshud-input",
+ "fpshud-ipc",
+ "fpshud-telemetry",
+ "gpui-ce",
+ "tempfile",
+]
+
+[[package]]
+name = "fpshud-ui-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fpshud-core",
+ "fpshud-gpui-platform",
+ "fpshud-ipc",
+ "fpshud-telemetry",
+ "fpshud-ui",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"

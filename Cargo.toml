@@ -8,6 +8,8 @@ members = [
     "crates/fpshud-input",
     "crates/fpshud-ipc",
     "crates/fpshud-gpui-platform",
+    "crates/fpshud-ui",
+    "crates/fpshud-ui-bin",
 ]
 
 [workspace.package]
