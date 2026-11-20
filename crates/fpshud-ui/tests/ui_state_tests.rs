@@ -153,3 +153,94 @@ fn toggle_metric_preserves_unsaved_edits_and_preview_local_coord_mapping() {
     let (nxc, nyc) = fpshud_ui::dashboard::map_preview_point_to_norm(128.0, 165.0, 48.0, 120.0, 160.0, 90.0);
     assert!((nxc - 0.5).abs() < 1e-5 && (nyc - 0.5).abs() < 1e-5);
 }
+
+#[test]
+fn dashboard_mouse_click_fires_action_and_emits_config() {
+    use fpshud_input::UiInputEvent;
+    use gpui::{Context, InteractiveElement, IntoElement, MouseButton, Render, Styled, Window, div, px};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+    struct ClickProbe {
+        hits: Arc<AtomicUsize>,
+    }
+    impl Render for ClickProbe {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let hits = Arc::clone(&self.hits);
+            div().w(px(300.0)).h(px(200.0)).on_mouse_down(MouseButton::Left, move |_, _, _| {
+                hits.fetch_add(1, Ordering::Relaxed);
+            })
+        }
+    }
+
+    let probe_hits = Arc::new(AtomicUsize::new(0));
+    let probe_hits_clone = Arc::clone(&probe_hits);
+    let mut probe_rt = OffscreenGpuiRuntime::new_with_view(400, 300, 1.0, move |_, _| ClickProbe {
+        hits: probe_hits_clone,
+    })
+    .unwrap();
+    let mut probe_writer = ShmRingWriter::new(400, 300).unwrap();
+    let _ = probe_rt.render_scene_to_slot(&mut probe_writer).unwrap();
+    probe_rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: 50.0, y: 50.0 },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    assert_eq!(probe_hits.load(Ordering::Relaxed), 1, "raw ClickProbe hit failed");
+
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot::default();
+    let mut rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, move |_, _| {
+        FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut writer = ShmRingWriter::new(1280, 720).unwrap();
+
+    // Render initial dashboard frame so GPUI hitboxes are laid out cleanly
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+
+    // Scan top half of centered dashboard
+    let mut got_minimal = false;
+    'scan: for y in (20..360).step_by(12) {
+        for x in (100..650).step_by(18) {
+            rt.dispatch_input(&[
+                UiInputEvent::MouseMove { x: x as f32, y: y as f32 },
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ]);
+            let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+            let msgs = rt.update_app(FpshudRootView::take_outgoing);
+            if msgs.iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if c.preset == PresetType::Minimal)) {
+                got_minimal = true;
+                break 'scan;
+            }
+        }
+    }
+    assert!(got_minimal, "clicking Minimal button via OffscreenGpuiRuntime must emit ConfigUpdated(Minimal)");
+
+    // Clicking with centered cursor + verifying software cursor doesn't block Col 2 "FPS (5)" / sensor click
+    assert!(fpshud_ui::dashboard::compute_dashboard_width(1280.0) >= 1000.0);
+    assert!(fpshud_ui::dashboard::compute_dashboard_col2_width(1280.0) >= 480.0);
+
+    // Click "Close" or preset again at 1280x720 with cursor drawn at center first -> must still hit header/sensor
+    let mut got_advance = false;
+    'scan_adv: for y in (30..200).step_by(10) {
+        for x in (340..620).step_by(14) {
+            rt.dispatch_input(&[
+                UiInputEvent::MouseMove { x: x as f32, y: y as f32 },
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ]);
+            let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+            let msgs = rt.update_app(FpshudRootView::take_outgoing);
+            if msgs.iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if c.preset == PresetType::Advance)) {
+                got_advance = true;
+                break 'scan_adv;
+            }
+        }
+    }
+    assert!(got_advance, "software cursor overlay must not block clicking Advance preset");
+}

@@ -181,6 +181,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_instance(
         hit
     });
     if let Ok(mut rt) = LayerRuntime::global().lock() {
+        rt.input.detach_wayland_display(std::ptr::null_mut());
         rt.input.attach_wayland_display_hint(false);
         rt.input.reset_surface_hints();
     }
@@ -337,6 +338,10 @@ pub(crate) unsafe extern "system" fn hook_create_wayland_surface_khr(
                 .insert(surf.as_raw(), (SurfaceBackendType::Wayland, 0));
         }
         if let Ok(mut rt) = LayerRuntime::global().lock() {
+            if !p_create_info.is_null() {
+                let wl_dpy = unsafe { (*p_create_info).display.cast::<c_void>() };
+                rt.input.attach_wayland_display(wl_dpy);
+            }
             rt.input.attach_wayland_display_hint(true);
         }
     }

@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 ash.workspace = true
 ash-layer.workspace = true
 fpshud-core = { path = "../fpshud-core" }
-fpshud-telemetry = { path = "../fpshud-telemetry" }
+fpshud-telemetry = { path = "../fpshud-telemetry", features = ["vendor-gpu-apis"] }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-screenshot = { path = "../fpshud-screenshot" }
 fpshud-ipc = { path = "../fpshud-ipc" }

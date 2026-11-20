@@ -271,3 +271,45 @@ fn evdev_drain_event_batches_reads_until_wouldblock_and_bounds_batches() {
     assert_eq!(calls, MAX_FETCH_BATCHES_PER_POLL);
     assert_eq!(bounded.len(), MAX_FETCH_BATCHES_PER_POLL);
 }
+
+#[test]
+fn x11_button_mask_decodes_left_right_middle_correctly() {
+    use fpshud_input::x11::{decode_x11_button_mask, x11_detail_to_button_idx};
+
+    assert_eq!(decode_x11_button_mask(1 << 8), [true, false, false]); // Button1 = Left
+    assert_eq!(decode_x11_button_mask(1 << 10), [false, true, false]); // Button3 = Right
+    assert_eq!(decode_x11_button_mask(1 << 9), [false, false, true]); // Button2 = Middle
+    assert_eq!(x11_detail_to_button_idx(1), Some(0));
+    assert_eq!(x11_detail_to_button_idx(3), Some(1));
+    assert_eq!(x11_detail_to_button_idx(2), Some(2));
+    assert_eq!(x11_detail_to_button_idx(4), None);
+}
+
+#[test]
+fn wayland_backend_translates_pointer_events_and_centers_cursor_on_gui_open() {
+    use fpshud_input::wayland::{WaylandBackend, WaylandEvent, map_wl_button};
+
+    assert_eq!(map_wl_button(0x110), Some(0)); // BTN_LEFT
+    assert_eq!(map_wl_button(0x111), Some(1)); // BTN_RIGHT
+    assert_eq!(map_wl_button(0x112), Some(2)); // BTN_MIDDLE
+    assert_eq!(map_wl_button(0x120), None);
+
+    let mut wl = WaylandBackend::new_for_test();
+    wl.push_test_event(WaylandEvent::CursorPos { x: 320.5, y: 180.25 });
+    wl.push_test_event(WaylandEvent::MouseBtn { button: 0, down: true });
+    wl.push_test_event(WaylandEvent::MouseBtn { button: 0, down: false });
+    let drained = wl.poll_events();
+    assert_eq!(drained.len(), 3);
+
+    // Saat GUI terbuka pertama kali tanpa gerakan mouse, kursor harus otomatis ditengah layar
+    let mut mgr = InputManager::new_headless();
+    let mut cfg = HudConfig {
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let (_, ui_evs, _) = mgr.poll_frame(&mut cfg, 1280.0, 720.0);
+    assert!(ui_evs.iter().any(|e| matches!(
+        e,
+        UiInputEvent::MouseMove { x, y } if (*x - 640.0).abs() < 0.1 && (*y - 360.0).abs() < 0.1
+    )));
+}

@@ -151,3 +151,37 @@ fn drm_gpu_system_io_battery_and_collector_toggle_benchmark() {
     let mm: u32 = fmt_snap.system_time[3..5].parse().unwrap();
     assert!(hh <= 23 && mm <= 59);
 }
+
+#[cfg(feature = "vendor-gpu-apis")]
+#[test]
+fn nvml_d3cold_bandwidth_and_live_nvidia_probe() {
+    use fpshud_telemetry::{
+        GpuBackendType, TelemetrySnapshot,
+        vendor::{NvidiaNvmlProvider, compute_nvml_bandwidth_gbs, is_nvidia_d3cold_suspended},
+    };
+
+    // 1. D3cold guard: suspended NVIDIA card detected without waking hardware
+    let root_susp = tempfile::tempdir().unwrap();
+    let dev = root_susp.path().join("sys/class/drm/card0/device");
+    fs::create_dir_all(dev.join("power")).unwrap();
+    fs::write(dev.join("vendor"), "0x10de\n").unwrap();
+    fs::write(dev.join("power/runtime_status"), "suspended\n").unwrap();
+    assert!(is_nvidia_d3cold_suspended(root_susp.path()));
+
+    fs::write(dev.join("power/runtime_status"), "active\n").unwrap();
+    assert!(!is_nvidia_d3cold_suspended(root_susp.path()));
+
+    // 2. Bus width * mem clock * utilization bandwidth calculation (192-bit @ 7000 MHz @ 50%)
+    let bw = compute_nvml_bandwidth_gbs(7000, 192, 50);
+    assert!((bw - 168.0).abs() < 0.1, "expected 168 GB/s, got {bw}");
+
+    // 3. Real host NVML probe when libnvidia-ml.so.1 exists
+    if let Some(mut nvml) = NvidiaNvmlProvider::init_for_root(std::path::Path::new("/"), 0, 0) {
+        let mut snap = TelemetrySnapshot::default();
+        assert!(nvml.poll(&mut snap));
+        assert!(snap.gpu_available);
+        assert_eq!(snap.gpu_backend, GpuBackendType::Nvml);
+        assert!(!snap.gpu_model.is_empty() && snap.gpu_model != "NVIDIA GPU");
+        assert!(snap.gpu_vram_total_gb > 0.5);
+    }
+}

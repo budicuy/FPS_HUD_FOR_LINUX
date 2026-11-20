@@ -13,6 +13,30 @@ use gpui::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+const COL1_WIDTH_PX: f32 = 244.0;
+const COL3_WIDTH_PX: f32 = 224.0;
+const DASHBOARD_CHROME_PX: f32 = 44.0;
+
+#[must_use]
+pub fn compute_dashboard_width(viewport_w: f32) -> f32 {
+    (viewport_w - 24.0).clamp(680.0, 1080.0)
+}
+
+#[must_use]
+pub fn compute_dashboard_col2_width(viewport_w: f32) -> f32 {
+    (compute_dashboard_width(viewport_w) - COL1_WIDTH_PX - COL3_WIDTH_PX - DASHBOARD_CHROME_PX)
+        .max(380.0)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars || max_chars <= 3 {
+        return text.to_string();
+    }
+    let prefix: String = text.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
+}
+
 /// Maps an absolute window cursor coordinate inside preview box bounds into clamped `[0.0, 1.0]`.
 #[must_use]
 pub fn map_preview_point_to_norm(
@@ -67,6 +91,19 @@ impl FpshudRootView {
             + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.styled_button(label, active, accent_hex, false, on_click, cx)
+    }
+
+    fn styled_button(
+        &self,
+        label: impl Into<String>,
+        active: bool,
+        accent_hex: u32,
+        full_width: bool,
+        on_click: impl Fn(&mut Self, &MouseDownEvent, &mut gpui::Window, &mut Context<Self>)
+            + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let bg = if active {
             accent_hex
         } else {
@@ -77,18 +114,22 @@ impl FpshudRootView {
         } else {
             rgba_u32(68, 82, 104, 180)
         };
-        div()
-            .px(px(8.0))
-            .py(px(4.0))
+        let mut btn = div()
+            .px(px(if full_width { 6.0 } else { 8.0 }))
+            .py(px(if full_width { 3.0 } else { 4.0 }))
             .rounded(px(4.0))
             .bg(rgba(bg))
             .border_1()
             .border_color(rgba(border))
             .text_size(px(12.0))
             .text_color(rgba(rgba_u32(236, 242, 252, 255)))
+            .overflow_hidden()
             .on_mouse_down(MouseButton::Left, cx.listener(on_click))
-            .child(label.into())
-            .into_any_element()
+            .child(label.into());
+        if full_width {
+            btn = btn.w_full();
+        }
+        btn.into_any_element()
     }
 
     fn render_header_bar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -359,7 +400,8 @@ impl FpshudRootView {
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .w(px(230.0))
+            .w(px(COL1_WIDTH_PX))
+            .flex_shrink_0()
             .p(px(8.0))
             .rounded(px(6.0))
             .bg(rgba(rgba_u32(20, 25, 36, 225)))
@@ -518,7 +560,7 @@ impl FpshudRootView {
             .into_any_element()
     }
 
-    fn render_column_sensors(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_column_sensors(&self, col2_w: f32, cx: &mut Context<Self>) -> AnyElement {
         let filters = [
             ("All (31)", SensorFilter::All),
             ("Standard", SensorFilter::Standard),
@@ -547,11 +589,13 @@ impl FpshudRootView {
             .map(|metric| {
                 let enabled = self.store.config.has_metric(metric);
                 let (label, val, _, _) = self.store.format_metric_row(metric);
+                let val_disp = truncate_chars(&val, 26);
                 let mark = if enabled { "[x]" } else { "[ ]" };
-                self.action_button(
-                    format!("{mark} {label}: {val}"),
+                self.styled_button(
+                    format!("{mark} {label}: {val_disp}"),
                     enabled,
                     rgba_u32(34, 96, 175, 225),
+                    true,
                     move |view, _, _, cx| {
                         view.store.toggle_metric(metric);
                         view.flush_outgoing(cx);
@@ -576,7 +620,8 @@ impl FpshudRootView {
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .w(px(360.0))
+            .w(px(col2_w))
+            .flex_shrink_0()
             .p(px(8.0))
             .rounded(px(6.0))
             .bg(rgba(rgba_u32(20, 25, 36, 225)))
@@ -593,9 +638,25 @@ impl FpshudRootView {
                     .flex_row()
                     .items_start()
                     .gap(px(6.0))
-                    .overflow_hidden()
-                    .child(div().flex().flex_col().gap(px(3.0)).children(col_a))
-                    .child(div().flex().flex_col().gap(px(3.0)).children(col_b)),
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(3.0))
+                            .children(col_a),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(3.0))
+                            .children(col_b),
+                    ),
             )
             .into_any_element()
     }
@@ -619,7 +680,8 @@ impl FpshudRootView {
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .w(px(230.0))
+            .w(px(COL3_WIDTH_PX))
+            .flex_shrink_0()
             .p(px(8.0))
             .rounded(px(6.0))
             .bg(rgba(rgba_u32(20, 25, 36, 225)))
@@ -707,12 +769,15 @@ impl FpshudRootView {
             .into_any_element()
     }
 
-    pub fn render_dashboard(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn render_dashboard(&self, viewport_w: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.store.config.gui_open {
             return None;
         }
+        let dash_w = compute_dashboard_width(viewport_w);
+        let col2_w = compute_dashboard_col2_width(viewport_w);
         Some(
             div()
+                .w(px(dash_w))
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
@@ -729,7 +794,7 @@ impl FpshudRootView {
                         .items_start()
                         .gap(px(10.0))
                         .child(self.render_column_layout(cx))
-                        .child(self.render_column_sensors(cx))
+                        .child(self.render_column_sensors(col2_w, cx))
                         .child(self.render_column_actions(cx)),
                 )
                 .into_any_element(),

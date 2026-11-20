@@ -38,6 +38,7 @@ postcard = { version = "1.1", features = ["use-std"] }
 rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "thread", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
+wayland-sys = { version = "0.31", default-features = false, features = ["client", "dlopen"] }
 x11rb = "0.14"
 
 [patch.crates-io]

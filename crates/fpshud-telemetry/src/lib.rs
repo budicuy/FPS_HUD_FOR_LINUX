@@ -25,26 +25,48 @@ use std::time::{Duration, Instant};
 use system::SystemProvider;
 
 struct Providers {
+    #[cfg(feature = "vendor-gpu-apis")]
+    root: PathBuf,
     cpu: CpuProvider,
     mem: MemoryProvider,
     gpu: GpuDrmProvider,
+    #[cfg(feature = "vendor-gpu-apis")]
+    nvml: Option<vendor::NvidiaNvmlProvider>,
     sys: SystemProvider,
 }
 
 impl Providers {
     fn new(root: &Path) -> Self {
         Self {
+            #[cfg(feature = "vendor-gpu-apis")]
+            root: root.to_path_buf(),
             cpu: CpuProvider::new(root),
             mem: MemoryProvider::new(root),
             gpu: GpuDrmProvider::new(root),
+            #[cfg(feature = "vendor-gpu-apis")]
+            nvml: vendor::NvidiaNvmlProvider::init_for_root(root, 0, 0),
             sys: SystemProvider::new(root),
+        }
+    }
+
+    fn set_active_gpu(&mut self, vendor_id: u32, device_id: u32) {
+        self.gpu.set_preferred_gpu(vendor_id, device_id);
+        #[cfg(feature = "vendor-gpu-apis")]
+        {
+            self.nvml = vendor::NvidiaNvmlProvider::init_for_root(&self.root, vendor_id, device_id);
         }
     }
 
     fn poll_into(&mut self, snap: &mut TelemetrySnapshot) {
         self.cpu.poll(snap);
         self.mem.poll(snap);
-        self.gpu.poll(snap);
+        #[cfg(feature = "vendor-gpu-apis")]
+        let nvml_ok = self.nvml.as_mut().is_some_and(|n| n.poll(snap));
+        #[cfg(not(feature = "vendor-gpu-apis"))]
+        let nvml_ok = false;
+        if !nvml_ok {
+            self.gpu.poll(snap);
+        }
         self.sys.poll(snap);
     }
 }
@@ -155,7 +177,7 @@ impl TelemetryCollector {
 
     pub fn notify_active_gpu(&self, vendor_id: u32, device_id: u32) {
         if let Ok(mut p) = self.providers.lock() {
-            p.gpu.set_preferred_gpu(vendor_id, device_id);
+            p.set_active_gpu(vendor_id, device_id);
             if self.mock_mode
                 && let Ok(mut s) = self.snapshot.write()
             {

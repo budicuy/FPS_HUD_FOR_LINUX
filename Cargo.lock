@@ -864,8 +864,10 @@ version = "0.1.0"
 dependencies = [
  "evdev",
  "fpshud-core",
+ "libloading",
  "serde",
  "tempfile",
+ "wayland-sys",
  "x11rb",
 ]
 

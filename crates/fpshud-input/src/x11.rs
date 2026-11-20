@@ -5,12 +5,34 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
+use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateGCAux, EventMask, GrabMode, GrabStatus, Rectangle,
 };
 use x11rb::rust_connection::RustConnection;
 
 const GRAB_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Decodes X11 `KeyButMask` pointer bits into `[Left, Right, Middle]`.
+#[must_use]
+pub const fn decode_x11_button_mask(mask_bits: u16) -> [bool; 3] {
+    [
+        (mask_bits & (1 << 8)) != 0,  // Button1 = Left
+        (mask_bits & (1 << 10)) != 0, // Button3 = Right
+        (mask_bits & (1 << 9)) != 0,  // Button2 = Middle
+    ]
+}
+
+/// Maps X11 `ButtonPress`/`ButtonRelease` detail code (`1=Left, 3=Right, 2=Middle`) into button index.
+#[must_use]
+pub const fn x11_detail_to_button_idx(detail: u8) -> Option<usize> {
+    match detail {
+        1 => Some(0),
+        3 => Some(1),
+        2 => Some(2),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum X11Event {
@@ -186,11 +208,57 @@ fn create_blank_cursor(conn: &RustConnection, root: u32) -> Option<u32> {
     Some(cursor)
 }
 
+fn translate_root_to_target(
+    conn: &RustConnection,
+    root: u32,
+    target_window: u32,
+    root_x: i16,
+    root_y: i16,
+) -> (f32, f32) {
+    let win = if target_window > 1 {
+        target_window
+    } else {
+        conn.get_input_focus()
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(root, |f| if f.focus > 1 { f.focus } else { root })
+    };
+    if win != root
+        && let Ok(cookie) = conn.translate_coordinates(root, win, root_x, root_y)
+        && let Ok(t) = cookie.reply()
+    {
+        return (f32::from(t.dst_x), f32::from(t.dst_y));
+    }
+    (f32::from(root_x), f32::from(root_y))
+}
+
+fn try_grab_pointer_on(
+    conn: &RustConnection,
+    win: u32,
+    mask: EventMask,
+    blank_cursor: u32,
+) -> bool {
+    conn.grab_pointer(
+        false,
+        win,
+        mask,
+        GrabMode::ASYNC,
+        GrabMode::ASYNC,
+        x11rb::NONE,
+        blank_cursor,
+        x11rb::CURRENT_TIME,
+    )
+    .ok()
+    .and_then(|c| c.reply().ok())
+    .is_some_and(|r| r.status == GrabStatus::SUCCESS)
+}
+
 fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
     let blank_cursor = create_blank_cursor(&conn, root).unwrap_or(x11rb::NONE);
     let mut prev_keymap = [0_u8; 32];
     let mut prev_buttons = [false; 3];
     let mut grab_active = false;
+    let mut kbd_grab_active = false;
     let mut last_grab_attempt = Instant::now() - GRAB_RETRY_INTERVAL;
 
     while !shared.stop.load(Ordering::Relaxed) {
@@ -204,32 +272,28 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                     let mask = EventMask::BUTTON_PRESS
                         | EventMask::BUTTON_RELEASE
                         | EventMask::POINTER_MOTION;
-                    let p_ok = conn
-                        .grab_pointer(
+                    let mut p_ok = try_grab_pointer_on(&conn, grab_win, mask, blank_cursor);
+                    let mut active_win = grab_win;
+                    if !p_ok && grab_win != root {
+                        p_ok = try_grab_pointer_on(&conn, root, mask, blank_cursor);
+                        active_win = root;
+                    }
+                    let k_ok = if p_ok {
+                        conn.grab_keyboard(
                             false,
-                            grab_win,
-                            mask,
-                            GrabMode::ASYNC,
-                            GrabMode::ASYNC,
-                            x11rb::NONE,
-                            blank_cursor,
-                            x11rb::CURRENT_TIME,
-                        )
-                        .ok()
-                        .and_then(|c| c.reply().ok())
-                        .is_some_and(|r| r.status == GrabStatus::SUCCESS);
-                    let k_ok = conn
-                        .grab_keyboard(
-                            false,
-                            grab_win,
+                            active_win,
                             x11rb::CURRENT_TIME,
                             GrabMode::ASYNC,
                             GrabMode::ASYNC,
                         )
                         .ok()
                         .and_then(|c| c.reply().ok())
-                        .is_some_and(|r| r.status == GrabStatus::SUCCESS);
-                    grab_active = p_ok && k_ok;
+                        .is_some_and(|r| r.status == GrabStatus::SUCCESS)
+                    } else {
+                        false
+                    };
+                    grab_active = p_ok;
+                    kbd_grab_active = k_ok;
                     if !grab_active {
                         let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
                         let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
@@ -238,14 +302,46 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                 }
             } else {
                 let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
-                let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+                if kbd_grab_active {
+                    let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+                }
                 let _ = conn.flush();
                 grab_active = false;
+                kbd_grab_active = false;
                 shared.is_grabbed.store(false, Ordering::Relaxed);
             }
         }
 
         let mut batch = Vec::new();
+        let target = shared.target_window.load(Ordering::Relaxed);
+
+        // Drain queued X11 events so fast clicks and motion while grabbed are never dropped
+        while let Ok(Some(ev)) = conn.poll_for_event() {
+            match ev {
+                Event::MotionNotify(m) => {
+                    let (wx, wy) = translate_root_to_target(&conn, root, target, m.root_x, m.root_y);
+                    batch.push(X11Event::CursorPos { x: wx, y: wy });
+                }
+                Event::ButtonPress(b) => {
+                    if let Some(idx) = x11_detail_to_button_idx(b.detail)
+                        && !prev_buttons[idx]
+                    {
+                        prev_buttons[idx] = true;
+                        batch.push(X11Event::MouseButtons(prev_buttons));
+                    }
+                }
+                Event::ButtonRelease(b) => {
+                    if let Some(idx) = x11_detail_to_button_idx(b.detail)
+                        && prev_buttons[idx]
+                    {
+                        prev_buttons[idx] = false;
+                        batch.push(X11Event::MouseButtons(prev_buttons));
+                    }
+                }
+                _ => {}
+            }
+        }
+
         if let Ok(cookie) = conn.query_keymap()
             && let Ok(reply) = cookie.reply()
         {
@@ -258,34 +354,10 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
         if let Ok(ptr_cookie) = conn.query_pointer(root)
             && let Ok(ptr) = ptr_cookie.reply()
         {
-            let target = shared.target_window.load(Ordering::Relaxed);
-            let win = if target > 1 {
-                target
-            } else {
-                conn.get_input_focus()
-                    .ok()
-                    .and_then(|c| c.reply().ok())
-                    .map_or(root, |f| if f.focus > 1 { f.focus } else { root })
-            };
-            let (wx, wy) = if win != root {
-                conn.translate_coordinates(root, win, ptr.root_x, ptr.root_y)
-                    .ok()
-                    .and_then(|c| c.reply().ok())
-                    .map_or((ptr.root_x, ptr.root_y), |t| (t.dst_x, t.dst_y))
-            } else {
-                (ptr.root_x, ptr.root_y)
-            };
-            batch.push(X11Event::CursorPos {
-                x: f32::from(wx),
-                y: f32::from(wy),
-            });
+            let (wx, wy) = translate_root_to_target(&conn, root, target, ptr.root_x, ptr.root_y);
+            batch.push(X11Event::CursorPos { x: wx, y: wy });
 
-            let mask_bits = ptr.mask.bits();
-            let btns = [
-                (mask_bits & (1 << 8)) != 0,
-                (mask_bits & (1 << 9)) != 0,
-                (mask_bits & (1 << 10)) != 0,
-            ];
+            let btns = decode_x11_button_mask(ptr.mask.bits());
             if btns != prev_buttons {
                 prev_buttons = btns;
                 batch.push(X11Event::MouseButtons(btns));
@@ -303,6 +375,8 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
 
     if grab_active {
         let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
+    }
+    if kbd_grab_active {
         let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
     }
     if blank_cursor != x11rb::NONE {

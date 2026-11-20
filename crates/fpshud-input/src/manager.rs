@@ -3,9 +3,11 @@ use crate::keycodes::{
     BTN_MISC, KEY_ESC, KEY_F9, KEY_F11, KEY_F12, active_modifier_mask, is_bench_toggle_key,
     is_gui_toggle_key, is_hud_toggle_key, is_modifier_key, matches_keybind, modifier_bit_for_key,
 };
+use crate::wayland::{WaylandBackend, WaylandEvent};
 use crate::x11::{X11Backend, X11Event};
 use fpshud_core::{HudConfig, Keybind};
 use serde::{Deserialize, Serialize};
+use std::ffi::c_void;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SurfaceBackendType {
@@ -42,10 +44,11 @@ pub enum UiInputEvent {
     KeyUp { code: u32, mod_mask: u32 },
 }
 
-/// Manages surface disambiguation, X11/Evdev backends, 4 hotkeys, & interactive capture.
+/// Manages surface disambiguation, X11/Wayland/Evdev backends, 4 hotkeys, & interactive capture.
 pub struct InputManager {
     x11: Option<X11Backend>,
     evdev: Option<EvdevBackend>,
+    wayland: Option<WaylandBackend>,
     wayland_display_hint: bool,
     x11_swapchain_active: bool,
     wayland_swapchain_active: bool,
@@ -72,6 +75,7 @@ impl InputManager {
         Self {
             x11: Some(X11Backend::connect()),
             evdev: Some(EvdevBackend::default()),
+            wayland: Some(WaylandBackend::new()),
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -92,6 +96,7 @@ impl InputManager {
         Self {
             x11: None,
             evdev: None,
+            wayland: None,
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -109,6 +114,24 @@ impl InputManager {
 
     pub fn attach_wayland_display_hint(&mut self, present: bool) {
         self.wayland_display_hint = present;
+    }
+
+    pub fn attach_wayland_display(&mut self, display: *mut c_void) {
+        if !display.is_null() {
+            self.wayland_display_hint = true;
+            if let Some(wl) = &mut self.wayland {
+                wl.attach_display(display);
+            }
+        }
+    }
+
+    pub fn detach_wayland_display(&mut self, display: *mut c_void) {
+        if let Some(wl) = &mut self.wayland {
+            wl.detach_display(display);
+            if !wl.has_display() {
+                self.wayland_display_hint = false;
+            }
+        }
     }
 
     pub fn notify_x11_swapchain(&mut self, window_id: u32) {
@@ -139,6 +162,9 @@ impl InputManager {
         self.x11_swapchain_active = false;
         self.wayland_swapchain_active = false;
         self.x11_target_window = None;
+        if let Some(wl) = &mut self.wayland {
+            wl.detach_display(std::ptr::null_mut());
+        }
     }
 
     #[must_use]
@@ -331,6 +357,30 @@ impl InputManager {
         }
     }
 
+    fn flush_cursor_move(&mut self, cfg: &HudConfig, max_w: f32, max_h: f32, ui_events: &mut Vec<UiInputEvent>) {
+        if !cfg.gui_open {
+            self.last_emitted_cursor = None;
+            return;
+        }
+        let (cx, cy) = match self.cursor_pos {
+            Some(pos) => pos,
+            None => {
+                let centered = (max_w * 0.5, max_h * 0.5);
+                self.cursor_pos = Some(centered);
+                centered
+            }
+        };
+        let nx = cx.clamp(0.0, max_w);
+        let ny = cy.clamp(0.0, max_h);
+        let moved = self.last_emitted_cursor.is_none_or(|(px, py)| {
+            (nx - px).abs() > 0.25 || (ny - py).abs() > 0.25
+        });
+        if moved {
+            self.last_emitted_cursor = Some((nx, ny));
+            ui_events.push(UiInputEvent::MouseMove { x: nx, y: ny });
+        }
+    }
+
     pub fn poll_frame(
         &mut self,
         cfg: &mut HudConfig,
@@ -367,6 +417,7 @@ impl InputManager {
                     }
                     EvdevEvent::Scroll { delta } => {
                         if cfg.gui_open {
+                            self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
                             ui_events.push(UiInputEvent::ScrollWheel {
                                 delta_x: 0.0,
                                 delta_y: delta as f32,
@@ -378,6 +429,7 @@ impl InputManager {
                         if idx < self.mouse_buttons.len() && self.mouse_buttons[idx] != down {
                             self.mouse_buttons[idx] = down;
                             if cfg.gui_open || !down {
+                                self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
                                 ui_events.push(if down {
                                     UiInputEvent::MouseDown { button }
                                 } else {
@@ -390,10 +442,10 @@ impl InputManager {
             }
         }
 
-        if let Some(x11) = &self.x11 {
-            for ev in x11.drain_events() {
+        if let Some(wl) = &mut self.wayland {
+            for ev in wl.poll_events() {
                 match ev {
-                    X11Event::Key { code, down } => {
+                    WaylandEvent::Key { code, down } => {
                         actions.extend(self.handle_key_event(code, down, cfg));
                         if cfg.gui_open {
                             let mod_mask = active_modifier_mask(&self.keys_down);
@@ -404,31 +456,60 @@ impl InputManager {
                             });
                         }
                     }
-                    X11Event::CursorPos { x, y } => {
+                    WaylandEvent::CursorPos { x, y } => {
                         self.cursor_pos = Some((x, y));
                     }
-                    X11Event::MouseButtons(btns) => {
-                        ui_events.extend(self.dispatch_x11_mouse_buttons(btns, cfg));
+                    WaylandEvent::Scroll { delta_x, delta_y } => {
+                        if cfg.gui_open {
+                            self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
+                            ui_events.push(UiInputEvent::ScrollWheel { delta_x, delta_y });
+                        }
+                    }
+                    WaylandEvent::MouseBtn { button, down } => {
+                        let idx = usize::from(button);
+                        if idx < self.mouse_buttons.len() && self.mouse_buttons[idx] != down {
+                            self.mouse_buttons[idx] = down;
+                            if cfg.gui_open || !down {
+                                self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
+                                ui_events.push(if down {
+                                    UiInputEvent::MouseDown { button }
+                                } else {
+                                    UiInputEvent::MouseUp { button }
+                                });
+                            }
+                        }
                     }
                 }
             }
         }
 
-        if cfg.gui_open {
-            if let Some((cx, cy)) = self.cursor_pos {
-                let nx = cx.clamp(0.0, max_w);
-                let ny = cy.clamp(0.0, max_h);
-                let moved = self.last_emitted_cursor.is_none_or(|(px, py)| {
-                    (nx - px).abs() > 0.25 || (ny - py).abs() > 0.25
-                });
-                if moved {
-                    self.last_emitted_cursor = Some((nx, ny));
-                    ui_events.push(UiInputEvent::MouseMove { x: nx, y: ny });
+        let x11_pointer_allowed = !self.wayland_swapchain_active || self.x11_swapchain_active;
+        let x11_events = self.x11.as_ref().map(X11Backend::drain_events).unwrap_or_default();
+        for ev in x11_events {
+            match ev {
+                X11Event::Key { code, down } => {
+                    actions.extend(self.handle_key_event(code, down, cfg));
+                    if cfg.gui_open {
+                        let mod_mask = active_modifier_mask(&self.keys_down);
+                        ui_events.push(if down {
+                            UiInputEvent::KeyDown { code, mod_mask }
+                        } else {
+                            UiInputEvent::KeyUp { code, mod_mask }
+                        });
+                    }
                 }
+                X11Event::CursorPos { x, y } if x11_pointer_allowed => {
+                    self.cursor_pos = Some((x, y));
+                }
+                X11Event::MouseButtons(btns) if x11_pointer_allowed => {
+                    self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
+                    ui_events.extend(self.dispatch_x11_mouse_buttons(btns, cfg));
+                }
+                X11Event::CursorPos { .. } | X11Event::MouseButtons(_) => {}
             }
-        } else {
-            self.last_emitted_cursor = None;
         }
+
+        self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
 
         self.sync_grab_state(cfg);
         let grabbed = self.x11.as_ref().is_some_and(X11Backend::is_grabbed);

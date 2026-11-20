@@ -114,7 +114,7 @@ impl Render for FpshudRootView {
             );
         }
 
-        if let Some(dash_el) = self.render_dashboard(cx) {
+        if let Some(dash_el) = self.render_dashboard(viewport_w, cx) {
             root = root.child(
                 div()
                     .w(px(viewport_w))
@@ -126,6 +126,30 @@ impl Render for FpshudRootView {
                     .items_center()
                     .justify_center()
                     .child(dash_el),
+            );
+        }
+
+        if self.store.config.gui_open {
+            let cur = window.mouse_position();
+            let cursor_x = f32::from(cur.x).clamp(0.0, (viewport_w - 6.0).max(0.0));
+            let cursor_y = f32::from(cur.y).clamp(0.0, (viewport_h - 6.0).max(0.0));
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(cursor_x))
+                    .top(px(cursor_y))
+                    .w(px(14.0))
+                    .h(px(14.0))
+                    .rounded(px(2.0))
+                    .bg(rgba(state::rgba_u32(12, 16, 24, 245)))
+                    .border_2()
+                    .border_color(rgba(state::rgba_u32(255, 255, 255, 255)))
+                    .child(
+                        div()
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .bg(rgba(state::rgba_u32(95, 205, 255, 255))),
+                    ),
             );
         }
 

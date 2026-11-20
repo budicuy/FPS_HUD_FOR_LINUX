@@ -3,6 +3,7 @@
 pub mod evdev;
 pub mod keycodes;
 pub mod manager;
+pub mod wayland;
 pub mod x11;
 
 pub use manager::{
