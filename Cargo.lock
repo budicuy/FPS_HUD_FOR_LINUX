@@ -810,6 +810,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fpshud-layer"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "fpshud-core",
+ "fpshud-input",
+ "fpshud-ipc",
+ "fpshud-screenshot",
+ "fpshud-telemetry",
+ "libc",
+]
+
+[[package]]
 name = "fpshud-screenshot"
 version = "0.1.0"
 dependencies = [
