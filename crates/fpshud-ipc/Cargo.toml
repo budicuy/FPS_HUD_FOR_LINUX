@@ -10,7 +10,9 @@ fpshud-core = { path = "../fpshud-core" }
 fpshud-analytics = { path = "../fpshud-analytics" }
 fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-input = { path = "../fpshud-input" }
+postcard.workspace = true
 rustix.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

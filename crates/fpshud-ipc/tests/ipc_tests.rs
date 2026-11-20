@@ -3,7 +3,7 @@ use fpshud_input::{KeybindTarget, UiInputEvent};
 use fpshud_ipc::{
     FrameBackendKind, IpcClient, IpcServer, LayerToUiMsg, ShmRingReader, ShmRingWriter,
     ShmSlotMeta, UiToLayerMsg,
-    protocol::{IPC_MAGIC, MAX_IPC_PAYLOAD, WireHeader},
+    protocol::{IPC_MAGIC, MAX_IPC_PAYLOAD},
     socket::verify_peer_credentials,
 };
 use fpshud_telemetry::TelemetrySnapshot;
@@ -12,9 +12,6 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn protocol_all_variants_and_corrupt_rejection() {
-    assert_eq!(std::mem::size_of::<WireHeader>(), 16);
-    assert_eq!(std::mem::size_of::<ShmSlotMeta>(), 48);
-
     let cfg = HudConfig::default();
     let snap = TelemetrySnapshot {
         fps: 144.5,
@@ -80,9 +77,10 @@ fn protocol_all_variants_and_corrupt_rejection() {
         assert_eq!(&decoded, msg);
     }
 
-    // Uji penolakan magic salah, ukuran terpotong, diskriminan tak dikenal, dan payload terlalu besar
+    // Uji penolakan magic salah, ukuran terpotong, diskriminan tak dikenal, trailing byte, dan overflow batas
     assert!(LayerToUiMsg::decode(b"BAD!").is_err());
     let mut bad_magic = LayerToUiMsg::Shutdown.encode().unwrap();
+    assert_eq!(&bad_magic[0..4], &IPC_MAGIC);
     bad_magic[0] ^= 0xff;
     assert!(LayerToUiMsg::decode(&bad_magic).is_err());
 
@@ -90,10 +88,34 @@ fn protocol_all_variants_and_corrupt_rejection() {
     bad_disc[4] = 0xfe;
     assert!(UiToLayerMsg::decode(&bad_disc).is_err());
 
-    let mut huge = [0_u8; 20];
-    huge[0..4].copy_from_slice(&IPC_MAGIC.to_le_bytes());
-    huge[8..12].copy_from_slice(&((MAX_IPC_PAYLOAD as u32) + 1).to_le_bytes());
+    let mut with_trailing = LayerToUiMsg::Shutdown.encode().unwrap();
+    with_trailing.push(0x00);
+    assert!(LayerToUiMsg::decode(&with_trailing).is_err());
+
+    let mut huge = vec![0_u8; MAX_IPC_PAYLOAD + 1];
+    huge[0..4].copy_from_slice(&IPC_MAGIC);
     assert!(LayerToUiMsg::decode(&huge).is_err());
+
+    let too_many_hist = LayerToUiMsg::TelemetryUpdate(Box::new(TelemetrySnapshot {
+        frametime_history: vec![1.0; 121],
+        ..TelemetrySnapshot::default()
+    }));
+    let mut raw_hist = IPC_MAGIC.to_vec();
+    raw_hist.extend_from_slice(&postcard::to_allocvec(&too_many_hist).unwrap());
+    assert!(LayerToUiMsg::decode(&raw_hist).is_err());
+
+    let too_many_cores = LayerToUiMsg::TelemetryUpdate(Box::new(TelemetrySnapshot {
+        cpu_core_loads: vec![10.0; 65],
+        ..TelemetrySnapshot::default()
+    }));
+    let mut raw_cores = IPC_MAGIC.to_vec();
+    raw_cores.extend_from_slice(&postcard::to_allocvec(&too_many_cores).unwrap());
+    assert!(LayerToUiMsg::decode(&raw_cores).is_err());
+
+    let too_many_events = LayerToUiMsg::InputEvents(vec![UiInputEvent::MouseDown { button: 0 }; 257]);
+    let mut raw_events = IPC_MAGIC.to_vec();
+    raw_events.extend_from_slice(&postcard::to_allocvec(&too_many_events).unwrap());
+    assert!(LayerToUiMsg::decode(&raw_events).is_err());
 }
 
 #[test]

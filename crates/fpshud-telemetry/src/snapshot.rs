@@ -1,38 +1,36 @@
-use fpshud_analytics::{BenchmarkSummary, frametime::GRAPH_HISTORY_SIZE};
+use fpshud_analytics::BenchmarkSummary;
 use fpshud_core::MetricType;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CpuPowerSource {
     #[default]
-    Unavailable = 0,
-    DirectHwmon = 1,
-    DirectRapl = 2,
-    EstimatedDvfs = 3,
+    Unavailable,
+    DirectHwmon,
+    DirectRapl,
+    EstimatedDvfs,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GpuBackendType {
     #[default]
-    Unknown = 0,
-    DrmSysfs = 1,
-    Nvml = 2,
-    LevelZero = 3,
+    Unknown,
+    DrmSysfs,
+    Nvml,
+    LevelZero,
 }
 
 pub const MAX_CPU_CORES: usize = 64;
 
 /// Consolidated read-only telemetry snapshot covering all 31 FPSHUD metrics cleanly.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TelemetrySnapshot {
     pub fps: f32,
     pub fps_avg: f32,
     pub fps_1pct_low: f32,
     pub fps_01pct_low: f32,
     pub frametime_ms: f32,
-    pub frametime_history: [f32; GRAPH_HISTORY_SIZE],
-    pub frametime_history_len: u8,
+    pub frametime_history: Vec<f32>,
 
     pub gpu_available: bool,
     pub gpu_backend: GpuBackendType,
@@ -51,9 +49,8 @@ pub struct TelemetrySnapshot {
     pub cpu_temp_c: f32,
     pub cpu_power_w: f32,
     pub cpu_power_source: CpuPowerSource,
-    pub cpu_core_count: u8,
-    pub cpu_core_loads: [f32; MAX_CPU_CORES],
-    pub cpu_core_clocks_mhz: [u16; MAX_CPU_CORES],
+    pub cpu_core_loads: Vec<f32>,
+    pub cpu_core_clocks_mhz: Vec<u16>,
 
     pub ram_used_gb: f32,
     pub ram_total_gb: f32,
@@ -92,8 +89,7 @@ impl Default for TelemetrySnapshot {
             fps_1pct_low: 0.0,
             fps_01pct_low: 0.0,
             frametime_ms: 0.0,
-            frametime_history: [0.0; GRAPH_HISTORY_SIZE],
-            frametime_history_len: 0,
+            frametime_history: Vec::new(),
             gpu_available: false,
             gpu_backend: GpuBackendType::Unknown,
             gpu_load: 0.0,
@@ -110,9 +106,8 @@ impl Default for TelemetrySnapshot {
             cpu_temp_c: 0.0,
             cpu_power_w: 0.0,
             cpu_power_source: CpuPowerSource::Unavailable,
-            cpu_core_count: 0,
-            cpu_core_loads: [0.0; MAX_CPU_CORES],
-            cpu_core_clocks_mhz: [0; MAX_CPU_CORES],
+            cpu_core_loads: Vec::new(),
+            cpu_core_clocks_mhz: Vec::new(),
             ram_used_gb: 0.0,
             ram_total_gb: 0.0,
             game_ram_gb: 0.0,
@@ -161,7 +156,11 @@ impl TelemetrySnapshot {
             MetricType::GpuFan => format!("{}%", self.gpu_fan_pct),
             MetricType::GpuPower => format!("{:.1} W", self.gpu_power_w),
             MetricType::CpuLoad => format!("{:.0}%", self.cpu_load),
-            MetricType::CpuAllCoreLoad => format!("{} cores ({:.0}%)", self.cpu_core_count, self.cpu_load),
+            MetricType::CpuAllCoreLoad => format!(
+                "{} cores ({:.0}%)",
+                self.cpu_core_loads.len(),
+                self.cpu_load
+            ),
             MetricType::CpuClock => format!("{} MHz", self.cpu_clock_mhz),
             MetricType::CpuAllCoreClock => format!("{} MHz avg", self.cpu_clock_mhz),
             MetricType::CpuPower => match self.cpu_power_source {

@@ -73,6 +73,7 @@ impl CpuProvider {
 
         let mut total_load = snap.cpu_load;
         let mut core_ratios = Vec::new();
+        snap.cpu_core_loads.clear();
 
         for line in content.lines() {
             let mut cols = line.split_whitespace();
@@ -105,12 +106,14 @@ impl CpuProvider {
                     core_ratios.resize(idx + 1, 0.0);
                 }
                 core_ratios[idx] = ratio;
+                if snap.cpu_core_loads.len() <= idx {
+                    snap.cpu_core_loads.resize(idx + 1, 0.0);
+                }
                 snap.cpu_core_loads[idx] = ratio * 100.0;
             }
         }
 
         snap.cpu_load = total_load;
-        snap.cpu_core_count = core_ratios.len().min(MAX_CPU_CORES) as u8;
         core_ratios
     }
 
@@ -124,8 +127,9 @@ impl CpuProvider {
         let mut max_khz = Vec::with_capacity(count);
         let mut sum_mhz = 0_u64;
         let mut valid = 0_u64;
+        snap.cpu_core_clocks_mhz.clear();
 
-        for (idx, clock_slot) in snap.cpu_core_clocks_mhz.iter_mut().enumerate() {
+        for idx in 0..MAX_CPU_CORES {
             let base = self
                 .root
                 .join(format!("sys/devices/system/cpu/cpu{idx}/cpufreq"));
@@ -134,12 +138,12 @@ impl CpuProvider {
             if cur.is_none() && max_f.is_none() && idx >= core_hint {
                 break;
             }
-            if let Some(khz) = cur {
-                let mhz = (khz / 1000).min(u16::MAX as u64) as u16;
-                *clock_slot = mhz;
+            let mhz = cur.map_or(0, |khz| (khz / 1000).min(u16::MAX as u64) as u16);
+            if cur.is_some() {
                 sum_mhz += u64::from(mhz);
                 valid += 1;
             }
+            snap.cpu_core_clocks_mhz.push(mhz);
             cur_khz.push(cur.unwrap_or(0));
             max_khz.push(max_f.unwrap_or(0));
         }

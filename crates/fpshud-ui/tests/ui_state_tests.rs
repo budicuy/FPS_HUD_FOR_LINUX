@@ -94,11 +94,8 @@ fn toast_visibility_countdown_and_hud_dashboard_smoke_render() {
     .unwrap();
     let mut writer = ShmRingWriter::new(960, 640).unwrap();
 
-    for &hist_len in &[0_u8, 1, 120] {
-        snap.frametime_history_len = hist_len;
-        for (idx, slot) in snap.frametime_history.iter_mut().enumerate().take(hist_len as usize) {
-            *slot = 8.0 + (idx % 5) as f32;
-        }
+    for &hist_len in &[0_usize, 1, 120] {
+        snap.frametime_history = (0..hist_len).map(|idx| 8.0 + (idx % 5) as f32).collect();
         for &arr in &[ArrangementMode::Stack, ArrangementMode::Double, ArrangementMode::Linear] {
             for &bg in &[BackgroundStyle::None, BackgroundStyle::Translucent, BackgroundStyle::Solid] {
                 cfg.arrangement = arr;

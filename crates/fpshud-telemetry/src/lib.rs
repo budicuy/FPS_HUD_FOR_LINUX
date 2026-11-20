@@ -116,8 +116,7 @@ impl TelemetryCollector {
                             next.fps_1pct_low = guard.fps_1pct_low;
                             next.fps_01pct_low = guard.fps_01pct_low;
                             next.frametime_ms = guard.frametime_ms;
-                            next.frametime_history = guard.frametime_history;
-                            next.frametime_history_len = guard.frametime_history_len;
+                            next.frametime_history = guard.frametime_history.clone();
                             next.render_api = guard.render_api.clone();
                             next.benchmark_active = guard.benchmark_active;
                             next.benchmark_elapsed_sec = guard.benchmark_elapsed_sec;
@@ -178,11 +177,13 @@ impl TelemetryCollector {
         let (metrics, hist) = if let Ok(mut ft) = self.frametime.lock() {
             ft.record_frame(dt_sec);
             let m = ft.compute_metrics();
-            let slice = ft.history_slice();
-            let mut arr = [0.0_f32; GRAPH_HISTORY_SIZE];
-            let len = slice.len().min(GRAPH_HISTORY_SIZE);
-            arr[..len].copy_from_slice(&slice[..len]);
-            (m, (arr, len as u8))
+            let hist: Vec<f32> = ft
+                .history_slice()
+                .iter()
+                .copied()
+                .take(GRAPH_HISTORY_SIZE)
+                .collect();
+            (m, hist)
         } else {
             return;
         };
@@ -205,8 +206,7 @@ impl TelemetryCollector {
             s.fps_1pct_low = metrics.fps_1pct_low;
             s.fps_01pct_low = metrics.fps_01pct_low;
             s.frametime_ms = metrics.frametime_ms;
-            s.frametime_history = hist.0;
-            s.frametime_history_len = hist.1;
+            s.frametime_history = hist;
             if let Ok(bs) = self.bench_started_at.lock() {
                 s.benchmark_elapsed_sec = bs.map_or(0.0, |t| t.elapsed().as_secs_f32());
             }

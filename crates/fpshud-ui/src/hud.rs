@@ -14,8 +14,8 @@ pub fn render_frametime_sparkline(
     height_px: f32,
     border_col: u32,
 ) -> AnyElement {
-    let count = usize::from(snap.frametime_history_len).min(snap.frametime_history.len());
-    let samples = &snap.frametime_history[..count];
+    let count = snap.frametime_history.len();
+    let samples = snap.frametime_history.as_slice();
     let max_ms = samples
         .iter()
         .copied()
