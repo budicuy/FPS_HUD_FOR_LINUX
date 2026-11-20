@@ -70,6 +70,15 @@ pub fn sanitize_ui_child_env(env_map: &mut HashMap<String, String>) {
     env_map.remove("LD_PRELOAD");
     env_map.remove("FPS_HUD");
     env_map.insert("DISABLE_FPS_HUD".to_string(), "1".to_string());
+    if let Some(layers) = env_map.remove("VK_INSTANCE_LAYERS") {
+        let filtered: Vec<&str> = layers
+            .split(':')
+            .filter(|s| !s.is_empty() && *s != "VK_LAYER_FPSHUD_overlay")
+            .collect();
+        if !filtered.is_empty() {
+            env_map.insert("VK_INSTANCE_LAYERS".to_string(), filtered.join(":"));
+        }
+    }
 }
 
 /// Constructs host `(LD_LIBRARY_PATH, LIBVA_DRIVERS_PATH)` when running inside `/run/host` or `/var/run/host`.

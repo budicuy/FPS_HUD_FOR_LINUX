@@ -1,11 +1,11 @@
-name: CI Build, Test & Release
+name: Rust CI Build, Test & Release
 
 on:
   push:
-    branches: [ "main", "master", "testing" ]
+    branches: [ "main", "master", "rust-rewrite", "testing" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "main", "master", "testing" ]
+    branches: [ "main", "master", "rust-rewrite", "testing" ]
   workflow_dispatch:
 
 permissions:
@@ -14,59 +14,51 @@ permissions:
 jobs:
   build-test-release:
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    container: ubuntu:22.04
     env:
-      CC: clang
-      CXX: clang++
-      AR: llvm-ar
-      RANLIB: llvm-ranlib
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 500M
+      CARGO_TERM_COLOR: always
+      FPSHUD_STRICT_GLIBC: "1"
     steps:
-      - name: Install Toolchain & Build Dependencies (Arch Linux)
+      - name: Install Toolchain & Headless Vulkan Dependencies (Ubuntu 22.04 GLIBC 2.35)
         run: |
-          pacman -Syu --noconfirm --needed \
-            clang lld llvm compiler-rt ccache cmake ninja pkgconf git curl python tar xz zlib \
-            vulkan-headers vulkan-icd-loader vulkan-swrast vulkan-tools xorg-server-xvfb \
-            libx11 libglvnd mesa libdrm libpulse libva wayland wayland-protocols ffmpeg
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config binutils file \
+            mesa-vulkan-drivers vulkan-tools xvfb libx11-xcb1 libxcb1
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Cache Minimal Static FFmpeg
+      - name: Cache Cargo Registry & Target
         uses: actions/cache@v4
         with:
-          path: build/ffmpeg_minimal
-          key: ffmpeg-minimal-${{ runner.arch }}-${{ hashFiles('scripts/build_static_ffmpeg.sh') }}
-
-      - name: Cache Compiler Cache (ccache)
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ccache-release-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-ubuntu22-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
-            ccache-release-${{ runner.arch }}-
+            rust-ubuntu22-${{ runner.arch }}-
 
-      - name: Configure, Lint, Build & Test (Pure Clang Release + LLD)
+      - name: Run Full Workspace Tests & Strict Clippy Gate
         run: |
-          cmake --preset release
-          cmake --build build --target format-check
-          cmake --build build --parallel
-          cmake --build build --target clang-tidy
-          ctest --test-dir build --output-on-failure
+          export PATH="$HOME/.cargo/bin:$PATH"
+          LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)"
+          VK_DRIVER_FILES="$LVP_ICD" cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p gpui_ce_wgpu --lib -- -D warnings
 
-      - name: Package Portable Release & Verify Portability Gates
+      - name: Build Portable Release, Enforce ABI + GLIBC 2.35 Gates & Package
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           ./scripts/package_release.sh
 
-      - name: Verify Real Vulkan Hook & HUD Rendering (Mesa Lavapipe CPU Software Rasterizer)
+      - name: Verify Real Vulkan Hook & GPUI-CE HUD Rendering (Headless Lavapipe 120 frames)
         run: |
-          ./scripts/test_vulkan_headless.sh
+          env -u WAYLAND_DISPLAY -u DISPLAY ./scripts/test_vulkan_headless.sh
 
-      - name: Verify End-to-End Installation & Uninstallation Lifecycle
+      - name: Verify Zero-Sudo Install & Uninstall Lifecycle
         run: |
           export FPSHUD_RELEASE_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz"
           export FPSHUD_RELEASE_SHA_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz.sha256"
@@ -89,19 +81,19 @@ jobs:
         distro:
           - name: "Arch Linux (Rolling)"
             image: "archlinux:latest"
-            cmd: "pacman -Syu --noconfirm --needed tar gzip procps-ng vulkan-icd-loader libpulse libva libdrm binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "pacman -Syu --noconfirm --needed tar gzip vulkan-icd-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ./fpshud-ui --bad-arg 2>/dev/null; test $? -ne 0"
           - name: "Fedora Latest (RPM)"
             image: "fedora:latest"
-            cmd: "dnf install -y tar gzip procps-ng vulkan-loader pulseaudio-libs libva libdrm binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "dnf install -y tar gzip vulkan-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
           - name: "Debian 12 (Bookworm)"
             image: "debian:bookworm-slim"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
           - name: "Ubuntu 22.04 LTS (Jammy - GLIBC 2.35 Baseline)"
             image: "ubuntu:22.04"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
           - name: "Ubuntu 24.04 LTS (Noble)"
             image: "ubuntu:24.04"
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip procps libvulkan1 ca-certificates libpulse0 libva2 libva-drm2 libdrm2 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ./fpshud_test 1"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
     steps:
       - name: Download Portable Build Artifact
         uses: actions/download-artifact@v4
@@ -112,64 +104,13 @@ jobs:
       - name: Flatten Artifact Directory
         run: |
           find dist_test -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} dist_test/ \;
-          ls -la dist_test
 
-      - name: Verify Portable Binary Execution on ${{ matrix.distro.name }}
+      - name: Verify Shared Library Linkage on ${{ matrix.distro.name }}
         run: |
           docker run --rm -v "$PWD/dist_test:/test" -w /test "${{ matrix.distro.image }}" bash -c "${{ matrix.distro.cmd }}"
 
-  sanitizer-verification:
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
-      options: --security-opt seccomp=unconfined
-    env:
-      CC: clang
-      CXX: clang++
-      AR: llvm-ar
-      RANLIB: llvm-ranlib
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 500M
-    steps:
-      - name: Install Toolchain & Dependencies for Sanitizers (Arch Linux)
-        run: |
-          pacman -Syu --noconfirm --needed \
-            clang lld llvm compiler-rt ccache cmake ninja pkgconf git curl python tar xz zlib \
-            vulkan-headers vulkan-icd-loader \
-            libx11 libglvnd libdrm libpulse libva wayland wayland-protocols ffmpeg
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Cache Minimal Static FFmpeg
-        uses: actions/cache@v4
-        with:
-          path: build/ffmpeg_minimal
-          key: ffmpeg-minimal-${{ runner.arch }}-${{ hashFiles('scripts/build_static_ffmpeg.sh') }}
-
-      - name: Cache Compiler Cache (ccache)
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ccache-sanitizers-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: |
-            ccache-sanitizers-${{ runner.arch }}-
-
-      - name: Run Address, Leak & Undefined Behavior Sanitizers (ASan + LSan + UBSan)
-        run: |
-          cmake --workflow --preset asan-ubsan
-          rm -rf build_asan
-
-      - name: Run ThreadSanitizer (TSan)
-        run: |
-          cmake --workflow --preset tsan
-          rm -rf build_tsan
-
   publish-release:
-    needs: [build-test-release, distro-compatibility-matrix, sanitizer-verification]
+    needs: [build-test-release, distro-compatibility-matrix]
     if: |
       always() &&
       !contains(needs.*.result, 'failure') &&
@@ -181,26 +122,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Force Update Git Tag 'latest' to Current Commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa latest -m "FPSHUD Latest Portable Release" ${{ github.sha }}
-          git push --force origin refs/tags/latest
-
       - name: Download Portable Build Artifact
         uses: actions/download-artifact@v4
         with:
           name: fpshud-linux-x86_64
           path: release_pkg
 
-      - name: Ensure Release Files Flat in release_pkg
+      - name: Flatten Artifact Directory
         run: |
           find release_pkg -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} release_pkg/ \;
-          ls -la release_pkg
 
       - name: Publish Portable Binary to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -209,18 +139,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           make_latest: true
           name: "FPSHUD Latest Portable Release (Linux x86_64)"
-          body: |
-            ### Installation (1-Command Install)
-
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/budicuy/FPS_HUD_FOR_LINUX/main/install.sh | bash
-            ```
-
-            ### Uninstallation (Local Uninstall)
-
-            ```bash
-            ~/.local/bin/fpshud --uninstall
-            ```
           files: |
             release_pkg/fpshud-linux-x86_64.tar.gz
             release_pkg/fpshud-linux-x86_64.tar.gz.sha256

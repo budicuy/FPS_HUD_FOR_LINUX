@@ -1,40 +1,32 @@
 #!/usr/bin/env bash
-# test_vulkan_headless.sh - Headless / Real Vulkan Swapchain Hook & HUD Render Verification
+# scripts/test_vulkan_headless.sh — Real Vulkan Swapchain Hook & GPUI-CE Overlay E2E Check
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BUILD_DIR="${ROOT_DIR}/build"
+RELEASE_DIR="${ROOT_DIR}/target/release"
 
 echo "=========================================================="
-echo "  FPSHUD Vulkan Swapchain Hook & Rendering Test"
+echo "  FPSHUD Pure-Rust Vulkan Headless Verification (vkcube)"
 echo "=========================================================="
 
-# 1. Verify vkcube availability
 if ! command -v vkcube >/dev/null 2>&1; then
-    echo "[!] vkcube command not found. Please install vulkan-tools."
+    echo "[!] vkcube command not found. Please install vulkan-tools." >&2
     exit 1
 fi
 
-# 2. Locate libfpshud.so and layer manifest
-if [ ! -f "${BUILD_DIR}/libfpshud.so" ]; then
-    echo "[!] libfpshud.so not found in ${BUILD_DIR}. Please compile first."
-    exit 1
-fi
+for bin in "${RELEASE_DIR}/libfpshud.so" "${RELEASE_DIR}/fpshud-ui"; do
+    if [ ! -f "$bin" ]; then
+        echo "[!] Missing release binary: $bin (run ./scripts/build_rust_release.sh)" >&2
+        exit 1
+    fi
+done
 
-LAYER_DIR="${BUILD_DIR}"
-if [ ! -f "${LAYER_DIR}/VkLayer_FPSHUD_overlay.json" ]; then
-    echo "[!] VkLayer_FPSHUD_overlay.json not found in ${LAYER_DIR}."
-    exit 1
-fi
-
-# 3. Detect Lavapipe CPU Software Rasterizer if in headless CI
 LVP_CANDIDATES=(
     "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
     "/usr/share/vulkan/icd.d/lvp_icd.json"
     "/usr/local/share/vulkan/icd.d/lvp_icd.x86_64.json"
 )
-
 LVP_JSON=""
 for cand in "${LVP_CANDIDATES[@]}"; do
     if [ -f "$cand" ]; then
@@ -43,37 +35,39 @@ for cand in "${LVP_CANDIDATES[@]}"; do
     fi
 done
 
-# If VK_DRIVER_FILES is already provided by environment, respect it
-if [ -n "${VK_DRIVER_FILES:-}" ]; then
-    echo "[*] Using environment VK_DRIVER_FILES: ${VK_DRIVER_FILES}"
-elif [ -n "$LVP_JSON" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
-    echo "[*] Headless environment detected: Using Mesa Lavapipe CPU rasterizer (${LVP_JSON})"
+if [ -z "${VK_DRIVER_FILES:-}" ] && [ -n "$LVP_JSON" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+    echo "[*] Headless environment: using Mesa Lavapipe CPU rasterizer (${LVP_JSON})"
     export VK_DRIVER_FILES="$LVP_JSON"
 fi
 
-export VK_LAYER_PATH="${LAYER_DIR}"
+TMP_LAYER_DIR="$(mktemp -d /tmp/fpshud_vk_layer.XXXXXX)"
+trap 'rm -rf "$TMP_LAYER_DIR"' EXIT
+
+sed "s|@FPSHUD_LIB_PATH@|${RELEASE_DIR}/libfpshud.so|g" \
+    "${ROOT_DIR}/manifest/VkLayer_FPSHUD_overlay.json.in" \
+    > "${TMP_LAYER_DIR}/VkLayer_FPSHUD_overlay.json"
+
+export VK_LAYER_PATH="$TMP_LAYER_DIR"
 export VK_INSTANCE_LAYERS="VK_LAYER_FPSHUD_overlay"
 export FPS_HUD=1
 
 FRAME_COUNT=120
-echo "[*] Running vkcube for ${FRAME_COUNT} frames under FPSHUD layer..."
-
 RUN_CMD="vkcube --c ${FRAME_COUNT}"
 if command -v timeout >/dev/null 2>&1; then
     RUN_CMD="timeout --kill-after=5 30 vkcube --c ${FRAME_COUNT}"
 fi
 
+echo "[*] Running vkcube --c ${FRAME_COUNT} under Pure-Rust libfpshud.so + fpshud-ui..."
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
     if ! command -v xvfb-run >/dev/null 2>&1; then
-        echo "[!] No DISPLAY / WAYLAND_DISPLAY and xvfb-run not found. Cannot run headless vkcube."
+        echo "[!] No DISPLAY / WAYLAND_DISPLAY and xvfb-run not found." >&2
         exit 1
     fi
-    echo "[*] Launching with xvfb-run virtual display..."
     xvfb-run -a $RUN_CMD
 else
     $RUN_CMD
 fi
 
 echo "=========================================================="
-echo "  [✓] Vulkan swapchain hook & HUD rendering passed (${FRAME_COUNT} frames)!"
+echo "  [✓] Headless Vulkan 120-frame hook & GPUI-CE pass OK!"
 echo "=========================================================="

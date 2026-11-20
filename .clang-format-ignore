@@ -1,6 +1,0 @@
-build/
-build_asan/
-dist/
-_deps/
-src/ui/embedded_fonts.hpp
-*.patch

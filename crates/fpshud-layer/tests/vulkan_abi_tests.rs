@@ -10,6 +10,10 @@ fn launcher_path_resolution_env_sanitization_and_container_host_bridge() {
     let mut env_map = HashMap::from([
         ("FPS_HUD".to_string(), "1".to_string()),
         (
+            "VK_INSTANCE_LAYERS".to_string(),
+            "VK_LAYER_FPSHUD_overlay:VK_LAYER_OTHER".to_string(),
+        ),
+        (
             "LD_PRELOAD".to_string(),
             "/tmp/libfpshud.so:/other.so".to_string(),
         ),
@@ -19,6 +23,11 @@ fn launcher_path_resolution_env_sanitization_and_container_host_bridge() {
         env_map.get("DISABLE_FPS_HUD").map(String::as_str),
         Some("1")
     );
+    assert_eq!(
+        env_map.get("VK_INSTANCE_LAYERS").map(String::as_str),
+        Some("VK_LAYER_OTHER")
+    );
+    assert!(!env_map.contains_key("FPS_HUD"));
     assert!(!env_map.contains_key("LD_PRELOAD"));
 
     // Uji helper konstruksi LD_LIBRARY_PATH container host bridge
