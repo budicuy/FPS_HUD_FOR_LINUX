@@ -144,4 +144,10 @@ fn drm_gpu_system_io_battery_and_collector_toggle_benchmark() {
     for &m in fpshud_core::MetricType::ALL {
         assert!(!fmt_snap.format_metric_value(m).is_empty());
     }
+
+    assert_eq!(fmt_snap.system_time.len(), 5);
+    assert_eq!(fmt_snap.system_time.as_bytes()[2], b':');
+    let hh: u32 = fmt_snap.system_time[0..2].parse().unwrap();
+    let mm: u32 = fmt_snap.system_time[3..5].parse().unwrap();
+    assert!(hh <= 23 && mm <= 59);
 }

@@ -10,10 +10,11 @@ default = []
 vendor-gpu-apis = ["dep:libloading"]
 
 [dependencies]
+chrono.workspace = true
 fpshud-core = { path = "../fpshud-core" }
 fpshud-analytics = { path = "../fpshud-analytics" }
-libc.workspace = true
 libloading = { workspace = true, optional = true }
+rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -5,6 +5,7 @@ use crate::keycodes::{
 };
 use crate::x11::{X11Backend, X11Event};
 use fpshud_core::{HudConfig, Keybind};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SurfaceBackendType {
@@ -14,7 +15,7 @@ pub enum SurfaceBackendType {
     X11,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KeybindTarget {
     None,
     ToggleGui,
@@ -31,7 +32,7 @@ pub enum InputAction {
     TakeScreenshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum UiInputEvent {
     MouseMove { x: f32, y: f32 },
     MouseDown { button: u8 },

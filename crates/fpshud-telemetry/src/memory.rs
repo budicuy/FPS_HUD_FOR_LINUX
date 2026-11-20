@@ -70,7 +70,7 @@ impl MemoryProvider {
         if let Some(rss_pages_str) = cols.next()
             && let Ok(rss_pages) = rss_pages_str.parse::<u64>()
         {
-            let page_bytes = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(4096) as u64;
+            let page_bytes = (rustix::param::page_size() as u64).max(4096);
             let bytes = rss_pages.saturating_mul(page_bytes);
             snap.game_ram_gb = (bytes as f32) / (1024.0 * 1024.0 * 1024.0);
         }

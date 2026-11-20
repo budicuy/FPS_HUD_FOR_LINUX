@@ -6,8 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+evdev.workspace = true
 fpshud-core = { path = "../fpshud-core" }
-libc.workspace = true
+serde.workspace = true
 x11rb.workspace = true
 
 [dev-dependencies]

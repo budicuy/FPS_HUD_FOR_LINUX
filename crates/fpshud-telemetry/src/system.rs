@@ -156,12 +156,5 @@ fn read_f32(path: &Path) -> Option<f32> {
 }
 
 fn current_hh_mm() -> String {
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm = std::mem::zeroed::<libc::tm>();
-        if !libc::localtime_r(&now, &mut tm).is_null() {
-            return format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
-        }
-    }
-    "00:00".to_string()
+    chrono::Local::now().format("%H:%M").to_string()
 }

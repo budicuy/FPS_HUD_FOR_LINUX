@@ -160,19 +160,57 @@ fn x11_keymap_diff_retry_interval_headless_and_evdev_fallback() {
 
 #[test]
 fn evdev_caps_filtering_and_stationary_cursor_dedup() {
-    use fpshud_input::evdev::{EvdevDeviceRole, classify_evdev_caps, translate_raw_evdev};
+    use fpshud_input::evdev::{EvdevDeviceRole, EvdevEvent, classify_device_caps, translate_input_event};
 
-    // Keyboard: EV_KEY + KEY_ESC/KEY_A without EV_REL
-    assert_eq!(classify_evdev_caps(1 << 0x01, 1 << 30, 0), EvdevDeviceRole::Keyboard);
-    // Mouse: EV_KEY + BTN_LEFT (0x110 in bitmask word/helper) or EV_REL (REL_X|REL_Y)
-    assert_eq!(classify_evdev_caps((1 << 0x01) | (1 << 0x02), 0, 0b11), EvdevDeviceRole::Mouse);
-    // Gamepad/misc: EV_ABS (0x03) without keyboard keys/mouse rel -> ignored cleanly!
-    assert_eq!(classify_evdev_caps((1 << 0x01) | (1 << 0x03), 0, 0), EvdevDeviceRole::Ignore);
+    // Keyboard: EV_KEY + KEY_A tanpa EV_REL / EV_ABS
+    let mut kb_ev = evdev::AttributeSet::<evdev::EventType>::new();
+    kb_ev.insert(evdev::EventType::KEY);
+    let mut kb_keys = evdev::AttributeSet::<evdev::KeyCode>::new();
+    kb_keys.insert(evdev::KeyCode::KEY_A);
+    assert_eq!(
+        classify_device_caps(&kb_ev, Some(&kb_keys), None),
+        EvdevDeviceRole::Keyboard
+    );
 
-    // EV_REL motion & wheel translation
-    assert!(matches!(translate_raw_evdev(0x02, 0x00, 12), Some(fpshud_input::evdev::EvdevEvent::RelMotion { dx: 12, dy: 0 })));
-    assert!(matches!(translate_raw_evdev(0x02, 0x08, -1), Some(fpshud_input::evdev::EvdevEvent::Scroll { delta: -1 })));
-    assert!(matches!(translate_raw_evdev(0x01, 0x110, 1), Some(fpshud_input::evdev::EvdevEvent::MouseBtn { button: 0, down: true })));
+    // Mouse: EV_REL (REL_X | REL_Y)
+    let mut mouse_ev = evdev::AttributeSet::<evdev::EventType>::new();
+    mouse_ev.insert(evdev::EventType::KEY);
+    mouse_ev.insert(evdev::EventType::RELATIVE);
+    let mut mouse_rel = evdev::AttributeSet::<evdev::RelativeAxisCode>::new();
+    mouse_rel.insert(evdev::RelativeAxisCode::REL_X);
+    mouse_rel.insert(evdev::RelativeAxisCode::REL_Y);
+    assert_eq!(
+        classify_device_caps(&mouse_ev, None, Some(&mouse_rel)),
+        EvdevDeviceRole::Mouse
+    );
+
+    // Gamepad/misc: EV_ABS tanpa tombol keyboard / mouse rel -> diabaikan
+    let mut pad_ev = evdev::AttributeSet::<evdev::EventType>::new();
+    pad_ev.insert(evdev::EventType::KEY);
+    pad_ev.insert(evdev::EventType::ABSOLUTE);
+    assert_eq!(classify_device_caps(&pad_ev, None, None), EvdevDeviceRole::Ignore);
+
+    // Translasi InputEvent: gerak mouse, wheel, klik mouse, hotkey, dan tolak tombol gamepad 0x120
+    assert_eq!(
+        translate_input_event(evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_X.0, 12)),
+        Some(EvdevEvent::RelMotion { dx: 12, dy: 0 })
+    );
+    assert_eq!(
+        translate_input_event(evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_WHEEL.0, -1)),
+        Some(EvdevEvent::Scroll { delta: -1 })
+    );
+    assert_eq!(
+        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, evdev::KeyCode::BTN_LEFT.0, 1)),
+        Some(EvdevEvent::MouseBtn { button: 0, down: true })
+    );
+    assert_eq!(
+        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, evdev::KeyCode::KEY_ESC.0, 1)),
+        Some(EvdevEvent::Key { code: 1, down: true })
+    );
+    assert_eq!(
+        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, 0x120, 1)),
+        None
+    );
 
     // Stationary cursor deduplication & X11 vs Wayland evdev grab arbitration
     let mut mgr = InputManager::new_headless();

@@ -91,12 +91,13 @@ fn is_parent_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-    let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    errno == libc::EPERM
+    let Some(target) = rustix::process::Pid::from_raw(pid) else {
+        return false;
+    };
+    matches!(
+        rustix::process::test_kill_process(target),
+        Ok(()) | Err(rustix::io::Errno::PERM)
+    )
 }
 
 fn send_ui_msg(conn: &mut IpcConnection, msg: &UiToLayerMsg, shm: Option<&ShmRingWriter>, send_fd: bool) -> Result<()> {
@@ -392,6 +393,13 @@ mod tests {
         assert!(!sched.take_should_render());
 
         assert!(!is_parent_alive(999_999));
+        assert!(is_parent_alive(std::process::id() as i32));
+    }
+
+    #[test]
+    fn parent_alive_checks_pid_validity_via_rustix() {
+        assert!(!is_parent_alive(0));
+        assert!(!is_parent_alive(-5));
         assert!(is_parent_alive(std::process::id() as i32));
     }
 

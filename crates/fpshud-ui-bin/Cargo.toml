@@ -16,7 +16,7 @@ fpshud-ipc = { path = "../fpshud-ipc" }
 fpshud-gpui-platform = { path = "../fpshud-gpui-platform" }
 fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-ui = { path = "../fpshud-ui" }
-libc.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
