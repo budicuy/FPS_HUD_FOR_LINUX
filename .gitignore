@@ -5,6 +5,8 @@ build_tsan/
 build_debug/
 cmake-build-*/
 out/
+target/
+Cargo.lock.bak
 
 # Compiled binaries and shared libraries
 *.so
