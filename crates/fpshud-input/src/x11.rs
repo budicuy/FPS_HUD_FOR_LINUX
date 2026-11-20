@@ -323,6 +323,8 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                     batch.push(X11Event::CursorPos { x: wx, y: wy });
                 }
                 Event::ButtonPress(b) => {
+                    let (wx, wy) = translate_root_to_target(&conn, root, target, b.root_x, b.root_y);
+                    batch.push(X11Event::CursorPos { x: wx, y: wy });
                     if let Some(idx) = x11_detail_to_button_idx(b.detail)
                         && !prev_buttons[idx]
                     {
@@ -331,6 +333,8 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                     }
                 }
                 Event::ButtonRelease(b) => {
+                    let (wx, wy) = translate_root_to_target(&conn, root, target, b.root_x, b.root_y);
+                    batch.push(X11Event::CursorPos { x: wx, y: wy });
                     if let Some(idx) = x11_detail_to_button_idx(b.detail)
                         && prev_buttons[idx]
                     {

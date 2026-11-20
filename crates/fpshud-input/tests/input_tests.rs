@@ -313,3 +313,15 @@ fn wayland_backend_translates_pointer_events_and_centers_cursor_on_gui_open() {
         UiInputEvent::MouseMove { x, y } if (*x - 640.0).abs() < 0.1 && (*y - 360.0).abs() < 0.1
     )));
 }
+
+#[test]
+fn wayland_runtime_resolves_system_wl_interfaces_without_incompatible_size() {
+    use fpshud_input::wayland::{probe_wayland_interfaces, wayland_client_library_present};
+
+    if wayland_client_library_present() {
+        assert!(
+            probe_wayland_interfaces(),
+            "libwayland-client.so exists on system but wl_interface resolution failed (check libloading symbol size)"
+        );
+    }
+}

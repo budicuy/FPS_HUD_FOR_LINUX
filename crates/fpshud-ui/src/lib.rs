@@ -12,7 +12,8 @@ use fpshud_core::HudConfig;
 use fpshud_ipc::UiToLayerMsg;
 use fpshud_telemetry::TelemetrySnapshot;
 use gpui::{
-    App, Context, Global, IntoElement, ParentElement, Render, Styled, Window, div, px, rgba,
+    App, Context, Global, InteractiveElement, IntoElement, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Render, Styled, Window, div, px, rgba,
 };
 
 struct UiSyncGlobal {
@@ -78,6 +79,10 @@ impl Render for FpshudRootView {
             self.store.telemetry = synced.telemetry.clone();
             self.last_applied_seq = synced.seq;
         }
+        if !self.store.config.gui_open {
+            self.dragging_gui = false;
+            self.dragging_preview = false;
+        }
         self.store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
         let pending = self.store.take_outgoing();
         if !pending.is_empty() {
@@ -92,7 +97,39 @@ impl Render for FpshudRootView {
             .w(px(viewport_w))
             .h(px(viewport_h))
             .relative()
-            .bg(rgba(state::rgba_u32(0, 0, 0, 0)));
+            .bg(rgba(state::rgba_u32(0, 0, 0, 0)))
+            .on_mouse_move(cx.listener(move |view, ev: &MouseMoveEvent, _, cx| {
+                if view.dragging_gui {
+                    view.update_gui_drag_from_point(
+                        f32::from(ev.position.x),
+                        f32::from(ev.position.y),
+                        viewport_w,
+                        viewport_h,
+                        cx,
+                    );
+                }
+                if view.dragging_preview {
+                    view.update_preview_pos_from_point(
+                        f32::from(ev.position.x),
+                        f32::from(ev.position.y),
+                        cx,
+                    );
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
+                    view.dragging_gui = false;
+                    view.dragging_preview = false;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
+                    view.dragging_gui = false;
+                    view.dragging_preview = false;
+                }),
+            );
 
         if let Some(hud_el) = hud::render_hud(&self.store, viewport_w, viewport_h) {
             root = root.child(
@@ -115,16 +152,12 @@ impl Render for FpshudRootView {
         }
 
         if let Some(dash_el) = self.render_dashboard(viewport_w, cx) {
+            let (dash_x, dash_y) = self.resolved_dashboard_position(viewport_w, viewport_h);
             root = root.child(
                 div()
-                    .w(px(viewport_w))
-                    .h(px(viewport_h))
                     .absolute()
-                    .left(px(0.0))
-                    .top(px(0.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
+                    .left(px(dash_x))
+                    .top(px(dash_y))
                     .child(dash_el),
             );
         }

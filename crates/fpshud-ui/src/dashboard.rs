@@ -8,7 +8,7 @@ use fpshud_core::{
 use fpshud_input::KeybindTarget;
 use gpui::{
     AnyElement, Bounds, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Styled, canvas, div, px, rgba,
+    ParentElement, Pixels, Styled, canvas, div, px, rgba,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -26,6 +26,26 @@ pub fn compute_dashboard_width(viewport_w: f32) -> f32 {
 pub fn compute_dashboard_col2_width(viewport_w: f32) -> f32 {
     (compute_dashboard_width(viewport_w) - COL1_WIDTH_PX - COL3_WIDTH_PX - DASHBOARD_CHROME_PX)
         .max(380.0)
+}
+
+/// Computes the top-left dashboard panel origin, centered by default and clamped inside the viewport.
+#[must_use]
+pub fn compute_dashboard_position(
+    viewport_w: f32,
+    viewport_h: f32,
+    dash_w: f32,
+    dash_h: f32,
+    offset_x: f32,
+    offset_y: f32,
+) -> (f32, f32) {
+    let max_x = (viewport_w - dash_w).max(0.0);
+    let max_y = (viewport_h - dash_h).max(0.0);
+    let base_x = max_x * 0.5;
+    let base_y = max_y * 0.5;
+    (
+        (base_x + offset_x).clamp(0.0, max_x),
+        (base_y + offset_y).clamp(0.0, max_y),
+    )
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -59,7 +79,12 @@ pub struct FpshudRootView {
     pub(crate) last_applied_seq: u64,
     pub(crate) started_at: std::time::Instant,
     pub(crate) preview_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub(crate) dashboard_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub(crate) dragging_preview: bool,
+    pub(crate) dragging_gui: bool,
+    pub(crate) gui_pos: Option<(f32, f32)>,
+    pub(crate) drag_gui_start_cursor: (f32, f32),
+    pub(crate) drag_gui_start_origin: (f32, f32),
 }
 
 impl FpshudRootView {
@@ -70,8 +95,99 @@ impl FpshudRootView {
             last_applied_seq: 0,
             started_at: std::time::Instant::now(),
             preview_bounds: Rc::new(Cell::new(Bounds::default())),
+            dashboard_bounds: Rc::new(Cell::new(Bounds::default())),
             dragging_preview: false,
+            dragging_gui: false,
+            gui_pos: None,
+            drag_gui_start_cursor: (0.0, 0.0),
+            drag_gui_start_origin: (0.0, 0.0),
         }
+    }
+
+    #[must_use]
+    pub fn dashboard_bounds_snapshot(&self) -> Bounds<Pixels> {
+        self.dashboard_bounds.get()
+    }
+
+    #[must_use]
+    pub fn preview_bounds_snapshot(&self) -> Bounds<Pixels> {
+        self.preview_bounds.get()
+    }
+
+    pub(crate) fn update_preview_pos_from_point(
+        &mut self,
+        pos_x: f32,
+        pos_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let b = self.preview_bounds.get();
+        let w = f32::from(b.size.width);
+        let h = f32::from(b.size.height);
+        let (nx, ny) = if w > 1.0 && h > 1.0 {
+            map_preview_point_to_norm(
+                pos_x,
+                pos_y,
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                w,
+                h,
+            )
+        } else {
+            (0.5, 0.5)
+        };
+        self.store.set_custom_pos(nx, ny);
+        self.flush_outgoing(cx);
+    }
+
+    pub(crate) fn resolved_dashboard_size(&self, viewport_w: f32) -> (f32, f32) {
+        let db = self.dashboard_bounds.get();
+        let dash_w = f32::from(db.size.width).max(compute_dashboard_width(viewport_w));
+        let h_raw = f32::from(db.size.height);
+        let dash_h = if h_raw > 1.0 { h_raw } else { 660.0 };
+        (dash_w, dash_h)
+    }
+
+    #[must_use]
+    pub fn resolved_dashboard_position(&self, viewport_w: f32, viewport_h: f32) -> (f32, f32) {
+        let (dash_w, dash_h) = self.resolved_dashboard_size(viewport_w);
+        match self.gui_pos {
+            Some((px_x, px_y)) => (
+                px_x.clamp(0.0, (viewport_w - dash_w).max(0.0)),
+                px_y.clamp(0.0, (viewport_h - dash_h).max(0.0)),
+            ),
+            None => compute_dashboard_position(viewport_w, viewport_h, dash_w, dash_h, 0.0, 0.0),
+        }
+    }
+
+    pub(crate) fn begin_gui_drag(&mut self, ev: &MouseDownEvent) {
+        let db = self.dashboard_bounds.get();
+        let start_origin = if let Some(pos) = self.gui_pos {
+            pos
+        } else {
+            (f32::from(db.origin.x), f32::from(db.origin.y))
+        };
+        self.dragging_gui = true;
+        self.drag_gui_start_cursor = (f32::from(ev.position.x), f32::from(ev.position.y));
+        self.drag_gui_start_origin = start_origin;
+    }
+
+    pub(crate) fn update_gui_drag_from_point(
+        &mut self,
+        pos_x: f32,
+        pos_y: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let (dash_w, dash_h) = self.resolved_dashboard_size(viewport_w);
+        let max_x = (viewport_w - dash_w).max(0.0);
+        let max_y = (viewport_h - dash_h).max(0.0);
+        let next_x = (self.drag_gui_start_origin.0 + (pos_x - self.drag_gui_start_cursor.0))
+            .clamp(0.0, max_x);
+        let next_y = (self.drag_gui_start_origin.1 + (pos_y - self.drag_gui_start_cursor.1))
+            .clamp(0.0, max_y);
+        self.gui_pos = Some((next_x, next_y));
+        cx.notify();
     }
 
     fn flush_outgoing(&mut self, cx: &mut Context<Self>) {
@@ -114,6 +230,7 @@ impl FpshudRootView {
         } else {
             rgba_u32(68, 82, 104, 180)
         };
+        let handler = Rc::new(on_click);
         let mut btn = div()
             .px(px(if full_width { 6.0 } else { 8.0 }))
             .py(px(if full_width { 3.0 } else { 4.0 }))
@@ -124,7 +241,13 @@ impl FpshudRootView {
             .text_size(px(12.0))
             .text_color(rgba(rgba_u32(236, 242, 252, 255)))
             .overflow_hidden()
-            .on_mouse_down(MouseButton::Left, cx.listener(on_click))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, ev, window, cx| {
+                    cx.stop_propagation();
+                    handler(view, ev, window, cx);
+                }),
+            )
             .child(label.into());
         if full_width {
             btn = btn.w_full();
@@ -177,6 +300,10 @@ impl FpshudRootView {
             .pb(px(8.0))
             .border_b_1()
             .border_color(rgba(rgba_u32(55, 70, 92, 180)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, ev: &MouseDownEvent, _, _| view.begin_gui_drag(ev)),
+            )
             .child(
                 div()
                     .flex()
@@ -236,52 +363,13 @@ impl FpshudRootView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
                     view.dragging_preview = true;
-                    let b = view.preview_bounds.get();
-                    let w = f32::from(b.size.width);
-                    let h = f32::from(b.size.height);
-                    let (nx, ny) = if w > 1.0 && h > 1.0 {
-                        map_preview_point_to_norm(
-                            f32::from(ev.position.x),
-                            f32::from(ev.position.y),
-                            f32::from(b.origin.x),
-                            f32::from(b.origin.y),
-                            w,
-                            h,
-                        )
-                    } else {
-                        (0.5, 0.5)
-                    };
-                    view.store.set_custom_pos(nx, ny);
-                    view.flush_outgoing(cx);
-                }),
-            )
-            .on_mouse_move(cx.listener(|view, ev: &MouseMoveEvent, _, cx| {
-                if !view.dragging_preview {
-                    return;
-                }
-                let b = view.preview_bounds.get();
-                let (nx, ny) = map_preview_point_to_norm(
-                    f32::from(ev.position.x),
-                    f32::from(ev.position.y),
-                    f32::from(b.origin.x),
-                    f32::from(b.origin.y),
-                    f32::from(b.size.width),
-                    f32::from(b.size.height),
-                );
-                view.store.set_custom_pos(nx, ny);
-                view.flush_outgoing(cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
-                    view.dragging_preview = false;
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
-                    view.dragging_preview = false;
+                    view.update_preview_pos_from_point(
+                        f32::from(ev.position.x),
+                        f32::from(ev.position.y),
+                        cx,
+                    );
                 }),
             )
             .child(
@@ -775,27 +863,69 @@ impl FpshudRootView {
         }
         let dash_w = compute_dashboard_width(viewport_w);
         let col2_w = compute_dashboard_col2_width(viewport_w);
+        let dash_measure = Rc::clone(&self.dashboard_bounds);
+        let title_bar = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(5.0))
+            .bg(rgba(rgba_u32(22, 32, 48, 235)))
+            .border_1()
+            .border_color(rgba(rgba_u32(66, 98, 146, 170)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, ev: &MouseDownEvent, _, _| view.begin_gui_drag(ev)),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(rgba(rgba_u32(190, 220, 255, 255)))
+                    .child("FPSHUD Settings"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgba(rgba_u32(138, 160, 188, 225)))
+                    .child("Drag bar to move"),
+            );
         Some(
             div()
+                .relative()
                 .w(px(dash_w))
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .p(px(12.0))
-                .rounded(px(10.0))
-                .bg(rgba(rgba_u32(15, 19, 28, 240)))
-                .border_1()
-                .border_color(rgba(rgba_u32(78, 128, 200, 190)))
-                .child(self.render_header_bar(cx))
+                .child(
+                    canvas(
+                        move |bounds, _, _| dash_measure.set(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .size_full()
+                    .absolute(),
+                )
                 .child(
                     div()
+                        .w(px(dash_w))
                         .flex()
-                        .flex_row()
-                        .items_start()
-                        .gap(px(10.0))
-                        .child(self.render_column_layout(cx))
-                        .child(self.render_column_sensors(col2_w, cx))
-                        .child(self.render_column_actions(cx)),
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(10.0))
+                        .bg(rgba(rgba_u32(15, 19, 28, 240)))
+                        .border_1()
+                        .border_color(rgba(rgba_u32(78, 128, 200, 190)))
+                        .child(title_bar)
+                        .child(self.render_header_bar(cx))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_start()
+                                .gap(px(10.0))
+                                .child(self.render_column_layout(cx))
+                                .child(self.render_column_sensors(col2_w, cx))
+                                .child(self.render_column_actions(cx)),
+                        ),
                 )
                 .into_any_element(),
         )

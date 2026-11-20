@@ -47,10 +47,17 @@ fn load_wayland_runtime() -> Option<&'static WaylandRuntime> {
     static RT: OnceLock<Option<WaylandRuntime>> = OnceLock::new();
     RT.get_or_init(|| {
         let client = wayland_client_option()?;
-        let lib = unsafe { Library::new("libwayland-client.so.0").or_else(|_| Library::new("libwayland-client.so")).ok()? };
+        let lib = unsafe {
+            Library::new("libwayland-client.so.0")
+                .or_else(|_| Library::new("libwayland-client.so"))
+                .ok()?
+        };
         let get_iface = |sym: &[u8]| -> Option<*const wl_interface> {
-            let s = unsafe { lib.get::<u8>(sym).ok()? };
-            Some(std::ptr::from_ref(&*s).cast::<wl_interface>())
+            // `libloading::Library::get<T>` checks `size_of::<T>() == size_of::<*mut c_void>()`;
+            // reading `*const wl_interface` retrieves the `dlsym` address of the static struct directly.
+            let s = unsafe { lib.get::<*const wl_interface>(sym).ok()? };
+            let ptr = *s;
+            (!ptr.is_null()).then_some(ptr)
         };
         let registry = get_iface(b"wl_registry_interface\0")?;
         let seat = get_iface(b"wl_seat_interface\0")?;
@@ -68,6 +75,22 @@ fn load_wayland_runtime() -> Option<&'static WaylandRuntime> {
         })
     })
     .as_ref()
+}
+
+/// Returns `true` when `libwayland-client` is loadable in the current process environment.
+#[must_use]
+pub fn wayland_client_library_present() -> bool {
+    unsafe {
+        Library::new("libwayland-client.so.0")
+            .or_else(|_| Library::new("libwayland-client.so"))
+            .is_ok()
+    }
+}
+
+/// Verifies that dynamic Wayland client symbols and `wl_interface` descriptors resolve cleanly.
+#[must_use]
+pub fn probe_wayland_interfaces() -> bool {
+    load_wayland_runtime().is_some()
 }
 
 struct SharedWaylandState {

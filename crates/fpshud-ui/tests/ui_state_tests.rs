@@ -244,3 +244,105 @@ fn dashboard_mouse_click_fires_action_and_emits_config() {
     }
     assert!(got_advance, "software cursor overlay must not block clicking Advance preset");
 }
+
+#[test]
+fn dashboard_drag_moves_panel_and_preview_drag_continues_outside_box() {
+    use fpshud_input::UiInputEvent;
+    use fpshud_ui::dashboard::compute_dashboard_position;
+
+    // Default centered position + offset clamping inside viewport
+    let (cx, cy) = compute_dashboard_position(1280.0, 720.0, 1080.0, 560.0, 0.0, 0.0);
+    assert!((cx - 100.0).abs() < 0.1 && (cy - 80.0).abs() < 0.1);
+    let (mx, my) = compute_dashboard_position(1280.0, 720.0, 1080.0, 560.0, 500.0, -500.0);
+    assert!((mx - 200.0).abs() < 0.1 && (my - 0.0).abs() < 0.1);
+
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot::default();
+    let mut rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, move |_, _| {
+        FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut writer = ShmRingWriter::new(1280, 720).unwrap();
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+
+    // Locate rendered dashboard bounds & preview box bounds directly via root view
+    let (dash_origin, dash_w, prev_center) = rt.update_app(|cx| {
+        let win = cx.windows()[0];
+        win.update(cx, |root_any, _, cx| {
+            let root = root_any.downcast::<FpshudRootView>().unwrap();
+            let view = root.read(cx);
+            let db = view.dashboard_bounds_snapshot();
+            let pb = view.preview_bounds_snapshot();
+            (
+                (f32::from(db.origin.x), f32::from(db.origin.y)),
+                f32::from(db.size.width),
+                (
+                    f32::from(pb.origin.x) + f32::from(pb.size.width) * 0.5,
+                    f32::from(pb.origin.y) + f32::from(pb.size.height) * 0.5,
+                ),
+            )
+        })
+        .unwrap()
+    });
+
+    // Drag dashboard by its top title bar (horizontal midpoint, 16px inside top edge)
+    let grab_x = dash_origin.0 + dash_w * 0.5;
+    let grab_y = dash_origin.1 + 16.0;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: grab_x, y: grab_y },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseMove {
+            x: grab_x + 70.0,
+            y: grab_y + 15.0,
+        },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+    let new_dash_origin = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                let db = root_any
+                    .downcast::<FpshudRootView>()
+                    .unwrap()
+                    .read(cx)
+                    .dashboard_bounds_snapshot();
+                (f32::from(db.origin.x), f32::from(db.origin.y))
+            })
+            .unwrap()
+    });
+    assert!(
+        (new_dash_origin.0 - dash_origin.0 - 70.0).abs() < 2.0
+            && (new_dash_origin.1 - dash_origin.1 - 15.0).abs() < 2.0,
+        "dragging dashboard header must move panel by (+70, +15), got old={dash_origin:?} new={new_dash_origin:?}"
+    );
+
+    // Drag preview dot from inside preview_box to far bottom-right outside preview_box -> clamps custom_pos to (1.0, 1.0)
+    let shifted_px = prev_center.0 + 70.0;
+    let shifted_py = prev_center.1 + 15.0;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove {
+            x: shifted_px,
+            y: shifted_py,
+        },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseMove {
+            x: shifted_px + 250.0,
+            y: shifted_py + 250.0,
+        },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+    let msgs = rt.update_app(FpshudRootView::take_outgoing);
+    assert!(
+        msgs.iter().any(|m| matches!(
+            m,
+            UiToLayerMsg::ConfigUpdated(c)
+                if (c.custom_pos_x - 1.0).abs() < 1e-4 && (c.custom_pos_y - 1.0).abs() < 1e-4
+        )),
+        "dragging preview dot outside preview_box must continue updating custom_pos to (1.0, 1.0)"
+    );
+}
