@@ -157,7 +157,7 @@ pub fn render_hud(store: &UiStore, viewport_w: f32, viewport_h: f32) -> Option<A
         return None;
     }
 
-    let font_size = (store.config.font_size_px * store.config.gui_scale).clamp(11.0, 36.0);
+    let font_size = store.config.font_size_px.clamp(11.0, 36.0);
     let alpha = (store.config.text_opacity.clamp(0.1, 1.0) * 255.0).round() as u8;
     let items: Vec<AnyElement> = store
         .config

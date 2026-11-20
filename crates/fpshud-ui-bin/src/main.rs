@@ -120,6 +120,9 @@ struct DaemonState {
     scheduler: DirtyScheduler,
     toast_was_active: bool,
     started_at: Instant,
+    pub surface_scale: f32,
+    surface_width: u32,
+    surface_height: u32,
 }
 
 impl DaemonState {
@@ -133,16 +136,35 @@ impl DaemonState {
             scheduler: DirtyScheduler::new(false),
             toast_was_active: true,
             started_at: Instant::now(),
+            surface_scale: 1.0,
+            surface_width: 1280,
+            surface_height: 720,
+        }
+    }
+
+    pub fn apply_outgoing_msg(&mut self, msg: &UiToLayerMsg) {
+        if let UiToLayerMsg::ConfigUpdated(cfg) = msg {
+            self.config = cfg.clone();
+            if (cfg.gui_scale - self.surface_scale).abs() > 1e-4 {
+                self.surface_scale = cfg.gui_scale.clamp(0.5, 3.0);
+                if let Some(rt) = &mut self.runtime {
+                    rt.resize_with_scale(self.surface_width, self.surface_height, self.surface_scale);
+                }
+            }
         }
     }
 
     fn init_surface(&mut self, width: u32, height: u32, scale: f32, config: HudConfig) -> Result<()> {
         let w = width.max(1);
         let h = height.max(1);
+        let s = scale.clamp(0.5, 3.0);
         self.config = config;
+        self.surface_width = w;
+        self.surface_height = h;
+        self.surface_scale = s;
 
         if let (Some(rt), Some(writer)) = (&mut self.runtime, &mut self.shm_writer) {
-            rt.resize(w, h);
+            rt.resize_with_scale(w, h, s);
             writer.resize(w, h)?;
             self.shm_fd_dirty = true;
             let cfg = self.config.clone();
@@ -151,7 +173,7 @@ impl DaemonState {
         } else {
             let cfg = self.config.clone();
             let snap = self.telemetry.clone();
-            let rt = OffscreenGpuiRuntime::new_with_view(w, h, scale, |_, _| {
+            let rt = OffscreenGpuiRuntime::new_with_view(w, h, s, |_, _| {
                 FpshudRootView::new(UiStore::new(cfg, snap))
             })?;
             let writer = ShmRingWriter::new(w, h)?;
@@ -176,12 +198,16 @@ impl DaemonState {
             LayerToUiMsg::Resize {
                 width,
                 height,
-                scale: _,
+                scale,
             } => {
                 let w = width.max(1);
                 let h = height.max(1);
+                let s = scale.clamp(0.5, 3.0);
+                self.surface_width = w;
+                self.surface_height = h;
+                self.surface_scale = s;
                 if let Some(rt) = &mut self.runtime {
-                    rt.resize(w, h);
+                    rt.resize_with_scale(w, h, s);
                 }
                 if let Some(writer) = &mut self.shm_writer {
                     writer.resize(w, h)?;
@@ -245,6 +271,7 @@ impl DaemonState {
 
         let outgoing = rt.update_app(FpshudRootView::take_outgoing);
         for msg in outgoing {
+            self.apply_outgoing_msg(&msg);
             send_ui_msg(conn, &msg, None, false)?;
         }
         Ok(())
@@ -366,5 +393,32 @@ mod tests {
 
         assert!(!is_parent_alive(999_999));
         assert!(is_parent_alive(std::process::id() as i32));
+    }
+
+    #[test]
+    fn daemon_state_retains_ui_config_across_telemetry_update() {
+        let mut st = super::DaemonState::new();
+        let edited = fpshud_core::HudConfig {
+            hud_visible: false,
+            preset: fpshud_core::PresetType::Minimal,
+            ..fpshud_core::HudConfig::default()
+        };
+
+        st.apply_outgoing_msg(&fpshud_ipc::protocol::UiToLayerMsg::ConfigUpdated(edited.clone()));
+        assert!(!st.config.hud_visible);
+        assert_eq!(st.config.preset, fpshud_core::PresetType::Minimal);
+
+        st.handle_layer_msg(fpshud_ipc::protocol::LayerToUiMsg::TelemetryUpdate(Box::default()))
+            .unwrap();
+        assert!(!st.config.hud_visible);
+        assert_eq!(st.config.preset, fpshud_core::PresetType::Minimal);
+
+        st.handle_layer_msg(fpshud_ipc::protocol::LayerToUiMsg::Resize {
+            width: 1280,
+            height: 720,
+            scale: 1.5,
+        })
+        .unwrap();
+        assert!((st.surface_scale - 1.5).abs() < 1e-5);
     }
 }

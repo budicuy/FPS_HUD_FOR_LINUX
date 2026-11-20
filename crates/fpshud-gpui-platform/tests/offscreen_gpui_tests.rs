@@ -55,27 +55,30 @@ fn input_translation_and_offscreen_window_properties() {
     };
 
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::MouseMove { x: 10.0, y: 20.0 }, origin, mods),
-        PlatformInput::MouseMove(ev) if f32::from(ev.position.x) == 10.0 && f32::from(ev.position.y) == 20.0
+        translate_ui_input_event(&UiInputEvent::MouseMove { x: 240.0, y: 160.0 }, origin, mods, Some(gpui::MouseButton::Left)),
+        PlatformInput::MouseMove(ev)
+            if f32::from(ev.position.x) == 120.0
+                && f32::from(ev.position.y) == 80.0
+                && ev.pressed_button == Some(gpui::MouseButton::Left)
     ));
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::MouseDown { button: 0 }, origin, mods),
+        translate_ui_input_event(&UiInputEvent::MouseDown { button: 0 }, origin, mods, None),
         PlatformInput::MouseDown(ev) if ev.button == gpui::MouseButton::Left
     ));
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::MouseUp { button: 1 }, origin, mods),
+        translate_ui_input_event(&UiInputEvent::MouseUp { button: 1 }, origin, mods, None),
         PlatformInput::MouseUp(ev) if ev.button == gpui::MouseButton::Right
     ));
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::ScrollWheel { delta_x: 0.0, delta_y: -3.0 }, origin, mods),
+        translate_ui_input_event(&UiInputEvent::ScrollWheel { delta_x: 0.0, delta_y: -3.0 }, origin, mods, None),
         PlatformInput::ScrollWheel(_)
     ));
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::KeyDown { code: 88, mod_mask: 1 }, origin, mods),
+        translate_ui_input_event(&UiInputEvent::KeyDown { code: 88, mod_mask: 1 }, origin, mods, None),
         PlatformInput::KeyDown(ev) if ev.keystroke.modifiers.control && ev.keystroke.key == "f12"
     ));
     assert!(matches!(
-        translate_ui_input_event(&UiInputEvent::KeyUp { code: 88, mod_mask: 0 }, origin, mods),
+        translate_ui_input_event(&UiInputEvent::KeyUp { code: 88, mod_mask: 0 }, origin, mods, None),
         PlatformInput::KeyUp(ev) if ev.keystroke.key == "f12"
     ));
 

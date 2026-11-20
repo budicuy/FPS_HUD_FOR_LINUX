@@ -117,7 +117,7 @@ impl SwapchainData {
         }
 
         let Ok(blit) = (unsafe {
-            VulkanBlitPipeline::new(dev, &self.device_data.mem_props, self.format)
+            VulkanBlitPipeline::new(dev, &self.device_data.mem_props, self.format, images.len())
         }) else {
             return;
         };

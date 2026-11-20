@@ -52,6 +52,7 @@ pub struct InputManager {
     keys_down: [bool; 512],
     mouse_buttons: [bool; 3],
     cursor_pos: Option<(f32, f32)>,
+    last_emitted_cursor: Option<(f32, f32)>,
     pending_ungrab: bool,
     capture_target: KeybindTarget,
     capture_mod_mask: u32,
@@ -77,6 +78,7 @@ impl InputManager {
             keys_down: [false; 512],
             mouse_buttons: [false; 3],
             cursor_pos: None,
+            last_emitted_cursor: None,
             pending_ungrab: false,
             capture_target: KeybindTarget::None,
             capture_mod_mask: 0,
@@ -96,6 +98,7 @@ impl InputManager {
             keys_down: [false; 512],
             mouse_buttons: [false; 3],
             cursor_pos: None,
+            last_emitted_cursor: None,
             pending_ungrab: false,
             capture_target: KeybindTarget::None,
             capture_mod_mask: 0,
@@ -308,16 +311,22 @@ impl InputManager {
         events
     }
 
+    #[must_use]
+    pub fn should_grab_evdev(&self, cfg: &HudConfig) -> bool {
+        (cfg.gui_open || self.pending_ungrab) && !self.should_use_x11_grab(true)
+    }
+
     pub fn sync_grab_state(&mut self, cfg: &HudConfig) {
         let any_mouse_down = self.mouse_buttons.iter().any(|&b| b);
         self.pending_ungrab = !cfg.gui_open && any_mouse_down;
 
-        let want_grab = (cfg.gui_open || self.pending_ungrab) && self.should_use_x11_grab(true);
+        let want_x11_grab = (cfg.gui_open || self.pending_ungrab) && self.should_use_x11_grab(true);
         if let Some(x11) = &self.x11 {
-            x11.set_grab(want_grab);
+            x11.set_grab(want_x11_grab);
         }
+        let want_evdev_grab = self.should_grab_evdev(cfg);
         if let Some(evdev) = &mut self.evdev {
-            evdev.set_grab(cfg.gui_open || self.pending_ungrab);
+            evdev.set_grab(want_evdev_grab);
         }
     }
 
@@ -329,6 +338,8 @@ impl InputManager {
     ) -> (Vec<InputAction>, Vec<UiInputEvent>, bool) {
         let mut actions = Vec::new();
         let mut ui_events = Vec::new();
+        let max_w = width.max(1.0);
+        let max_h = height.max(1.0);
 
         if let Some(evdev) = &mut self.evdev {
             for ev in evdev.poll_events() {
@@ -342,6 +353,36 @@ impl InputManager {
                             } else {
                                 UiInputEvent::KeyUp { code, mod_mask }
                             });
+                        }
+                    }
+                    EvdevEvent::RelMotion { dx, dy } => {
+                        if cfg.gui_open {
+                            let (px, py) = self.cursor_pos.unwrap_or((max_w * 0.5, max_h * 0.5));
+                            self.cursor_pos = Some((
+                                (px + dx as f32).clamp(0.0, max_w),
+                                (py + dy as f32).clamp(0.0, max_h),
+                            ));
+                        }
+                    }
+                    EvdevEvent::Scroll { delta } => {
+                        if cfg.gui_open {
+                            ui_events.push(UiInputEvent::ScrollWheel {
+                                delta_x: 0.0,
+                                delta_y: delta as f32,
+                            });
+                        }
+                    }
+                    EvdevEvent::MouseBtn { button, down } => {
+                        let idx = usize::from(button);
+                        if idx < self.mouse_buttons.len() && self.mouse_buttons[idx] != down {
+                            self.mouse_buttons[idx] = down;
+                            if cfg.gui_open || !down {
+                                ui_events.push(if down {
+                                    UiInputEvent::MouseDown { button }
+                                } else {
+                                    UiInputEvent::MouseUp { button }
+                                });
+                            }
                         }
                     }
                 }
@@ -372,13 +413,20 @@ impl InputManager {
             }
         }
 
-        if cfg.gui_open
-            && let Some((cx, cy)) = self.cursor_pos
-        {
-            ui_events.push(UiInputEvent::MouseMove {
-                x: cx.clamp(0.0, width.max(1.0)),
-                y: cy.clamp(0.0, height.max(1.0)),
-            });
+        if cfg.gui_open {
+            if let Some((cx, cy)) = self.cursor_pos {
+                let nx = cx.clamp(0.0, max_w);
+                let ny = cy.clamp(0.0, max_h);
+                let moved = self.last_emitted_cursor.is_none_or(|(px, py)| {
+                    (nx - px).abs() > 0.25 || (ny - py).abs() > 0.25
+                });
+                if moved {
+                    self.last_emitted_cursor = Some((nx, ny));
+                    ui_events.push(UiInputEvent::MouseMove { x: nx, y: ny });
+                }
+            }
+        } else {
+            self.last_emitted_cursor = None;
         }
 
         self.sync_grab_state(cfg);

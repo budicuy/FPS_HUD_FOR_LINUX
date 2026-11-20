@@ -7,14 +7,35 @@ use fpshud_core::{
 };
 use fpshud_input::KeybindTarget;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Styled, div, px, rgba,
+    AnyElement, Bounds, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Styled, canvas, div, px, rgba,
 };
+use std::cell::Cell;
+use std::rc::Rc;
+
+/// Maps an absolute window cursor coordinate inside preview box bounds into clamped `[0.0, 1.0]`.
+#[must_use]
+pub fn map_preview_point_to_norm(
+    pos_x: f32,
+    pos_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    width: f32,
+    height: f32,
+) -> (f32, f32) {
+    let w = width.max(1.0);
+    let h = height.max(1.0);
+    let nx = ((pos_x - origin_x) / w).clamp(0.0, 1.0);
+    let ny = ((pos_y - origin_y) / h).clamp(0.0, 1.0);
+    (nx, ny)
+}
 
 pub struct FpshudRootView {
     pub(crate) store: UiStore,
     pub(crate) last_applied_seq: u64,
     pub(crate) started_at: std::time::Instant,
+    pub(crate) preview_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub(crate) dragging_preview: bool,
 }
 
 impl FpshudRootView {
@@ -24,6 +45,8 @@ impl FpshudRootView {
             store,
             last_applied_seq: 0,
             started_at: std::time::Instant::now(),
+            preview_bounds: Rc::new(Cell::new(Bounds::default())),
+            dragging_preview: false,
         }
     }
 
@@ -160,6 +183,7 @@ impl FpshudRootView {
         let dot_x = (self.store.config.custom_pos_x.clamp(0.0, 1.0) * (PREVIEW_W - 14.0)).max(0.0);
         let dot_y = (self.store.config.custom_pos_y.clamp(0.0, 1.0) * (PREVIEW_H - 14.0)).max(0.0);
 
+        let bounds_measure = Rc::clone(&self.preview_bounds);
         let preview_box = div()
             .w(px(PREVIEW_W))
             .h(px(PREVIEW_H))
@@ -170,14 +194,62 @@ impl FpshudRootView {
             .border_color(rgba(rgba_u32(78, 128, 200, 200)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|view, ev: &gpui::MouseDownEvent, window, cx| {
-                    let win_w = f32::from(window.viewport_size().width).max(1.0);
-                    let win_h = f32::from(window.viewport_size().height).max(1.0);
-                    let norm_x = (f32::from(ev.position.x) / win_w).clamp(0.0, 1.0);
-                    let norm_y = (f32::from(ev.position.y) / win_h).clamp(0.0, 1.0);
-                    view.store.set_custom_pos(norm_x, norm_y);
+                cx.listener(|view, ev: &MouseDownEvent, _, cx| {
+                    view.dragging_preview = true;
+                    let b = view.preview_bounds.get();
+                    let w = f32::from(b.size.width);
+                    let h = f32::from(b.size.height);
+                    let (nx, ny) = if w > 1.0 && h > 1.0 {
+                        map_preview_point_to_norm(
+                            f32::from(ev.position.x),
+                            f32::from(ev.position.y),
+                            f32::from(b.origin.x),
+                            f32::from(b.origin.y),
+                            w,
+                            h,
+                        )
+                    } else {
+                        (0.5, 0.5)
+                    };
+                    view.store.set_custom_pos(nx, ny);
                     view.flush_outgoing(cx);
                 }),
+            )
+            .on_mouse_move(cx.listener(|view, ev: &MouseMoveEvent, _, cx| {
+                if !view.dragging_preview {
+                    return;
+                }
+                let b = view.preview_bounds.get();
+                let (nx, ny) = map_preview_point_to_norm(
+                    f32::from(ev.position.x),
+                    f32::from(ev.position.y),
+                    f32::from(b.origin.x),
+                    f32::from(b.origin.y),
+                    f32::from(b.size.width),
+                    f32::from(b.size.height),
+                );
+                view.store.set_custom_pos(nx, ny);
+                view.flush_outgoing(cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
+                    view.dragging_preview = false;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, _ev: &MouseUpEvent, _, _| {
+                    view.dragging_preview = false;
+                }),
+            )
+            .child(
+                canvas(
+                    move |bounds, _, _| bounds_measure.set(bounds),
+                    |_, _, _, _| {},
+                )
+                .size_full()
+                .absolute(),
             )
             .child(
                 div()
@@ -348,6 +420,95 @@ impl FpshudRootView {
                             view.store.config.thermal_warnings_enabled =
                                 !view.store.config.thermal_warnings_enabled;
                             view.store.emit_config_updated();
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        "Graph",
+                        self.store.config.hud_graph_enabled,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.toggle_hud_graph();
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        "Text Color",
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.cycle_text_color();
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(4.0))
+                    .child(self.action_button(
+                        "Scale-",
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.step_scale(-0.1);
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        format!("Scale {:.1}x+", self.store.config.gui_scale),
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.step_scale(0.1);
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        "Font-",
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.step_font_size(-1.0);
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        format!("{:.0}px+", self.store.config.font_size_px),
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            view.store.step_font_size(1.0);
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        format!("Txt {:.0}%", self.store.config.text_opacity * 100.0),
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            let step = if view.store.config.text_opacity >= 0.99 { -0.8 } else { 0.2 };
+                            view.store.step_text_opacity(step);
+                            view.flush_outgoing(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.action_button(
+                        format!("BG {:.0}%", self.store.config.bg_alpha * 100.0),
+                        false,
+                        rgba_u32(42, 114, 212, 235),
+                        |view, _, _, cx| {
+                            let step = if view.store.config.bg_alpha >= 0.90 { -0.7 } else { 0.15 };
+                            view.store.step_bg_alpha(step);
                             view.flush_outgoing(cx);
                         },
                         cx,

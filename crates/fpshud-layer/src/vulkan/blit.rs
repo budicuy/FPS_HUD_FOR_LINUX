@@ -40,15 +40,43 @@ pub const fn is_srgb_swapchain_format(fmt: vk::Format) -> bool {
     matches!(fmt, vk::Format::B8G8R8A8_SRGB | vk::Format::R8G8B8A8_SRGB)
 }
 
-pub struct VulkanBlitPipeline {
-    pub render_pass: vk::RenderPass,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    descriptor_pool: vk::DescriptorPool,
-    descriptor_set: vk::DescriptorSet,
-    sampler: vk::Sampler,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+/// Pure per-swapchain-slot tracker ensuring concurrent GPU frames never alias one shared upload state.
+#[derive(Debug, Clone)]
+pub struct OverlaySlotSyncTracker {
+    slots: Vec<(u32, u32, u64)>,
+}
 
+impl OverlaySlotSyncTracker {
+    #[must_use]
+    pub fn new(slot_count: usize) -> Self {
+        Self {
+            slots: vec![(0, 0, 0); slot_count.max(1)],
+        }
+    }
+
+    #[must_use]
+    pub fn needs_upload(&self, slot_idx: usize, width: u32, height: u32, generation: u64) -> bool {
+        let Some(&(sw, sh, sgen)) = self.slots.get(slot_idx) else {
+            return false;
+        };
+        sw != width || sh != height || sgen != generation
+    }
+
+    pub fn mark_uploaded(&mut self, slot_idx: usize, width: u32, height: u32, generation: u64) {
+        if let Some(entry) = self.slots.get_mut(slot_idx) {
+            *entry = (width, height, generation);
+        }
+    }
+
+    pub fn invalidate(&mut self, slot_idx: usize) {
+        if let Some(entry) = self.slots.get_mut(slot_idx) {
+            *entry = (0, 0, 0);
+        }
+    }
+}
+
+struct OverlayGpuSlot {
+    descriptor_set: vk::DescriptorSet,
     overlay_image: vk::Image,
     overlay_memory: vk::DeviceMemory,
     overlay_view: vk::ImageView,
@@ -58,189 +86,13 @@ pub struct VulkanBlitPipeline {
     staging_size: vk::DeviceSize,
     tex_width: u32,
     tex_height: u32,
-    uploaded_generation: u64,
-    overlay_layout_initialized: bool,
-    swapchain_format: vk::Format,
+    layout_initialized: bool,
 }
 
-unsafe impl Send for VulkanBlitPipeline {}
-unsafe impl Sync for VulkanBlitPipeline {}
-
-impl VulkanBlitPipeline {
-    pub(crate) unsafe fn new(
-        device: &ash::Device,
-        mem_props: &vk::PhysicalDeviceMemoryProperties,
-        swapchain_format: vk::Format,
-    ) -> Result<Self, vk::Result> {
-        let attachment = vk::AttachmentDescription::default()
-            .format(swapchain_format)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::LOAD)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
-
-        let color_ref = vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-
-        let color_refs = [color_ref];
-        let subpass = vk::SubpassDescription::default()
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(&color_refs);
-
-        let deps = [
-            vk::SubpassDependency::default()
-                .src_subpass(vk::SUBPASS_EXTERNAL)
-                .dst_subpass(0)
-                .src_stage_mask(
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::TRANSFER,
-                )
-                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
-            vk::SubpassDependency::default()
-                .src_subpass(0)
-                .dst_subpass(vk::SUBPASS_EXTERNAL)
-                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::empty()),
-        ];
-
-        let attachments = [attachment];
-        let subpasses = [subpass];
-        let rp_info = vk::RenderPassCreateInfo::default()
-            .attachments(&attachments)
-            .subpasses(&subpasses)
-            .dependencies(&deps);
-        let render_pass = unsafe { device.create_render_pass(&rp_info, None)? };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-        let sampler = unsafe { device.create_sampler(&sampler_info, None)? };
-
-        let binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
-        let bindings = [binding];
-        let dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&dsl_info, None)? };
-
-        let pool_size = vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1);
-        let pool_sizes = [pool_size];
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
-            .pool_sizes(&pool_sizes);
-        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
-
-        let dsls = [descriptor_set_layout];
-        let alloc_ds = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&dsls);
-        let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_ds)? }[0];
-
-        let pl_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&dsls);
-        let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_info, None)? };
-
-        let vert_words = bytes_to_u32_words(QUAD_VERT_SPV)
-            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
-        let frag_words = bytes_to_u32_words(QUAD_FRAG_SPV)
-            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
-
-        let vert_mod = unsafe {
-            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vert_words), None)?
-        };
-        let frag_mod = unsafe {
-            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&frag_words), None)?
-        };
-
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vert_mod)
-                .name(c"main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(frag_mod)
-                .name(c"main"),
-        ];
-
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .line_width(1.0);
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-        // Premultiplied alpha composite cleanly preserves antialiased GPUI-CE text & translucency
-        let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .alpha_blend_op(vk::BlendOp::ADD)
-            .color_write_mask(vk::ColorComponentFlags::RGBA);
-        let blend_attachments = [blend_attachment];
-        let color_blend =
-            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
-        let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-        let gp_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
-            .vertex_input_state(&vertex_input)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport_state)
-            .rasterization_state(&rasterizer)
-            .multisample_state(&multisample)
-            .color_blend_state(&color_blend)
-            .dynamic_state(&dynamic_state)
-            .layout(pipeline_layout)
-            .render_pass(render_pass)
-            .subpass(0);
-
-        let pipelines =
-            unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[gp_info], None) };
-        unsafe {
-            device.destroy_shader_module(vert_mod, None);
-            device.destroy_shader_module(frag_mod, None);
-        }
-        let pipeline = match pipelines {
-            Ok(list) => list[0],
-            Err((_, err)) => return Err(err),
-        };
-
-        let mut this = Self {
-            render_pass,
-            descriptor_set_layout,
-            descriptor_pool,
+impl OverlayGpuSlot {
+    fn empty(descriptor_set: vk::DescriptorSet) -> Self {
+        Self {
             descriptor_set,
-            sampler,
-            pipeline_layout,
-            pipeline,
             overlay_image: vk::Image::null(),
             overlay_memory: vk::DeviceMemory::null(),
             overlay_view: vk::ImageView::null(),
@@ -250,17 +102,11 @@ impl VulkanBlitPipeline {
             staging_size: 0,
             tex_width: 0,
             tex_height: 0,
-            uploaded_generation: 0,
-            overlay_layout_initialized: false,
-            swapchain_format,
-        };
-        unsafe {
-            this.ensure_overlay_texture(device, mem_props, 1, 1);
+            layout_initialized: false,
         }
-        Ok(this)
     }
 
-    unsafe fn destroy_overlay_texture(&mut self, device: &ash::Device) {
+    unsafe fn destroy(&mut self, device: &ash::Device) {
         if !self.staging_mapped.is_null() && self.staging_memory != vk::DeviceMemory::null() {
             unsafe { device.unmap_memory(self.staging_memory) };
             self.staging_mapped = std::ptr::null_mut();
@@ -288,14 +134,15 @@ impl VulkanBlitPipeline {
         self.staging_size = 0;
         self.tex_width = 0;
         self.tex_height = 0;
-        self.uploaded_generation = 0;
-        self.overlay_layout_initialized = false;
+        self.layout_initialized = false;
     }
 
-    unsafe fn ensure_overlay_texture(
+    unsafe fn ensure_texture(
         &mut self,
         device: &ash::Device,
         mem_props: &vk::PhysicalDeviceMemoryProperties,
+        sampler: vk::Sampler,
+        swapchain_format: vk::Format,
         width: u32,
         height: u32,
     ) -> bool {
@@ -305,9 +152,9 @@ impl VulkanBlitPipeline {
             return true;
         }
 
-        unsafe { self.destroy_overlay_texture(device) };
+        unsafe { self.destroy(device) };
 
-        let tex_fmt = if is_srgb_swapchain_format(self.swapchain_format) {
+        let tex_fmt = if is_srgb_swapchain_format(swapchain_format) {
             vk::Format::R8G8B8A8_SRGB
         } else {
             vk::Format::R8G8B8A8_UNORM
@@ -452,7 +299,7 @@ impl VulkanBlitPipeline {
         };
 
         let img_desc = vk::DescriptorImageInfo::default()
-            .sampler(self.sampler)
+            .sampler(sampler)
             .image_view(view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         let img_descs = [img_desc];
@@ -472,9 +319,214 @@ impl VulkanBlitPipeline {
         self.staging_size = byte_size;
         self.tex_width = w;
         self.tex_height = h;
-        self.uploaded_generation = 0;
-        self.overlay_layout_initialized = false;
+        self.layout_initialized = false;
         true
+    }
+}
+
+pub struct VulkanBlitPipeline {
+    pub render_pass: vk::RenderPass,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_pool: vk::DescriptorPool,
+    sampler: vk::Sampler,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+    slots: Vec<OverlayGpuSlot>,
+    tracker: OverlaySlotSyncTracker,
+    swapchain_format: vk::Format,
+}
+
+unsafe impl Send for VulkanBlitPipeline {}
+unsafe impl Sync for VulkanBlitPipeline {}
+
+impl VulkanBlitPipeline {
+    pub(crate) unsafe fn new(
+        device: &ash::Device,
+        mem_props: &vk::PhysicalDeviceMemoryProperties,
+        swapchain_format: vk::Format,
+        slot_count: usize,
+    ) -> Result<Self, vk::Result> {
+        let count = slot_count.max(1);
+        let attachment = vk::AttachmentDescription::default()
+            .format(swapchain_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::LOAD)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+
+        let color_ref = vk::AttachmentReference::default()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let color_refs = [color_ref];
+        let subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_refs);
+
+        let deps = [
+            vk::SubpassDependency::default()
+                .src_subpass(vk::SUBPASS_EXTERNAL)
+                .dst_subpass(0)
+                .src_stage_mask(
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::TRANSFER,
+                )
+                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
+            vk::SubpassDependency::default()
+                .src_subpass(0)
+                .dst_subpass(vk::SUBPASS_EXTERNAL)
+                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::empty()),
+        ];
+
+        let attachments = [attachment];
+        let subpasses = [subpass];
+        let rp_info = vk::RenderPassCreateInfo::default()
+            .attachments(&attachments)
+            .subpasses(&subpasses)
+            .dependencies(&deps);
+        let render_pass = unsafe { device.create_render_pass(&rp_info, None)? };
+
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let sampler = unsafe { device.create_sampler(&sampler_info, None)? };
+
+        let binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let bindings = [binding];
+        let dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&dsl_info, None)? };
+
+        let pool_size = vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(count as u32);
+        let pool_sizes = [pool_size];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(count as u32)
+            .pool_sizes(&pool_sizes);
+        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
+
+        let set_layouts = vec![descriptor_set_layout; count];
+        let alloc_ds = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&set_layouts);
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_ds)? };
+
+        let pl_dsls = [descriptor_set_layout];
+        let pl_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&pl_dsls);
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_info, None)? };
+
+        let vert_words = bytes_to_u32_words(QUAD_VERT_SPV)
+            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
+        let frag_words = bytes_to_u32_words(QUAD_FRAG_SPV)
+            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
+
+        let vert_mod = unsafe {
+            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vert_words), None)?
+        };
+        let frag_mod = unsafe {
+            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&frag_words), None)?
+        };
+
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_mod)
+                .name(c"main"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_mod)
+                .name(c"main"),
+        ];
+
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::ONE)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .color_write_mask(vk::ColorComponentFlags::RGBA);
+        let blend_attachments = [blend_attachment];
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+        let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
+
+        let gp_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisample)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic_state)
+            .layout(pipeline_layout)
+            .render_pass(render_pass)
+            .subpass(0);
+
+        let pipelines =
+            unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[gp_info], None) };
+        unsafe {
+            device.destroy_shader_module(vert_mod, None);
+            device.destroy_shader_module(frag_mod, None);
+        }
+        let pipeline = match pipelines {
+            Ok(list) => list[0],
+            Err((_, err)) => return Err(err),
+        };
+
+        let mut slots: Vec<OverlayGpuSlot> =
+            descriptor_sets.into_iter().map(OverlayGpuSlot::empty).collect();
+        for slot in &mut slots {
+            unsafe {
+                slot.ensure_texture(device, mem_props, sampler, swapchain_format, 1, 1);
+            }
+        }
+
+        Ok(Self {
+            render_pass,
+            descriptor_set_layout,
+            descriptor_pool,
+            sampler,
+            pipeline_layout,
+            pipeline,
+            slots,
+            tracker: OverlaySlotSyncTracker::new(count),
+            swapchain_format,
+        })
     }
 
     pub(crate) unsafe fn upload_if_changed(
@@ -482,6 +534,7 @@ impl VulkanBlitPipeline {
         device: &ash::Device,
         mem_props: &vk::PhysicalDeviceMemoryProperties,
         cmd: vk::CommandBuffer,
+        slot_idx: usize,
         frame: &OverlayFrameBuffer,
     ) {
         let width = frame.width;
@@ -491,19 +544,26 @@ impl VulkanBlitPipeline {
         if width == 0 || height == 0 || rgba.is_empty() {
             return;
         }
-        if !unsafe { self.ensure_overlay_texture(device, mem_props, width, height) } {
+        let Some(slot) = self.slots.get_mut(slot_idx) else {
+            return;
+        };
+        if !self.tracker.needs_upload(slot_idx, width, height, generation) && slot.layout_initialized
+        {
+            return;
+        }
+        if !unsafe {
+            slot.ensure_texture(device, mem_props, self.sampler, self.swapchain_format, width, height)
+        } {
+            self.tracker.invalidate(slot_idx);
             return;
         }
         let expected_bytes = (width as usize).saturating_mul(height as usize).saturating_mul(4);
-        if rgba.len() < expected_bytes || self.staging_size < (expected_bytes as vk::DeviceSize) {
-            return;
-        }
-        if self.uploaded_generation == generation && self.overlay_layout_initialized {
+        if rgba.len() < expected_bytes || slot.staging_size < (expected_bytes as vk::DeviceSize) {
             return;
         }
 
         unsafe {
-            std::ptr::copy_nonoverlapping(rgba.as_ptr(), self.staging_mapped, expected_bytes);
+            std::ptr::copy_nonoverlapping(rgba.as_ptr(), slot.staging_mapped, expected_bytes);
         }
 
         let subresource = vk::ImageSubresourceRange::default()
@@ -513,7 +573,7 @@ impl VulkanBlitPipeline {
             .base_array_layer(0)
             .layer_count(1);
 
-        let old_layout = if self.overlay_layout_initialized {
+        let old_layout = if slot.layout_initialized {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
         } else {
             vk::ImageLayout::UNDEFINED
@@ -523,7 +583,7 @@ impl VulkanBlitPipeline {
             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.overlay_image)
+            .image(slot.overlay_image)
             .subresource_range(subresource)
             .src_access_mask(vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
@@ -560,8 +620,8 @@ impl VulkanBlitPipeline {
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
-                self.staging_buffer,
-                self.overlay_image,
+                slot.staging_buffer,
+                slot.overlay_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[region],
             );
@@ -572,7 +632,7 @@ impl VulkanBlitPipeline {
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.overlay_image)
+            .image(slot.overlay_image)
             .subresource_range(subresource)
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -588,8 +648,8 @@ impl VulkanBlitPipeline {
             );
         }
 
-        self.uploaded_generation = generation;
-        self.overlay_layout_initialized = true;
+        slot.layout_initialized = true;
+        self.tracker.mark_uploaded(slot_idx, width, height, generation);
     }
 
     pub(crate) unsafe fn record_draw(
@@ -598,8 +658,12 @@ impl VulkanBlitPipeline {
         cmd: vk::CommandBuffer,
         framebuffer: vk::Framebuffer,
         extent: vk::Extent2D,
+        slot_idx: usize,
     ) {
-        if !self.overlay_layout_initialized {
+        let Some(slot) = self.slots.get(slot_idx) else {
+            return;
+        };
+        if !slot.layout_initialized {
             return;
         }
         let rp_begin = vk::RenderPassBeginInfo::default()
@@ -632,7 +696,7 @@ impl VulkanBlitPipeline {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
                 0,
-                &[self.descriptor_set],
+                &[slot.descriptor_set],
                 &[],
             );
             device.cmd_draw(cmd, 3, 1, 0, 0);
@@ -642,7 +706,10 @@ impl VulkanBlitPipeline {
 
     pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) {
         unsafe {
-            self.destroy_overlay_texture(device);
+            for slot in &mut self.slots {
+                slot.destroy(device);
+            }
+            self.slots.clear();
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.pipeline_layout, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);

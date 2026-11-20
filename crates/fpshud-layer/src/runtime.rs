@@ -415,10 +415,11 @@ impl LayerRuntime {
         let now = Instant::now();
         if now >= self.next_input_poll {
             self.next_input_poll = now + Duration::from_millis(8);
-            let (actions, ui_events, config_changed) =
+            let prev_config = self.config.clone();
+            let (actions, ui_events, _grabbed) =
                 self.input.poll_frame(&mut self.config, w as f32, h as f32);
             self.handle_side_effect_actions(&actions);
-            if config_changed {
+            if self.config != prev_config {
                 let _ = self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
             }
             if !ui_events.is_empty() {
@@ -435,6 +436,22 @@ impl LayerRuntime {
             let snap = self.telemetry.get_snapshot();
             let _ = self.send_to_ui(&LayerToUiMsg::TelemetryUpdate(Box::new(snap)));
         }
+    }
+
+    pub fn attach_ipc_for_test(&mut self, conn: IpcConnection) {
+        self.ipc_conn = Some(conn);
+        self.init_sent = false;
+    }
+
+    pub fn test_key_event_triggers_config_sync_once(&mut self, key_code: u32) -> bool {
+        let prev = self.config.clone();
+        let actions = self.input.handle_key_event(key_code, true, &mut self.config);
+        let _ = self.input.handle_key_event(key_code, false, &mut self.config);
+        self.handle_side_effect_actions(&actions);
+        if self.config != prev {
+            return self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
+        }
+        false
     }
 
     pub fn test_actions_and_generation_resize_guard(&mut self) -> bool {

@@ -123,3 +123,52 @@ fn spirv_magic_runtime_actions_resize_generation_and_capture_format_mapping() {
     let mut rt = fpshud::runtime::LayerRuntime::new_for_test();
     assert!(rt.test_actions_and_generation_resize_guard());
 }
+
+#[test]
+fn runtime_config_sync_only_on_real_change_and_vulkan_slot_isolation() {
+    let mut rt = fpshud::runtime::LayerRuntime::new_for_test();
+    // Simulate IPC pair so LayerToUiMsg emission can be inspected directly
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("layer_sync.sock");
+    let server = fpshud_ipc::IpcServer::bind(&sock).unwrap();
+    let mut client = fpshud_ipc::IpcClient::connect(&sock).unwrap();
+    client.set_nonblocking(true).unwrap();
+    let conn = server.accept_verified().unwrap();
+    conn.set_nonblocking(true).unwrap();
+    rt.attach_ipc_for_test(conn);
+
+    // Pump initial frame -> sends Init (1 msg), no extra ConfigSync even if grabbed/stationary
+    rt.pump_frame(1280, 720, "VULKAN");
+    let mut buf = vec![0_u8; 65_600];
+    let mut kinds = Vec::new();
+    while let Ok((n, _)) = client.recv_msg(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        kinds.push(fpshud_ipc::LayerToUiMsg::decode(&buf[..n]).unwrap());
+    }
+    assert!(matches!(kinds.first(), Some(fpshud_ipc::LayerToUiMsg::Init { .. })));
+    assert!(!kinds.iter().any(|m| matches!(m, fpshud_ipc::LayerToUiMsg::ConfigSync(_))));
+
+    // Simulate hotkey toggle inside input manager (grabbed == false!) -> MUST emit ConfigSync once
+    assert!(rt.test_key_event_triggers_config_sync_once(88 /* KEY_F12 */));
+    let mut synced = 0usize;
+    while let Ok((n, _)) = client.recv_msg(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        if matches!(fpshud_ipc::LayerToUiMsg::decode(&buf[..n]).unwrap(), fpshud_ipc::LayerToUiMsg::ConfigSync(_)) {
+            synced += 1;
+        }
+    }
+    assert_eq!(synced, 1);
+
+    // Per-swapchain-slot overlay upload tracker must keep slot 0/1/2 isolated cleanly
+    let mut tracker = fpshud::vulkan::blit::OverlaySlotSyncTracker::new(3);
+    assert!(tracker.needs_upload(0, 1280, 720, 1));
+    tracker.mark_uploaded(0, 1280, 720, 1);
+    assert!(!tracker.needs_upload(0, 1280, 720, 1));
+    // Slot 1 still hasn't received gen=1 on the GPU!
+    assert!(tracker.needs_upload(1, 1280, 720, 1));
+    assert!(tracker.needs_upload(2, 1280, 720, 1));
+}

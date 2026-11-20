@@ -852,11 +852,11 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     if has_overlay && let Some(ref mut blit) = sd.blit {
         if let Some(ref frame_buf) = overlay_frame {
             unsafe {
-                blit.upload_if_changed(dev, &dd.mem_props, cmd, frame_buf);
+                blit.upload_if_changed(dev, &dd.mem_props, cmd, img_idx, frame_buf);
             }
         }
         unsafe {
-            blit.record_draw(dev, cmd, framebuffer, extent);
+            blit.record_draw(dev, cmd, framebuffer, extent, img_idx);
         }
     }
 

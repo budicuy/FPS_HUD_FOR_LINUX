@@ -67,6 +67,13 @@ impl Render for FpshudRootView {
         if let Some(synced) = cx.try_global::<UiSyncGlobal>()
             && synced.seq > self.last_applied_seq
         {
+            let keys_changed = synced.config.bind_toggle_gui != self.store.config.bind_toggle_gui
+                || synced.config.bind_toggle_hud != self.store.config.bind_toggle_hud
+                || synced.config.bind_benchmark != self.store.config.bind_benchmark
+                || synced.config.bind_screenshot != self.store.config.bind_screenshot;
+            if keys_changed {
+                self.store.active_keybind_capture = fpshud_input::KeybindTarget::None;
+            }
             self.store.config = synced.config.clone();
             self.store.telemetry = synced.telemetry.clone();
             self.last_applied_seq = synced.seq;

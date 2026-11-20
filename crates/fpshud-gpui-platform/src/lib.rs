@@ -73,11 +73,12 @@ pub fn translate_ui_input_event(
     ev: &UiInputEvent,
     cursor_pos: Point<Pixels>,
     modifiers: Modifiers,
+    pressed_button: Option<MouseButton>,
 ) -> PlatformInput {
     match *ev {
-        UiInputEvent::MouseMove { x, y } => PlatformInput::MouseMove(MouseMoveEvent {
-            position: Point::new(px(x), px(y)),
-            pressed_button: None,
+        UiInputEvent::MouseMove { .. } => PlatformInput::MouseMove(MouseMoveEvent {
+            position: cursor_pos,
+            pressed_button,
             modifiers,
         }),
         UiInputEvent::MouseDown { button } => PlatformInput::MouseDown(MouseDownEvent {
@@ -144,6 +145,7 @@ pub struct OffscreenGpuiRuntime {
     window_state: Rc<Mutex<OffscreenWindowState>>,
     cursor_pos: Point<Pixels>,
     modifiers: Modifiers,
+    pressed_button: Option<MouseButton>,
     width: u32,
     height: u32,
     scale: f32,
@@ -196,6 +198,7 @@ impl OffscreenGpuiRuntime {
             window_state,
             cursor_pos: Point::default(),
             modifiers: Modifiers::default(),
+            pressed_button: None,
             width: w,
             height: h,
             scale: s,
@@ -224,13 +227,23 @@ impl OffscreenGpuiRuntime {
                     self.cursor_pos = Point::new(px(x / scale), px(y / scale));
                     self.window_state.lock().mouse_pos = self.cursor_pos;
                 }
+                UiInputEvent::MouseDown { button } => {
+                    self.pressed_button = Some(map_mouse_button(button));
+                }
+                UiInputEvent::MouseUp { button } => {
+                    let mapped = map_mouse_button(button);
+                    if self.pressed_button == Some(mapped) {
+                        self.pressed_button = None;
+                    }
+                }
                 UiInputEvent::KeyDown { mod_mask, .. } | UiInputEvent::KeyUp { mod_mask, .. } => {
                     self.modifiers = mod_mask_to_gpui(mod_mask);
                     self.window_state.lock().modifiers = self.modifiers;
                 }
                 _ => {}
             }
-            let platform_ev = translate_ui_input_event(ev, self.cursor_pos, self.modifiers);
+            let platform_ev =
+                translate_ui_input_event(ev, self.cursor_pos, self.modifiers, self.pressed_button);
             let cb = self.window_state.lock().input_cb.take();
             if let Some(mut cb) = cb {
                 let _ = cb(platform_ev);
@@ -242,13 +255,19 @@ impl OffscreenGpuiRuntime {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.resize_with_scale(width, height, self.scale);
+    }
+
+    pub fn resize_with_scale(&mut self, width: u32, height: u32, scale: f32) {
         let w = width.max(1);
         let h = height.max(1);
-        if (w, h) == (self.width, self.height) {
+        let s = scale.clamp(0.5, 3.0);
+        if (w, h) == (self.width, self.height) && (s - self.scale).abs() < 1e-4 {
             return;
         }
         self.width = w;
         self.height = h;
+        self.scale = s;
         let logical_size = Size::new(px((w as f32) / self.scale), px((h as f32) / self.scale));
         self.platform
             .set_display_size_and_scale(w, h, self.scale);

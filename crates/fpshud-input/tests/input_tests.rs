@@ -157,3 +157,37 @@ fn x11_keymap_diff_retry_interval_headless_and_evdev_fallback() {
     assert_eq!(evdev.device_count(), 0);
     assert!(evdev.poll_events().is_empty());
 }
+
+#[test]
+fn evdev_caps_filtering_and_stationary_cursor_dedup() {
+    use fpshud_input::evdev::{EvdevDeviceRole, classify_evdev_caps, translate_raw_evdev};
+
+    // Keyboard: EV_KEY + KEY_ESC/KEY_A without EV_REL
+    assert_eq!(classify_evdev_caps(1 << 0x01, 1 << 30, 0), EvdevDeviceRole::Keyboard);
+    // Mouse: EV_KEY + BTN_LEFT (0x110 in bitmask word/helper) or EV_REL (REL_X|REL_Y)
+    assert_eq!(classify_evdev_caps((1 << 0x01) | (1 << 0x02), 0, 0b11), EvdevDeviceRole::Mouse);
+    // Gamepad/misc: EV_ABS (0x03) without keyboard keys/mouse rel -> ignored cleanly!
+    assert_eq!(classify_evdev_caps((1 << 0x01) | (1 << 0x03), 0, 0), EvdevDeviceRole::Ignore);
+
+    // EV_REL motion & wheel translation
+    assert!(matches!(translate_raw_evdev(0x02, 0x00, 12), Some(fpshud_input::evdev::EvdevEvent::RelMotion { dx: 12, dy: 0 })));
+    assert!(matches!(translate_raw_evdev(0x02, 0x08, -1), Some(fpshud_input::evdev::EvdevEvent::Scroll { delta: -1 })));
+    assert!(matches!(translate_raw_evdev(0x01, 0x110, 1), Some(fpshud_input::evdev::EvdevEvent::MouseBtn { button: 0, down: true })));
+
+    // Stationary cursor deduplication & X11 vs Wayland evdev grab arbitration
+    let mut mgr = InputManager::new_headless();
+    let mut cfg = HudConfig { gui_open: true, ..HudConfig::default() };
+    mgr.set_cursor_pos(640.0, 360.0);
+    let (_, first_evs, _) = mgr.poll_frame(&mut cfg, 1920.0, 1080.0);
+    assert!(first_evs.iter().any(|e| matches!(e, UiInputEvent::MouseMove { .. })));
+
+    // Calling poll_frame again with unchanged cursor MUST NOT emit redundant MouseMove
+    let (_, second_evs, _) = mgr.poll_frame(&mut cfg, 1920.0, 1080.0);
+    assert!(second_evs.is_empty());
+
+    // Evdev grab disabled when X11 active, enabled on pure Wayland
+    mgr.notify_x11_swapchain(0x42);
+    assert!(!mgr.should_grab_evdev(&cfg));
+    mgr.notify_wayland_swapchain();
+    assert!(mgr.should_grab_evdev(&cfg));
+}

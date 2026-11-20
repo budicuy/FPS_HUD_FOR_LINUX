@@ -367,7 +367,47 @@ impl UiStore {
     pub fn toggle_metric(&mut self, metric: MetricType) {
         let active = !self.config.has_metric(metric);
         self.config.set_metric(metric, active);
-        apply_preset_custom(&mut self.config);
+        self.config.preset = PresetType::Custom;
+        self.emit_config_updated();
+    }
+
+    pub fn step_scale(&mut self, delta: f32) {
+        self.config.gui_scale = (self.config.gui_scale + delta).clamp(0.5, 2.5);
+        self.emit_config_updated();
+    }
+
+    pub fn step_font_size(&mut self, delta: f32) {
+        self.config.font_size_px = (self.config.font_size_px + delta).clamp(11.0, 36.0);
+        self.emit_config_updated();
+    }
+
+    pub fn step_text_opacity(&mut self, delta: f32) {
+        self.config.text_opacity = (self.config.text_opacity + delta).clamp(0.1, 1.0);
+        self.emit_config_updated();
+    }
+
+    pub fn step_bg_alpha(&mut self, delta: f32) {
+        self.config.bg_alpha = (self.config.bg_alpha + delta).clamp(0.05, 0.95);
+        self.emit_config_updated();
+    }
+
+    pub fn toggle_hud_graph(&mut self) {
+        self.config.hud_graph_enabled = !self.config.hud_graph_enabled;
+        self.emit_config_updated();
+    }
+
+    pub fn cycle_text_color(&mut self) {
+        const PALETTE: [ColorRgba; 4] = [
+            ColorRgba::new(255, 255, 255, 255),
+            ColorRgba::new(140, 225, 255, 255),
+            ColorRgba::new(150, 255, 165, 255),
+            ColorRgba::new(255, 220, 120, 255),
+        ];
+        let next_idx = PALETTE
+            .iter()
+            .position(|&c| c == self.config.text_color)
+            .map_or(0, |i| (i + 1) % PALETTE.len());
+        self.config.text_color = PALETTE[next_idx];
         self.emit_config_updated();
     }
 
