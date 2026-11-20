@@ -188,3 +188,37 @@ fn shm_ring_ping_pong_bounds_and_resize() {
     assert!(g4 >= 4);
     assert_eq!(&bytes4[..64], &[77_u8; 64]);
 }
+
+#[test]
+fn shm_corrupt_header_truncated_and_oob_rejected() {
+    use std::io::Write;
+    use std::os::unix::fs::FileExt;
+
+    let mut trunc = tempfile::tempfile().unwrap();
+    trunc.write_all(&[0_u8; 32]).unwrap();
+    assert!(ShmRingReader::from_borrowed_fd(trunc.as_fd(), 64).is_err());
+
+    let bad_magic = tempfile::tempfile().unwrap();
+    bad_magic.set_len(96).unwrap();
+    bad_magic.write_all_at(&0xDEAD_BEEF_u32.to_ne_bytes(), 0).unwrap();
+    assert!(ShmRingReader::from_borrowed_fd(bad_magic.as_fd(), 96).is_err());
+
+    let writer = ShmRingWriter::new(2, 2).unwrap();
+    let reader = ShmRingReader::from_borrowed_fd(writer.fd(), writer.mapped_byte_len()).unwrap();
+    assert!(reader.read_latest().is_none());
+
+    // Header valid magic dengan OFF_ACTIVE_SLOT=2 (out-of-range) atau OFF_BYTE_LEN melebihi slot_capacity
+    let oob_slot = tempfile::tempfile().unwrap();
+    oob_slot.set_len(96).unwrap();
+    oob_slot.write_all_at(&0x5249_4E47_u32.to_ne_bytes(), 0).unwrap(); // OFF_MAGIC
+    oob_slot.write_all_at(&2_u32.to_ne_bytes(), 8).unwrap(); // OFF_ACTIVE_SLOT = 2
+    oob_slot.write_all_at(&1_u64.to_ne_bytes(), 16).unwrap(); // OFF_GENERATION = 1
+    oob_slot.write_all_at(&16_u64.to_ne_bytes(), 32).unwrap(); // OFF_SLOT_CAPACITY = 16
+    oob_slot.write_all_at(&16_u32.to_ne_bytes(), 40).unwrap(); // OFF_BYTE_LEN = 16
+    let oob_reader = ShmRingReader::from_borrowed_fd(oob_slot.as_fd(), 96).unwrap();
+    assert!(oob_reader.read_latest().is_none());
+
+    oob_slot.write_all_at(&0_u32.to_ne_bytes(), 8).unwrap(); // slot = 0 (valid)
+    oob_slot.write_all_at(&999_u32.to_ne_bytes(), 40).unwrap(); // OFF_BYTE_LEN > map_len & cap
+    assert!(oob_reader.read_latest().is_none());
+}
