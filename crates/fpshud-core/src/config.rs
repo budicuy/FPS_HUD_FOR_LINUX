@@ -1,11 +1,11 @@
 use crate::paths::get_config_file_path;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 
 /// Canonical 31 HUD telemetry metrics matching the legacy C++ config order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MetricType {
     Fps = 0,
     FpsAvg,
@@ -166,8 +166,7 @@ impl MetricType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresetType {
     Minimal = 0,
     Standard = 1,
@@ -197,8 +196,7 @@ impl PresetType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutPosition {
     TopLeft = 0,
     TopCenter = 1,
@@ -210,6 +208,19 @@ pub enum LayoutPosition {
 }
 
 impl LayoutPosition {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Self::TopLeft => 0,
+            Self::TopCenter => 1,
+            Self::TopRight => 2,
+            Self::BottomLeft => 3,
+            Self::BottomCenter => 4,
+            Self::BottomRight => 5,
+            Self::Custom => 6,
+        }
+    }
+
     #[must_use]
     pub const fn from_i32(v: i32) -> Self {
         match v {
@@ -224,8 +235,7 @@ impl LayoutPosition {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArrangementMode {
     Stack = 0,
     Double = 1,
@@ -233,6 +243,15 @@ pub enum ArrangementMode {
 }
 
 impl ArrangementMode {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Self::Stack => 0,
+            Self::Double => 1,
+            Self::Linear => 2,
+        }
+    }
+
     #[must_use]
     pub const fn from_i32(v: i32) -> Self {
         match v {
@@ -243,8 +262,7 @@ impl ArrangementMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackgroundStyle {
     None = 0,
     Translucent = 1,
@@ -252,6 +270,15 @@ pub enum BackgroundStyle {
 }
 
 impl BackgroundStyle {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Translucent => 1,
+            Self::Solid => 2,
+        }
+    }
+
     #[must_use]
     pub const fn from_i32(v: i32) -> Self {
         match v {
@@ -262,8 +289,7 @@ impl BackgroundStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FontFamily {
     SansBold = 0,
     MonoBold = 1,
@@ -272,6 +298,16 @@ pub enum FontFamily {
 }
 
 impl FontFamily {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Self::SansBold => 0,
+            Self::MonoBold => 1,
+            Self::VeraMono => 2,
+            Self::AdwaitaMono => 3,
+        }
+    }
+
     #[must_use]
     pub const fn from_i32(v: i32) -> Self {
         match v {
@@ -283,7 +319,7 @@ impl FontFamily {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColorRgba {
     pub r: u8,
     pub g: u8,
@@ -309,7 +345,7 @@ impl Default for ColorRgba {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keybind {
     pub mod_key: u32,
     pub main_key: u32,
@@ -323,7 +359,7 @@ impl Keybind {
 }
 
 /// Complete FPSHUD runtime and overlay configuration (zero recorder/CLI fields).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HudConfig {
     pub enabled: bool,
     pub gui_open: bool,
@@ -824,12 +860,12 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
         cfg.preset.as_str(),
         cfg.gui_scale,
         i32::from(cfg.hud_visible),
-        cfg.position as i32,
+        cfg.position.as_i32(),
         cfg.custom_pos_x.clamp(0.0, 1.0),
         cfg.custom_pos_y.clamp(0.0, 1.0),
-        cfg.arrangement as i32,
-        cfg.background_style as i32,
-        cfg.font_family as i32,
+        cfg.arrangement.as_i32(),
+        cfg.background_style.as_i32(),
+        cfg.font_family.as_i32(),
         cfg.font_size_px,
         cfg.text_color.r,
         cfg.text_color.g,

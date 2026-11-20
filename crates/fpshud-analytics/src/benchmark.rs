@@ -1,14 +1,15 @@
 use crate::frametime::compute_time_weighted_lows;
 use fpshud_core::paths::get_default_record_dir;
-use std::fs::{self, File, OpenOptions};
+use rustix::fs::{Mode, OFlags, open as rustix_open};
+use serde::{Deserialize, Serialize};
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_BENCHMARK_SAMPLES: usize = 360_000;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSummary {
     pub avg_fps: f32,
     pub fps_1pct_low: f32,
@@ -50,13 +51,13 @@ impl BenchmarkRecorder {
         {
             fs::create_dir_all(parent)?;
         }
-        OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .mode(0o600)
-            .open(path)
+        let fd = rustix_open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o600),
+        )
+        .map_err(io::Error::from)?;
+        Ok(File::from(fd))
     }
 
     pub fn start(&mut self, dir: &Path) {

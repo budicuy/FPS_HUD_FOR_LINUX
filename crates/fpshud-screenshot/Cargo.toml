@@ -7,8 +7,8 @@ license.workspace = true
 
 [dependencies]
 fpshud-core = { path = "../fpshud-core" }
-libc.workspace = true
 png.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

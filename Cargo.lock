@@ -758,7 +758,8 @@ name = "fpshud-analytics"
 version = "0.1.0"
 dependencies = [
  "fpshud-core",
- "libc",
+ "rustix 1.1.6",
+ "serde",
  "tempfile",
 ]
 
@@ -767,6 +768,7 @@ name = "fpshud-core"
 version = "0.1.0"
 dependencies = [
  "rustix 1.1.6",
+ "serde",
  "tempfile",
 ]
 
@@ -828,8 +830,8 @@ name = "fpshud-screenshot"
 version = "0.1.0"
 dependencies = [
  "fpshud-core",
- "libc",
  "png",
+ "rustix 1.1.6",
  "tempfile",
 ]
 

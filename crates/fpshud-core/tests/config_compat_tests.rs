@@ -135,3 +135,17 @@ fn every_metric_roundtrips_and_all_presets_plus_helpers_work() {
     let rt_dir = get_secure_runtime_dir().unwrap();
     assert_eq!(fs::metadata(&rt_dir).unwrap().permissions().mode() & 0o777, 0o700);
 }
+
+#[test]
+fn config_enums_roundtrip_as_i32_and_serde() {
+    for i in 0..=6 {
+        assert_eq!(LayoutPosition::from_i32(i).as_i32(), i);
+    }
+    for i in 0..=2 {
+        assert_eq!(ArrangementMode::from_i32(i).as_i32(), i);
+        assert_eq!(BackgroundStyle::from_i32(i).as_i32(), i);
+    }
+    for i in 0..=3 {
+        assert_eq!(FontFamily::from_i32(i).as_i32(), i);
+    }
+}

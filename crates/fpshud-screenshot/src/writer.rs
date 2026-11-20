@@ -1,7 +1,7 @@
 use fpshud_core::paths::{get_default_record_dir, sanitize_filename_prefix};
-use std::fs::{self, OpenOptions};
+use rustix::fs::{Mode, OFlags, open as rustix_open};
+use std::fs::{self, File};
 use std::io::{self, BufWriter};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
@@ -98,13 +98,13 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
         }
     }
 
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .mode(0o600)
-        .open(path)?;
+    let fd = rustix_open(
+        path,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(io::Error::from)?;
+    let file = File::from(fd);
 
     let writer = BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, frame.width, frame.height);

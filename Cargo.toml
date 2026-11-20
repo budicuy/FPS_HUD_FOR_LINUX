@@ -22,14 +22,21 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1.0"
 ash = { version = "0.38", default-features = false }
+ash-layer = { version = "0.0.2+v0.38.0", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+evdev = "0.13"
 futures = "0.3"
+glow = "0.17"
 gpui = { package = "gpui-ce", version = "0.3.0", default-features = false }
 gpui_ce_parley = { version = "0.3.0", default-features = false }
 gpui_ce_wgpu = "0.3.0"
 libc = "0.2"
 libloading = "0.8"
+memmap2 = "0.9"
 png = "0.18"
-rustix = { version = "1.1", features = ["fs", "mm", "net", "process", "thread", "time"] }
+postcard = { version = "1.1", features = ["use-std"] }
+rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "thread", "time"] }
+serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
 x11rb = "0.14"
 
