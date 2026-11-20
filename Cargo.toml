@@ -5,6 +5,7 @@ members = [
     "crates/fpshud-analytics",
     "crates/fpshud-telemetry",
     "crates/fpshud-screenshot",
+    "crates/fpshud-input",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ libloading = "0.8"
 png = "0.18"
 rustix = { version = "1.1", features = ["fs", "mm", "net", "process", "thread", "time"] }
 tempfile = "3"
+x11rb = "0.14"
 
 [workspace.lints.clippy]
 all = "warn"
