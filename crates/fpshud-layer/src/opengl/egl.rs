@@ -29,6 +29,15 @@ unsafe extern "C" fn proc_lookup_egl(name: *const c_char) -> *const c_void {
     std::ptr::null()
 }
 
+unsafe extern "C" fn lookup_gl_sym_egl(name: *const c_char) -> *const c_void {
+    let ptr = unsafe { proc_lookup_egl(name) };
+    if !ptr.is_null() || name.is_null() {
+        return ptr;
+    }
+    unsafe { resolve_next(CStr::from_ptr(name)) }
+        .map_or(std::ptr::null(), |sym| sym.0.cast_const())
+}
+
 pub(crate) unsafe fn hook_egl_get_proc_address(proc_name: *const c_char) -> *const c_void {
     if !proc_name.is_null() {
         let name = unsafe { CStr::from_ptr(proc_name) }.to_bytes();
@@ -65,7 +74,7 @@ pub(crate) unsafe fn hook_egl_swap_buffers(dpy: *mut c_void, surface: *mut c_voi
     }
 
     unsafe {
-        blit::on_swap_buffers(Some(proc_lookup_egl), hint_w, hint_h, "OPENGL EGL");
+        blit::on_swap_buffers(lookup_gl_sym_egl, hint_w, hint_h, "OPENGL EGL");
     }
 
     let slot = REAL_EGL_SWAP_BUFFERS.get_or_init(|| unsafe { resolve_next(c"eglSwapBuffers") });

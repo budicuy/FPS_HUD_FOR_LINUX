@@ -17,6 +17,7 @@ fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-screenshot = { path = "../fpshud-screenshot" }
 fpshud-ipc = { path = "../fpshud-ipc" }
+glow.workspace = true
 libc.workspace = true
 
 [dev-dependencies]

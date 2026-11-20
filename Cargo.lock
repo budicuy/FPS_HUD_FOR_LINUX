@@ -895,6 +895,7 @@ dependencies = [
  "fpshud-ipc",
  "fpshud-screenshot",
  "fpshud-telemetry",
+ "glow",
  "libc",
  "tempfile",
 ]

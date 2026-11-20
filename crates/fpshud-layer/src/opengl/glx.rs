@@ -17,8 +17,13 @@ unsafe fn resolve_next(sym: &CStr) -> Option<SymPtr> {
     (!p.is_null()).then_some(SymPtr(p))
 }
 
-unsafe extern "C" fn proc_lookup_glx(name: *const c_char) -> *const c_void {
-    unsafe { glx_get_proc_address_arb_forward(name.cast::<u8>()) }
+unsafe extern "C" fn lookup_gl_sym_glx(name: *const c_char) -> *const c_void {
+    let ptr = unsafe { glx_get_proc_address_arb_forward(name.cast::<u8>()) };
+    if !ptr.is_null() || name.is_null() {
+        return ptr;
+    }
+    unsafe { resolve_next(CStr::from_ptr(name)) }
+        .map_or(std::ptr::null(), |sym| sym.0.cast_const())
 }
 
 unsafe fn glx_get_proc_address_arb_forward(proc_name: *const u8) -> *const c_void {
@@ -76,7 +81,7 @@ pub(crate) unsafe fn hook_glx_swap_buffers(dpy: *mut c_void, drawable: *mut c_vo
     }
 
     unsafe {
-        blit::on_swap_buffers(Some(proc_lookup_glx), 0, 0, "OPENGL GLX");
+        blit::on_swap_buffers(lookup_gl_sym_glx, 0, 0, "OPENGL GLX");
     }
 
     let slot = REAL_GLX_SWAP_BUFFERS.get_or_init(|| unsafe { resolve_next(c"glXSwapBuffers") });

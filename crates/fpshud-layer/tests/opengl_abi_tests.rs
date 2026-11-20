@@ -17,8 +17,8 @@ impl GlStateOps for MockGlOps {
             0x85B5 => 11,     // GL_VERTEX_ARRAY_BINDING
             0x8CA6 => 3,      // GL_DRAW_FRAMEBUFFER_BINDING
             0x88EF => 5,      // GL_PIXEL_UNPACK_BUFFER_BINDING
-            0x80C8 => 0x0302, // GL_BLEND_SRC_RGB
-            0x80C9 => 0x0303, // GL_BLEND_DST_RGB
+            0x80C9 => 0x0302, // GL_BLEND_SRC_RGB (Khronos GL spec)
+            0x80C8 => 0x0303, // GL_BLEND_DST_RGB (Khronos GL spec)
             _ => 0,
         }
     }
@@ -131,6 +131,8 @@ fn gl_state_backup_and_readpixels_capture_wiring() {
     assert!(log.contains(&("bind_vao", 11)));
     assert!(log.contains(&("bind_fbo", 3)));
     assert!(log.contains(&("bind_unpack_pbo", 5)));
+    assert!(log.contains(&("set_enabled", (0x0BE2 << 1) | 1)));
+    assert!(log.contains(&("set_enabled", (0x0C11 << 1) | 1)));
     assert!(log.contains(&("blend_src", 0x0302)));
     assert!(log.contains(&("blend_dst", 0x0303)));
     assert!(log.contains(&("viewport_w", 1280)));
