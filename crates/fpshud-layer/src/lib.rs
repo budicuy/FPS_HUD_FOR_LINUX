@@ -7,10 +7,7 @@ pub mod vulkan;
 
 use ash::vk::{self, Handle};
 use std::ffi::{c_char, c_void};
-use vulkan::hooks::{
-    VkNegotiateLayerInterface, lookup_device_proc, lookup_instance_proc,
-    negotiate_loader_layer_interface_version,
-};
+use vulkan::hooks::{lookup_device_proc, lookup_instance_proc, negotiate_loader_layer_interface_version};
 
 /// Safe-ergonomic test wrapper around `lookup_instance_proc`.
 ///
@@ -42,7 +39,7 @@ pub unsafe fn vk_get_device_proc_addr(
 /// `p_version_struct` must be null or point to an initialized `VkNegotiateLayerInterface`.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn vkNegotiateLoaderLayerInterfaceVersion(
-    p_version_struct: *mut VkNegotiateLayerInterface,
+    p_version_struct: *mut ash_layer::NegotiateLayerInterface,
 ) -> vk::Result {
     unsafe { negotiate_loader_layer_interface_version(p_version_struct) }
 }

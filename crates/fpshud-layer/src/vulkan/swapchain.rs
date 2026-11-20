@@ -37,8 +37,7 @@ pub struct InstanceData {
 unsafe impl Send for InstanceData {}
 unsafe impl Sync for InstanceData {}
 
-pub type PfnVkSetDeviceLoaderData =
-    unsafe extern "system" fn(device: vk::Device, object: *mut core::ffi::c_void) -> vk::Result;
+pub use ash_layer::PFN_vkSetDeviceLoaderData as PfnVkSetDeviceLoaderData;
 
 pub struct DeviceData {
     pub handle: vk::Device,

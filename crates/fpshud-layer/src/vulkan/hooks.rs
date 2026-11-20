@@ -5,66 +5,15 @@ use crate::vulkan::swapchain::{
     find_swapchain, registry,
 };
 use ash::vk::{self, Handle};
+use ash_layer::{
+    LayerDeviceCreateInfo, LayerFunction, LayerInstanceCreateInfo, NegotiateLayerInterface,
+    NegotiateLayerStructType,
+};
 use fpshud_input::SurfaceBackendType;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::{Arc, Mutex};
 
-const LAYER_NEGOTIATE_INTERFACE_STRUCT: u32 = 1;
 const MIN_SUPPORTED_INTERFACE_VERSION: u32 = 2;
-const VK_LAYER_LINK_INFO: i32 = 0;
-const VK_LOADER_DATA_CALLBACK: i32 = 1;
-
-#[repr(C)]
-pub struct VkNegotiateLayerInterface {
-    pub s_type: u32,
-    pub p_next: *mut c_void,
-    pub loader_layer_interface_version: u32,
-    pub pfn_get_instance_proc_addr: Option<vk::PFN_vkGetInstanceProcAddr>,
-    pub pfn_get_device_proc_addr: Option<vk::PFN_vkGetDeviceProcAddr>,
-    pub pfn_get_physical_device_proc_addr: *const c_void,
-}
-
-#[repr(C)]
-struct VkLayerInstanceLink {
-    p_next: *mut VkLayerInstanceLink,
-    pfn_next_get_instance_proc_addr: Option<vk::PFN_vkGetInstanceProcAddr>,
-    pfn_next_get_physical_device_proc_addr: *const c_void,
-}
-
-#[repr(C)]
-union VkLayerInstanceCreateInfoUnion {
-    p_layer_info: *mut VkLayerInstanceLink,
-    _pad: [usize; 2],
-}
-
-#[repr(C)]
-struct VkLayerInstanceCreateInfo {
-    s_type: vk::StructureType,
-    p_next: *const c_void,
-    function: i32,
-    u: VkLayerInstanceCreateInfoUnion,
-}
-
-#[repr(C)]
-struct VkLayerDeviceLink {
-    p_next: *mut VkLayerDeviceLink,
-    pfn_next_get_instance_proc_addr: Option<vk::PFN_vkGetInstanceProcAddr>,
-    pfn_next_get_device_proc_addr: Option<vk::PFN_vkGetDeviceProcAddr>,
-}
-
-#[repr(C)]
-union VkLayerDeviceCreateInfoUnion {
-    p_layer_info: *mut VkLayerDeviceLink,
-    pfn_set_device_loader_data: Option<PfnVkSetDeviceLoaderData>,
-}
-
-#[repr(C)]
-struct VkLayerDeviceCreateInfo {
-    s_type: vk::StructureType,
-    p_next: *const c_void,
-    function: i32,
-    u: VkLayerDeviceCreateInfoUnion,
-}
 
 unsafe fn pfn_to_ptr(f: vk::PFN_vkVoidFunction) -> *const c_void {
     match f {
@@ -82,13 +31,13 @@ unsafe fn ptr_to_pfn(ptr: *const c_void) -> vk::PFN_vkVoidFunction {
 }
 
 pub(crate) unsafe fn negotiate_loader_layer_interface_version(
-    p_version_struct: *mut VkNegotiateLayerInterface,
+    p_version_struct: *mut NegotiateLayerInterface,
 ) -> vk::Result {
     if p_version_struct.is_null() {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     }
     let st = unsafe { &mut *p_version_struct };
-    if st.s_type != LAYER_NEGOTIATE_INTERFACE_STRUCT
+    if st.s_type != NegotiateLayerStructType::INTERFACE_STRUCT
         || st.loader_layer_interface_version < MIN_SUPPORTED_INTERFACE_VERSION
     {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
@@ -98,7 +47,7 @@ pub(crate) unsafe fn negotiate_loader_layer_interface_version(
     }
     st.pfn_get_instance_proc_addr = Some(crate::vkGetInstanceProcAddr);
     st.pfn_get_device_proc_addr = Some(crate::vkGetDeviceProcAddr);
-    st.pfn_get_physical_device_proc_addr = std::ptr::null();
+    st.pfn_get_physical_device_proc_addr = None;
     vk::Result::SUCCESS
 }
 
@@ -110,13 +59,13 @@ pub fn verify_loader_negotiation_contract() -> bool {
         return false;
     }
 
-    let mut v1 = VkNegotiateLayerInterface {
-        s_type: LAYER_NEGOTIATE_INTERFACE_STRUCT,
+    let mut v1 = NegotiateLayerInterface {
+        s_type: NegotiateLayerStructType::INTERFACE_STRUCT,
         p_next: std::ptr::null_mut(),
         loader_layer_interface_version: 1,
         pfn_get_instance_proc_addr: None,
         pfn_get_device_proc_addr: None,
-        pfn_get_physical_device_proc_addr: std::ptr::null(),
+        pfn_get_physical_device_proc_addr: None,
     };
     if unsafe { negotiate_loader_layer_interface_version(&raw mut v1) }
         != vk::Result::ERROR_INITIALIZATION_FAILED
@@ -124,13 +73,13 @@ pub fn verify_loader_negotiation_contract() -> bool {
         return false;
     }
 
-    let mut v2 = VkNegotiateLayerInterface {
-        s_type: LAYER_NEGOTIATE_INTERFACE_STRUCT,
+    let mut v2 = NegotiateLayerInterface {
+        s_type: NegotiateLayerStructType::INTERFACE_STRUCT,
         p_next: std::ptr::null_mut(),
         loader_layer_interface_version: 2,
         pfn_get_instance_proc_addr: None,
         pfn_get_device_proc_addr: None,
-        pfn_get_physical_device_proc_addr: std::ptr::null(),
+        pfn_get_physical_device_proc_addr: None,
     };
     (unsafe { negotiate_loader_layer_interface_version(&raw mut v2) }) == vk::Result::SUCCESS
         && v2.pfn_get_instance_proc_addr.is_some()
@@ -146,17 +95,19 @@ pub(crate) unsafe extern "system" fn hook_create_instance(
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     }
 
-    let mut cur = unsafe { (*p_create_info).p_next }.cast::<VkLayerInstanceCreateInfo>();
-    let mut link_info: *mut VkLayerInstanceCreateInfo = std::ptr::null_mut();
+    let mut cur = unsafe { (*p_create_info).p_next }
+        .cast::<LayerInstanceCreateInfo>()
+        .cast_mut();
+    let mut link_info: *mut LayerInstanceCreateInfo = std::ptr::null_mut();
     while !cur.is_null() {
         let info = unsafe { &*cur };
         if info.s_type == vk::StructureType::LOADER_INSTANCE_CREATE_INFO
-            && info.function == VK_LAYER_LINK_INFO
+            && info.function == LayerFunction::LAYER_LINK_INFO
         {
-            link_info = cur.cast_mut();
+            link_info = cur;
             break;
         }
-        cur = info.p_next.cast::<VkLayerInstanceCreateInfo>();
+        cur = info.p_next.cast::<LayerInstanceCreateInfo>().cast_mut();
     }
     if link_info.is_null() || unsafe { (*link_info).u.p_layer_info }.is_null() {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
@@ -430,20 +381,24 @@ pub(crate) unsafe extern "system" fn hook_create_device(
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
 
-    let mut cur = unsafe { (*p_create_info).p_next }.cast::<VkLayerDeviceCreateInfo>();
-    let mut link_info: *mut VkLayerDeviceCreateInfo = std::ptr::null_mut();
+    let mut cur = unsafe { (*p_create_info).p_next }
+        .cast::<LayerDeviceCreateInfo>()
+        .cast_mut();
+    let mut link_info: *mut LayerDeviceCreateInfo = std::ptr::null_mut();
     let mut set_loader_data: Option<PfnVkSetDeviceLoaderData> = None;
 
     while !cur.is_null() {
         let info = unsafe { &*cur };
         if info.s_type == vk::StructureType::LOADER_DEVICE_CREATE_INFO {
-            if info.function == VK_LAYER_LINK_INFO && link_info.is_null() {
-                link_info = cur.cast_mut();
-            } else if info.function == VK_LOADER_DATA_CALLBACK && set_loader_data.is_none() {
+            if info.function == LayerFunction::LAYER_LINK_INFO && link_info.is_null() {
+                link_info = cur;
+            } else if info.function == LayerFunction::LOADER_DATA_CALLBACK
+                && set_loader_data.is_none()
+            {
                 set_loader_data = unsafe { info.u.pfn_set_device_loader_data };
             }
         }
-        cur = info.p_next.cast::<VkLayerDeviceCreateInfo>();
+        cur = info.p_next.cast::<LayerDeviceCreateInfo>().cast_mut();
     }
 
     if link_info.is_null() || unsafe { (*link_info).u.p_layer_info }.is_null() {

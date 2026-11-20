@@ -22,7 +22,7 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1.0"
 ash = { version = "0.38", default-features = false }
-ash-layer = { version = "0.0.2+v0.38.0", default-features = false }
+ash-layer = { version = "0.0.2", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 evdev = "0.13"
 futures = "0.3"

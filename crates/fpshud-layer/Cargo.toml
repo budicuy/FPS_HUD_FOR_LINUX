@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ash.workspace = true
+ash-layer.workspace = true
 fpshud-core = { path = "../fpshud-core" }
 fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-input = { path = "../fpshud-input" }

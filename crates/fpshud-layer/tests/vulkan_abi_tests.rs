@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn launcher_path_resolution_env_sanitization_and_container_host_bridge() {
@@ -171,4 +171,26 @@ fn runtime_config_sync_only_on_real_change_and_vulkan_slot_isolation() {
     // Slot 1 still hasn't received gen=1 on the GPU!
     assert!(tracker.needs_upload(1, 1280, 720, 1));
     assert!(tracker.needs_upload(2, 1280, 720, 1));
+}
+
+#[test]
+fn proc_self_maps_parser_handles_spaces_anon_and_resolves_self() {
+    let sample = "\
+00400000-00401000 r-xp 00000000 08:01 123 /tmp/my game/libfpshud.so\n\
+00500000-00502000 rw-p 00000000 00:00 0 [heap]\n\
+00600000-00604000 r-xp 00000000 08:01 456 /opt/deleted/libx.so (deleted)\n";
+    assert_eq!(
+        fpshud::launcher::parse_maps_path_for_addr(sample, 0x0040_0500),
+        Some(PathBuf::from("/tmp/my game/libfpshud.so"))
+    );
+    assert_eq!(
+        fpshud::launcher::parse_maps_path_for_addr(sample, 0x0050_0100),
+        None
+    );
+    assert_eq!(
+        fpshud::launcher::parse_maps_path_for_addr(sample, 0x0060_0100),
+        Some(PathBuf::from("/opt/deleted/libx.so"))
+    );
+    let resolved = fpshud::launcher::resolve_self_so_path().expect("resolve self executable/so path");
+    assert!(resolved.exists());
 }

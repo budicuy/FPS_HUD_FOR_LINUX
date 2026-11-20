@@ -88,6 +88,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash-layer"
+version = "0.0.2+v0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aedca11308198ffa300ad1a981c10ee176e44c8ff6ee7c6883a062608b9779a5"
+dependencies = [
+ "ash",
+]
+
+[[package]]
 name = "async-channel"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -868,6 +877,7 @@ dependencies = [
  "fpshud-core",
  "fpshud-input",
  "fpshud-telemetry",
+ "memmap2",
  "postcard",
  "rustix 1.1.6",
  "serde",
@@ -879,6 +889,7 @@ name = "fpshud-layer"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "ash-layer",
  "fpshud-core",
  "fpshud-input",
  "fpshud-ipc",

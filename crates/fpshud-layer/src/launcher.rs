@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ffi::{CStr, c_void};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -28,19 +27,51 @@ pub fn resolve_ui_binary_path(self_so_path: &Path) -> PathBuf {
 }
 
 #[must_use]
-pub fn resolve_self_so_path() -> Option<PathBuf> {
-    let mut info = libc::Dl_info {
-        dli_fname: std::ptr::null(),
-        dli_fbase: std::ptr::null_mut(),
-        dli_sname: std::ptr::null(),
-        dli_saddr: std::ptr::null_mut(),
-    };
-    let ok = unsafe { libc::dladdr(resolve_self_so_path as *const c_void, &mut info) };
-    if ok == 0 || info.dli_fname.is_null() {
-        return None;
+pub fn parse_maps_path_for_addr(maps: &str, addr: usize) -> Option<PathBuf> {
+    for line in maps.lines() {
+        let mut rest = line.trim_start();
+        let Some((range, after_range)) = rest.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some((start_hex, end_hex)) = range.split_once('-') else {
+            continue;
+        };
+        let Ok(start) = usize::from_str_radix(start_hex, 16) else {
+            continue;
+        };
+        let Ok(end) = usize::from_str_radix(end_hex, 16) else {
+            continue;
+        };
+        if !(start..end).contains(&addr) {
+            continue;
+        }
+        rest = after_range;
+        let mut ok = true;
+        for _ in 0..4 {
+            rest = rest.trim_start();
+            let Some((_, next)) = rest.split_once(char::is_whitespace) else {
+                ok = false;
+                break;
+            };
+            rest = next;
+        }
+        if !ok {
+            continue;
+        }
+        let raw_path = rest.trim_start();
+        if !raw_path.starts_with('/') {
+            return None;
+        }
+        let clean = raw_path.strip_suffix(" (deleted)").unwrap_or(raw_path);
+        return (!clean.is_empty()).then(|| PathBuf::from(clean));
     }
-    let cstr = unsafe { CStr::from_ptr(info.dli_fname) };
-    Some(PathBuf::from(cstr.to_string_lossy().into_owned()))
+    None
+}
+
+#[must_use]
+pub fn resolve_self_so_path() -> Option<PathBuf> {
+    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+    parse_maps_path_for_addr(&maps, resolve_self_so_path as *const () as usize)
 }
 
 #[must_use]
