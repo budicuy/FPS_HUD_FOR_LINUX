@@ -86,18 +86,18 @@ check_status() {
     fi
 
     echo -e "  [+] RAM Usage, Swap & PSI (/proc)     : \033[32mAVAILABLE (Sudo-Free)\033[0m"
-    echo -n "  [+] Kernel Mouse Grab (Zero Bleed)    : "
+    echo -n "  [+] Input Isolation & Cursor Grab   : "
     if [ "$input_ok" -eq 1 ]; then
         echo -e "\033[32mAVAILABLE (Direct Evdev Hardware Grab)\033[0m"
     else
-        echo -e "\033[33mLIMITED (Fallback Mode - Run 'fpshud --setup' to enable Kernel Grab)\033[0m"
+        echo -e "\033[32mACTIVE (Sudo-Free X11/Wayland Input Isolation)\033[0m"
     fi
 
     echo "--------------------------------------------------------------------"
-    if [ "$rapl_ok" -eq 1 ] && [ "$input_ok" -eq 1 ]; then
-        echo -e "\033[32mAll hardware sensor and input grab permissions are complete and ready to use!\033[0m"
+    if [ "$rapl_ok" -eq 1 ]; then
+        echo -e "\033[32mAll hardware sensor and input permissions are complete and ready to use!\033[0m"
     else
-        echo -e "\033[33mTo enable direct CPU Wattage (RAPL) and Kernel Mouse Grab, run:\033[0m"
+        echo -e "\033[33mTo enable direct CPU Wattage (RAPL), run:\033[0m"
         echo "    fpshud --setup"
     fi
     echo "===================================================================="
@@ -116,8 +116,7 @@ run_setup() {
     echo "  2. What sudo does: writes /etc/udev/rules.d/99-fpshud-rapl.rules (mode 0440)"
     echo "     and executes 'udevadm control --reload-rules'. Without sudo, FPSHUD automatically"
     echo "     uses safe TDP + CPU frequency estimation (never stuck at 0W)."
-    echo "  3. Granting input group access (MODE=\"0664\", GROUP=\"input\") enables exclusive"
-    echo "     kernel-level hardware mouse grab (EVIOCGRAB), eliminating double cursor and click bleed."
+    echo "  3. Input isolation works 100% sudo-free via X11/Wayland (no /dev/input group changes)."
     echo "--------------------------------------------------------------------"
 
     local user_consent=0
@@ -163,21 +162,10 @@ SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="*rapl:*", ATTR{energy_uj}!
 EOF'
     $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-rapl.rules 2>/dev/null || true
 
-    # 2. Kernel Evdev Mouse Input Grab rule (grants access to group 'input' and adds user)
-    TARGET_USER="${SUDO_USER:-$USER}"
-    echo "[*] Installing udev rule for kernel mouse grab (/etc/udev/rules.d/99-fpshud-input.rules)..."
-    $SUDO_CMD bash -c 'cat > /etc/udev/rules.d/99-fpshud-input.rules << "EOF"
-KERNEL=="event*", SUBSYSTEM=="input", MODE="0664", GROUP="input"
-EOF'
-    $SUDO_CMD chmod 644 /etc/udev/rules.d/99-fpshud-input.rules 2>/dev/null || true
-    $SUDO_CMD usermod -aG input "$TARGET_USER" 2>/dev/null || true
-    $SUDO_CMD chmod a+r /dev/input/event* 2>/dev/null || true
-
-    # 3. Reload udev rules
+    # 2. Reload udev rules
     echo "[*] Reloading system udev rules..."
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
     $SUDO_CMD udevadm trigger --subsystem-match=powercap 2>/dev/null || true
-    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
 
     # 3. Flatpak Steam configuration
     TARGET_HOME="${HOME}"
@@ -284,31 +272,17 @@ fi
 # before any instrumented shared objects or application binaries.
 ASAN_RT=""
 if [ -f "$LIB_SO" ] && command -v readelf >/dev/null 2>&1; then
-    if readelf -d "$LIB_SO" 2>/dev/null | grep -E "NEEDED.*libasan\.so" >/dev/null 2>&1; then
-        # Built with GCC AddressSanitizer
-        NEEDED_ASAN="$(readelf -d "$LIB_SO" 2>/dev/null | grep NEEDED | grep -o -E 'libasan\.so(\.[0-9]+)?' | head -n1 || true)"
-        for CC_BIN in "${CC:-}" "${CXX:-}" gcc-16 gcc-15 gcc; do
-            if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1; then
-                [ -n "$NEEDED_ASAN" ] && ASAN_RT="$("$CC_BIN" -print-file-name="$NEEDED_ASAN" 2>/dev/null || true)"
-                [ -f "$ASAN_RT" ] && break
-                ASAN_RT="$("$CC_BIN" -print-file-name=libasan.so 2>/dev/null || true)"
-                [ -f "$ASAN_RT" ] && break
-            fi
-        done
-        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
-            ASAN_RT="$(ldconfig -p 2>/dev/null | grep -E 'libasan\.so(\.[0-9]+)?' | grep -v 'lib32' | awk '{print $NF}' | head -n1 || true)"
-        fi
-        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
-            ASAN_RT="${NEEDED_ASAN:-libasan.so}"
-        fi
-    elif readelf -d "$LIB_SO" 2>/dev/null | grep -E "NEEDED.*libclang_rt\.asan" >/dev/null 2>&1 || readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
+    if readelf -d "$LIB_SO" 2>/dev/null | grep -E "NEEDED.*libclang_rt\.asan" >/dev/null 2>&1 || readelf -s "$LIB_SO" 2>/dev/null | grep -q "__asan_"; then
         # Built with Clang AddressSanitizer
-        for CC_BIN in "${CC:-}" "${CXX:-}" clang-19 clang; do
+        for CC_BIN in "${CC:-}" "${CXX:-}" clang++ clang clang++-23 clang-23 clang++-20 clang-20 clang++-19 clang-19; do
             if [ -n "$CC_BIN" ] && command -v "$CC_BIN" >/dev/null 2>&1; then
                 ASAN_RT="$("$CC_BIN" -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)"
-                [ -f "$ASAN_RT" ] && break
+                [ -n "$ASAN_RT" ] && [ -f "$ASAN_RT" ] && break
             fi
         done
+        if [ -z "$ASAN_RT" ] || [ ! -f "$ASAN_RT" ]; then
+            ASAN_RT="$(ldconfig -p 2>/dev/null | grep -E 'libclang_rt\.asan' | grep -v 'lib32' | awk '{print $NF}' | head -n1 || true)"
+        fi
     fi
 fi
 

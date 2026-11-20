@@ -2,6 +2,7 @@
 #include "embedded_fonts.hpp"
 #include "gui_menu.hpp"
 #include "input_manager.hpp"
+#include "logger.hpp"
 #include "recorder_ipc.hpp"
 
 #include "imgui.h"
@@ -22,16 +23,21 @@ namespace fpshud {
 
 namespace {
 
+constexpr ImU32 make_col32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) noexcept {
+  return (a << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
 enum class GroupCategory { FPS = 0, GPU = 1, CPU = 2, RAM = 3, SYS = 4 };
 
 // Fixed-capacity stack structs with separated prefix/number/unit for high readability (zero heap
 // allocation!)
 struct StyledValue {
-  char prefix[12] = {0};  // e.g., "AVG ", "1% ", "0.1% ", "FAN "
-  char number[36] = {0};  // e.g., "60", "39", "1320", "Radeon RX 7800 XT"
+  char prefix[16] = {0};  // e.g., "AVG ", "1% ", "0.1% ", "FAN "
+  char number[48] = {0};  // e.g., "60", "39", "1320", "Radeon RX 7800 XT"
   char unit[12] = {0};    // e.g., "%", "MHz", "GB", "°C", "W", "ms"
   ImU32 color = 0;
 };
+static_assert(sizeof(StyledValue) == 80, "StyledValue size must be exactly 80 bytes");
 
 constexpr size_t kMaxMetricsPerGroup = 16;
 constexpr size_t kMaxMetricGroups = 40;
@@ -110,32 +116,32 @@ const char* get_category_label(GroupCategory cat) noexcept {
 
 ImU32 get_category_color(GroupCategory cat, const HudConfig& cfg, uint8_t alpha) noexcept {
   if (!cfg.category_colors_enabled) {
-    return IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+    return make_col32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
   }
   switch (cat) {
     case GroupCategory::FPS:
-      return IM_COL32(255, 215, 0, alpha);  // Gold/Yellow
+      return make_col32(255u, 215u, 0u, alpha);  // Gold/Yellow
     case GroupCategory::GPU:
-      return IM_COL32(118, 225, 0, alpha);  // NVIDIA Green
+      return make_col32(118u, 225u, 0u, alpha);  // NVIDIA Green
     case GroupCategory::CPU:
-      return IM_COL32(0, 229, 255, alpha);  // Cyan
+      return make_col32(0u, 229u, 255u, alpha);  // Cyan
     case GroupCategory::RAM:
-      return IM_COL32(220, 135, 255, alpha);  // Soft Purple
+      return make_col32(220u, 135u, 255u, alpha);  // Soft Purple
     case GroupCategory::SYS:
-      return IM_COL32(190, 210, 230, alpha);  // Cool Silver
+      return make_col32(190u, 210u, 230u, alpha);  // Cool Silver
   }
-  return IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+  return make_col32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
 }
 
 ImU32 get_metric_value_color(MetricType m, const TelemetryData& d, const HudConfig& cfg,
                              uint8_t alpha) noexcept {
-  ImU32 base_col = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+  ImU32 base_col = make_col32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
   if (!cfg.thermal_warnings_enabled) {
     return base_col;
   }
 
-  const ImU32 col_red = IM_COL32(255, 70, 70, alpha);
-  const ImU32 col_yellow = IM_COL32(255, 185, 0, alpha);
+  const ImU32 col_red = make_col32(255u, 70u, 70u, alpha);
+  const ImU32 col_yellow = make_col32(255u, 185u, 0u, alpha);
 
   switch (m) {
     case MetricType::FPS:
@@ -304,9 +310,6 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
       std::snprintf(sv.number, sizeof(sv.number), "%d", d.gpu_vram_clock_mhz);
       std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
       return;
-    case MetricType::CpuAllCoreLoad:
-    case MetricType::CpuAllCoreClock:
-      return;
     case MetricType::GpuModel:
       std::snprintf(sv.number, sizeof(sv.number), "%s", d.gpu_name[0] ? d.gpu_name : "GPU");
       return;
@@ -384,6 +387,8 @@ void format_styled_value(MetricType m, const TelemetryData& d, StyledValue& sv) 
         std::snprintf(sv.unit, sizeof(sv.unit), "MB/s");
       }
       return;
+    default:
+      break;
   }
 }
 
@@ -405,24 +410,24 @@ MetricGroupList build_metric_groups(const HudConfig& cfg, const TelemetryData& d
                 MetricGroup{GroupCategory::CPU, row_label, row_col, {}})) {
           for (int k = c; k < std::min(c + 4, n_cores); ++k) {
             StyledValue sv{};
-            std::snprintf(sv.prefix, sizeof(sv.prefix), "C%d:", k);
+            std::snprintf(sv.prefix, sizeof(sv.prefix), "C%u:", static_cast<unsigned>(k));
             if (is_load) {
               int pct = static_cast<int>(data.cpu_core_loads_pct[static_cast<size_t>(k)]);
               std::snprintf(sv.number, sizeof(sv.number), "%d", pct);
               std::snprintf(sv.unit, sizeof(sv.unit), "%%");
               if (cfg.thermal_warnings_enabled && pct >= 95) {
-                sv.color = IM_COL32(255, 70, 70, alpha);
+                sv.color = make_col32(255u, 70u, 70u, alpha);
               } else if (cfg.thermal_warnings_enabled && pct >= 80) {
-                sv.color = IM_COL32(255, 185, 0, alpha);
+                sv.color = make_col32(255u, 185u, 0u, alpha);
               } else {
-                sv.color = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+                sv.color = make_col32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
               }
             } else {
               int mhz = static_cast<int>(data.cpu_core_clocks_mhz[static_cast<size_t>(k)]);
               if (mhz <= 0) mhz = data.cpu_clock_mhz;
               std::snprintf(sv.number, sizeof(sv.number), "%d", mhz);
               std::snprintf(sv.unit, sizeof(sv.unit), "MHz");
-              sv.color = IM_COL32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
+              sv.color = make_col32(cfg.text_color.r, cfg.text_color.g, cfg.text_color.b, alpha);
             }
             added->values.try_push_back(sv);
           }
@@ -473,7 +478,7 @@ void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
   if (cfg.shadow_enabled && cfg.shadow_offset > 0.0f) {
     uint8_t sh_alpha = static_cast<uint8_t>(
         std::clamp(cfg.shadow_opacity * cfg.text_opacity * 255.0f, 0.0f, 255.0f));
-    ImU32 drop_col = IM_COL32(0, 0, 0, sh_alpha);
+    ImU32 drop_col = make_col32(0u, 0u, 0u, sh_alpha);
     float d = std::max(1.0f, std::round(cfg.shadow_offset * scale_factor));
     draw_list->AddText(font, font_size, ImVec2(pos.x + d, pos.y + d), drop_col, text);
   }
@@ -482,7 +487,7 @@ void draw_crisp_text(const char* text, ImU32 color, const HudConfig& cfg) {
   if (cfg.outline_enabled && cfg.outline_thickness > 0.0f) {
     uint8_t out_alpha =
         static_cast<uint8_t>(std::clamp(0.95f * cfg.text_opacity * 255.0f, 0.0f, 255.0f));
-    ImU32 outline_col = IM_COL32(0, 0, 0, out_alpha);
+    ImU32 outline_col = make_col32(0u, 0u, 0u, out_alpha);
     float o = std::max(1.0f, std::round(cfg.outline_thickness * scale_factor));
 
     draw_list->AddText(font, font_size, ImVec2(pos.x - o, pos.y - o), outline_col, text);
@@ -546,20 +551,13 @@ void draw_mini_frametime_graph(const HudConfig& cfg, uint8_t alpha) {
 
   ImGui::PushStyleColor(ImGuiCol_FrameBg,
                         ImVec4(0.04f, 0.05f, 0.07f, std::max(0.45f, cfg.bg_alpha)));
-  ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.0f, 0.90f, 1.0f, alpha / 255.0f));
+  ImGui::PushStyleColor(ImGuiCol_PlotLines,
+                        ImVec4(0.0f, 0.90f, 1.0f, static_cast<float>(alpha) / 255.0f));
   ImGui::PlotLines("##HUD_MiniFTGraph", telemetry.get_ft_history(),
                    TelemetryCollector::kGraphHistorySize, telemetry.get_graph_offset(),
                    "frametime (ms)", 0.0f, 50.0f, ImVec2(graph_w, graph_h));
   ImGui::PopStyleColor(2);
 }
-
-ImFont* g_font_gui_small = nullptr;   // 12px
-ImFont* g_font_gui_normal = nullptr;  // 16px
-ImFont* g_font_gui_large = nullptr;   // 24px
-
-ImFont* g_hud_fonts_small[4] = {};   // 14px for each family
-ImFont* g_hud_fonts_normal[4] = {};  // 20px for each family
-ImFont* g_hud_fonts_large[4] = {};   // 32px for each family
 
 ImFont* load_ttf_with_fallback(ImGuiIO& io, const std::vector<std::string>& candidate_paths,
                                const unsigned char* fallback_mem, size_t fallback_size,
@@ -593,31 +591,60 @@ ImFont* load_ttf_with_fallback(ImGuiIO& io, const std::vector<std::string>& cand
 
 }  // namespace
 
+ImFont* get_gui_font(int tier) {
+  if (!ImGui::GetCurrentContext()) return nullptr;
+  auto* atlas = ImGui::GetIO().Fonts;
+  if (!atlas || atlas->Fonts.empty()) return nullptr;
+  int idx = std::clamp(tier, 0, 2);
+  if (idx < atlas->Fonts.Size) {
+    return atlas->Fonts[idx];
+  }
+  return atlas->Fonts[0];
+}
+
 ImFont* get_gui_font(float gui_scale, float& out_base_size) {
-  if (gui_scale <= 0.75f && g_font_gui_small) {
-    out_base_size = 12.0f;
-    return g_font_gui_small;
+  int tier = 1;
+  if (gui_scale <= 0.75f) {
+    tier = 0;
+    out_base_size = 15.0f;
+  } else if (gui_scale > 1.30f) {
+    tier = 2;
+    out_base_size = 20.0f;
+  } else {
+    tier = 1;
+    out_base_size = 17.0f;
   }
-  if (gui_scale > 1.30f && g_font_gui_large) {
-    out_base_size = 24.0f;
-    return g_font_gui_large;
+  ImFont* font = get_gui_font(tier);
+  return font ? font : ImGui::GetFont();
+}
+
+ImFont* get_hud_font(int family, int tier) {
+  if (!ImGui::GetCurrentContext()) return nullptr;
+  auto* atlas = ImGui::GetIO().Fonts;
+  if (!atlas || atlas->Fonts.empty()) return nullptr;
+  int base_idx = (family == 0) ? 3 : 6;
+  int clamped_tier = std::clamp(tier, 0, 2);
+  int idx = base_idx + clamped_tier;
+  if (idx < atlas->Fonts.Size) {
+    return atlas->Fonts[idx];
   }
-  out_base_size = 16.0f;
-  return g_font_gui_normal ? g_font_gui_normal : ImGui::GetFont();
+  return atlas->Fonts[0];
 }
 
 ImFont* get_hud_font(FontFamily family, float font_size_px, float& out_base_size) {
-  int idx = std::clamp(static_cast<int>(family), 0, 3);
-  if (font_size_px <= 15.0f && g_hud_fonts_small[idx]) {
+  int tier = 1;
+  if (font_size_px <= 15.0f) {
+    tier = 0;
     out_base_size = 14.0f;
-    return g_hud_fonts_small[idx];
-  }
-  if (font_size_px >= 26.0f && g_hud_fonts_large[idx]) {
+  } else if (font_size_px >= 26.0f) {
+    tier = 2;
     out_base_size = 32.0f;
-    return g_hud_fonts_large[idx];
+  } else {
+    tier = 1;
+    out_base_size = 20.0f;
   }
-  out_base_size = 20.0f;
-  return g_hud_fonts_normal[idx] ? g_hud_fonts_normal[idx] : ImGui::GetFont();
+  ImFont* font = get_hud_font(static_cast<int>(family), tier);
+  return font ? font : ImGui::GetFont();
 }
 
 void compute_clamped_hud_pos(const HudConfig& cfg, float display_w, float display_h, float hud_w,
@@ -635,6 +662,7 @@ void compute_clamped_hud_pos(const HudConfig& cfg, float display_w, float displa
 }
 
 void setup_overlay_font(ImGuiIO& io) {
+  io.IniFilename = nullptr;
   std::string home_fonts;
   if (const char* home = std::getenv("HOME"); home && *home) {
     home_fonts = std::string(home) + "/.local/share/fpshud/fonts/";
@@ -644,54 +672,39 @@ void setup_overlay_font(ImGuiIO& io) {
                                               "/run/host/usr/share/fonts/TTF/OpenSans-Bold.ttf",
                                               "/usr/share/fonts/TTF/OpenSans-Bold.ttf"};
 
-  std::vector<std::string> dejavu_paths = {home_fonts + "DejaVuSansMono-Bold.ttf",
-                                           "/run/host/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
-                                           "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf"};
+  std::vector<std::string> mono_paths = {home_fonts + "DejaVuSansMono-Bold.ttf",
+                                         "/run/host/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
+                                         "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
+                                         home_fonts + "AdwaitaMono-Bold.ttf",
+                                         "/run/host/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf",
+                                         "/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf"};
 
-  std::vector<std::string> adwaita_paths = {
-      home_fonts + "AdwaitaMono-Bold.ttf", "/run/host/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf",
-      "/usr/share/fonts/Adwaita/AdwaitaMono-Bold.ttf"};
+  // Index 0..2: Dedicated GUI Menu Fonts (Small 15px, Normal 17px, Large 20px)
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 15.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 17.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
 
-  // 1. Dedicated GUI Menu Fonts (Crisp OpenSans at 12px, 16px, 24px)
-  g_font_gui_small = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                            sizeof(kEmbeddedOpenSansBoldTTF), 12.0f);
-  g_font_gui_normal = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                             sizeof(kEmbeddedOpenSansBoldTTF), 16.0f);
-  g_font_gui_large = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                            sizeof(kEmbeddedOpenSansBoldTTF), 24.0f);
+  // Index 3..5: HUD Sans-Serif Fonts (Small 14px, Normal 20px, Large 32px)
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 14.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
+  load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
+                         sizeof(kEmbeddedOpenSansBoldTTF), 32.0f);
 
-  // 2. Multi-tier HUD Fonts for each of the 4 FontFamily choices
-  // Slot 0: SansBold
-  g_hud_fonts_small[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                sizeof(kEmbeddedOpenSansBoldTTF), 14.0f);
-  g_hud_fonts_normal[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                 sizeof(kEmbeddedOpenSansBoldTTF), 20.0f);
-  g_hud_fonts_large[0] = load_ttf_with_fallback(io, open_sans_paths, kEmbeddedOpenSansBoldTTF,
-                                                sizeof(kEmbeddedOpenSansBoldTTF), 32.0f);
+  // Index 6..8: HUD Monospace Fonts (Small 14px, Normal 20px, Large 32px)
+  // Rasterized once per size tier instead of 3 duplicate times across families!
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         14.0f);
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         20.0f);
+  load_ttf_with_fallback(io, mono_paths, kEmbeddedVeraMonoBoldTTF, sizeof(kEmbeddedVeraMonoBoldTTF),
+                         32.0f);
 
-  // Slot 1: MonoBold
-  g_hud_fonts_small[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[1] = load_ttf_with_fallback(io, dejavu_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
-
-  // Slot 2: VeraMono
-  g_hud_fonts_small[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[2] = load_ttf_with_fallback(io, {}, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
-
-  // Slot 3: AdwaitaMono
-  g_hud_fonts_small[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 14.0f);
-  g_hud_fonts_normal[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                 sizeof(kEmbeddedVeraMonoBoldTTF), 20.0f);
-  g_hud_fonts_large[3] = load_ttf_with_fallback(io, adwaita_paths, kEmbeddedVeraMonoBoldTTF,
-                                                sizeof(kEmbeddedVeraMonoBoldTTF), 32.0f);
+  FPSHUD_LOG_DEBUG(fpshud::log::Subsystem::UI, "Initialized 9-font overlay atlas");
 }
 
 void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_width,
@@ -717,13 +730,18 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
     ImGui::PushFont(chosen_font);
   }
 
-  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                           ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                           ImGuiWindowFlags_NoInputs;
+  ImGuiWindowFlags flags =
+      static_cast<ImGuiWindowFlags>(static_cast<uint32_t>(ImGuiWindowFlags_NoDecoration) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_AlwaysAutoResize) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_NoSavedSettings) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_NoFocusOnAppearing) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_NoNav) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_NoMove) |
+                                    static_cast<uint32_t>(ImGuiWindowFlags_NoInputs));
 
   if (cfg.background == BackgroundStyle::None || cfg.bg_alpha <= 0.001f) {
-    flags |= ImGuiWindowFlags_NoBackground;
+    flags = static_cast<ImGuiWindowFlags>(static_cast<uint32_t>(flags) |
+                                          static_cast<uint32_t>(ImGuiWindowFlags_NoBackground));
   } else {
     ImGui::SetNextWindowBgAlpha(cfg.bg_alpha);
   }
@@ -799,9 +817,9 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
     uint8_t sep_alpha = static_cast<uint8_t>(std::clamp(cfg.text_opacity * 170.0f, 10.0f, 255.0f));
 
     // Soft cool-gray for units & sub-labels (AVG:, 1%:, MHz, GB, W, °C) so numbers pop out cleanly
-    ImU32 muted_col = IM_COL32(175, 190, 208, muted_alpha);
-    ImU32 dot_col = IM_COL32(130, 145, 165, sep_alpha);
-    ImU32 sep_color = IM_COL32(160, 175, 195, sep_alpha);
+    ImU32 muted_col = make_col32(175u, 190u, 208u, muted_alpha);
+    ImU32 dot_col = make_col32(130u, 145u, 165u, sep_alpha);
+    ImU32 sep_color = make_col32(160u, 175u, 195u, sep_alpha);
 
     MetricGroupList groups = build_metric_groups(cfg, data, fg_alpha);
     float ui_ratio = cfg.font_size_px / 20.0f;
@@ -822,7 +840,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
         ImGui::SameLine(0.0f, 10.0f * ui_ratio);
         char rec_buf[32];
         std::snprintf(rec_buf, sizeof(rec_buf), "[REC %.1fs]", data.benchmark_elapsed_sec);
-        draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
+        draw_crisp_text(rec_buf, make_col32(255u, 60u, 60u, fg_alpha), cfg);
       }
       if (RecorderController::instance().is_recording()) {
         ImGui::SameLine(0.0f, 10.0f * ui_ratio);
@@ -831,7 +849,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
         int secs = static_cast<int>(rec_sec) % 60;
         char rec_tag[64];
         std::snprintf(rec_tag, sizeof(rec_tag), "[REC %02d:%02d]", mins, secs);
-        draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
+        draw_crisp_text(rec_tag, make_col32(255u, 50u, 50u, fg_alpha), cfg);
       }
     } else if (cfg.arrangement == ArrangementMode::Double) {
       ImGuiTableFlags tflags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX;
@@ -865,7 +883,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
         char rec_buf[32];
         std::snprintf(rec_buf, sizeof(rec_buf), "[REC BENCHMARK: %.1fs]",
                       data.benchmark_elapsed_sec);
-        draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
+        draw_crisp_text(rec_buf, make_col32(255u, 60u, 60u, fg_alpha), cfg);
       }
       ImGui::PopStyleVar();
     } else {
@@ -898,7 +916,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
         char rec_buf[32];
         std::snprintf(rec_buf, sizeof(rec_buf), "[REC BENCHMARK: %.1fs]",
                       data.benchmark_elapsed_sec);
-        draw_crisp_text(rec_buf, IM_COL32(255, 60, 60, fg_alpha), cfg);
+        draw_crisp_text(rec_buf, make_col32(255u, 60u, 60u, fg_alpha), cfg);
       }
       ImGui::PopStyleVar();
     }
@@ -914,7 +932,7 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
                       "BENCHMARK SAVED: AVG %.0f | 1%% %.0f | 0.1%% %.0f (%.1fs)",
                       data.last_benchmark.avg_fps, data.last_benchmark.fps_1pct_low,
                       data.last_benchmark.fps_01pct_low, data.last_benchmark.duration_sec);
-        draw_crisp_text(bsum, IM_COL32(80, 255, 120, fg_alpha), cfg);
+        draw_crisp_text(bsum, make_col32(80u, 255u, 120u, fg_alpha), cfg);
       }
     }
 
@@ -926,13 +944,13 @@ void render_overlay_ui(HudConfig& cfg, const TelemetryData& data, float display_
       int secs = static_cast<int>(rec_sec) % 60;
       char rec_tag[64];
       std::snprintf(rec_tag, sizeof(rec_tag), "[REC %02d:%02d]", mins, secs);
-      draw_crisp_text(rec_tag, IM_COL32(255, 50, 50, fg_alpha), cfg);
+      draw_crisp_text(rec_tag, make_col32(255u, 50u, 50u, fg_alpha), cfg);
     }
 
     // Show recent toast notification (e.g. video saved, benchmark saved) on HUD
     std::string toast_msg;
     if (RecorderController::instance().get_recent_toast(toast_msg)) {
-      draw_crisp_text(toast_msg.c_str(), IM_COL32(60, 245, 120, fg_alpha), cfg);
+      draw_crisp_text(toast_msg.c_str(), make_col32(60u, 245u, 120u, fg_alpha), cfg);
     }
 
     // Optional Mini Frametime Graph directly on HUD

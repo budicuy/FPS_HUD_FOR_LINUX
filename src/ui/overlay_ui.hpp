@@ -12,7 +12,9 @@ namespace fpshud {
 void setup_overlay_font(ImGuiIO& io);
 
 // Multi-tier crisp font getters for GUI and HUD (prevents bilinear blur across all scales)
+ImFont* get_gui_font(int tier);
 ImFont* get_gui_font(float gui_scale, float& out_base_size);
+ImFont* get_hud_font(int family, int tier);
 ImFont* get_hud_font(FontFamily family, float font_size_px, float& out_base_size);
 
 // Computes the screen-clamped top-left coordinate (out_x, out_y) for Custom HUD placement

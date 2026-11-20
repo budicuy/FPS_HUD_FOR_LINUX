@@ -9,7 +9,7 @@ Checks: >
   clang-analyzer-valist.*,
   cppcoreguidelines-use-default-member-init,
   cppcoreguidelines-slicing
-WarningsAsErrors: ''
+WarningsAsErrors: '*'
 HeaderFilterRegex: 'src/.*\.hpp'
 FormatStyle: none
 ...

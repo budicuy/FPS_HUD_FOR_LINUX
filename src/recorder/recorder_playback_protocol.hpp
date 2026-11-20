@@ -5,7 +5,7 @@
 namespace fpshud {
 
 constexpr uint32_t kPlaybackShmMagic = 0x504C4159;  // "PLAY"
-constexpr const char* kPlaybackShmPrefix = "/fpshud_player_shm_";
+constexpr const char* kPlaybackShmPrefix = "fpshud_player_shm_";
 constexpr const char* kPlaybackSocketPrefix = "player_";
 
 enum class IpcPlaybackAction : uint32_t {

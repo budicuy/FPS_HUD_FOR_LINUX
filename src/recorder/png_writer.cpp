@@ -13,7 +13,7 @@ uint32_t compute_crc32(const uint8_t* data, size_t len, uint32_t crc = 0xFFFFFFF
   for (size_t i = 0; i < len; ++i) {
     crc ^= data[i];
     for (int b = 0; b < 8; ++b) {
-      crc = (crc >> 1) ^ (0xEDB88320u & (-(crc & 1u)));
+      crc = (crc >> 1u) ^ (0xEDB88320u & (0u - (crc & 1u)));
     }
   }
   return ~crc;
@@ -34,14 +34,14 @@ uint32_t compute_adler32(const uint8_t* data, size_t len) noexcept {
     s2 %= kMod;
     i += chunk;
   }
-  return (s2 << 16) | s1;
+  return (s2 << 16u) | s1;
 }
 
 void push_be32(std::vector<uint8_t>& out, uint32_t v) {
-  out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
-  out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
-  out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
-  out.push_back(static_cast<uint8_t>(v & 0xFF));
+  out.push_back(static_cast<uint8_t>((v >> 24u) & 0xFFu));
+  out.push_back(static_cast<uint8_t>((v >> 16u) & 0xFFu));
+  out.push_back(static_cast<uint8_t>((v >> 8u) & 0xFFu));
+  out.push_back(static_cast<uint8_t>(v & 0xFFu));
 }
 
 void write_png_chunk(std::vector<uint8_t>& out, const char type[4], const uint8_t* payload,
@@ -62,33 +62,33 @@ void write_png_chunk(std::vector<uint8_t>& out, const char type[4], const uint8_
 struct BitWriter {
   std::vector<uint8_t>& out;
   uint32_t bit_buf = 0;
-  int bit_count = 0;
+  uint32_t bit_count = 0;
 
   explicit BitWriter(std::vector<uint8_t>& o) : out(o) {}
 
   // Writes LSB-first bits (for Deflate header fields, extra bits)
-  void write_bits(uint32_t val, int nbits) {
+  void write_bits(uint32_t val, uint32_t nbits) {
     bit_buf |= (val << bit_count);
     bit_count += nbits;
-    while (bit_count >= 8) {
-      out.push_back(static_cast<uint8_t>(bit_buf & 0xFF));
-      bit_buf >>= 8;
-      bit_count -= 8;
+    while (bit_count >= 8u) {
+      out.push_back(static_cast<uint8_t>(bit_buf & 0xFFu));
+      bit_buf >>= 8u;
+      bit_count -= 8u;
     }
   }
 
   // Writes MSB-first Huffman code (RFC 1951 Section 3.1.1)
-  void write_huff(uint32_t code, int nbits) {
+  void write_huff(uint32_t code, uint32_t nbits) {
     uint32_t rev = 0;
-    for (int i = 0; i < nbits; ++i) {
-      rev = (rev << 1) | ((code >> i) & 1u);
+    for (uint32_t i = 0; i < nbits; ++i) {
+      rev = (rev << 1u) | ((code >> i) & 1u);
     }
     write_bits(rev, nbits);
   }
 
   void flush() {
-    if (bit_count > 0) {
-      out.push_back(static_cast<uint8_t>(bit_buf & 0xFF));
+    if (bit_count > 0u) {
+      out.push_back(static_cast<uint8_t>(bit_buf & 0xFFu));
       bit_buf = 0;
       bit_count = 0;
     }
@@ -163,8 +163,8 @@ void compress_zlib_fixed(const std::vector<uint8_t>& raw, std::vector<uint8_t>& 
   size_t pos = 0;
 
   auto hash3 = [](const uint8_t* p) noexcept -> size_t {
-    uint32_t v = (static_cast<uint32_t>(p[0]) << 16) | (static_cast<uint32_t>(p[1]) << 8) | p[2];
-    return ((v * 2654435761u) >> 20) & (kHashSize - 1);
+    uint32_t v = (static_cast<uint32_t>(p[0]) << 16u) | (static_cast<uint32_t>(p[1]) << 8u) | p[2];
+    return ((v * 2654435761u) >> 20u) & (kHashSize - 1u);
   };
 
   while (pos < n) {
@@ -256,17 +256,17 @@ bool write_rgba_to_png(const std::string& path, const uint8_t* pixels, uint32_t 
         g = px[1];
         b = px[2];
       } else if (format == 2) {  // X2BGR10LE
-        uint32_t w = static_cast<uint32_t>(px[0]) | (static_cast<uint32_t>(px[1]) << 8) |
-                     (static_cast<uint32_t>(px[2]) << 16) | (static_cast<uint32_t>(px[3]) << 24);
-        r = static_cast<uint8_t>((w & 0x3FFu) >> 2);
-        g = static_cast<uint8_t>(((w >> 10) & 0x3FFu) >> 2);
-        b = static_cast<uint8_t>(((w >> 20) & 0x3FFu) >> 2);
+        uint32_t w = static_cast<uint32_t>(px[0]) | (static_cast<uint32_t>(px[1]) << 8u) |
+                     (static_cast<uint32_t>(px[2]) << 16u) | (static_cast<uint32_t>(px[3]) << 24u);
+        r = static_cast<uint8_t>((w & 0x3FFu) >> 2u);
+        g = static_cast<uint8_t>(((w >> 10u) & 0x3FFu) >> 2u);
+        b = static_cast<uint8_t>(((w >> 20u) & 0x3FFu) >> 2u);
       } else {  // X2RGB10LE (3)
-        uint32_t w = static_cast<uint32_t>(px[0]) | (static_cast<uint32_t>(px[1]) << 8) |
-                     (static_cast<uint32_t>(px[2]) << 16) | (static_cast<uint32_t>(px[3]) << 24);
-        b = static_cast<uint8_t>((w & 0x3FFu) >> 2);
-        g = static_cast<uint8_t>(((w >> 10) & 0x3FFu) >> 2);
-        r = static_cast<uint8_t>(((w >> 20) & 0x3FFu) >> 2);
+        uint32_t w = static_cast<uint32_t>(px[0]) | (static_cast<uint32_t>(px[1]) << 8u) |
+                     (static_cast<uint32_t>(px[2]) << 16u) | (static_cast<uint32_t>(px[3]) << 24u);
+        b = static_cast<uint8_t>((w & 0x3FFu) >> 2u);
+        g = static_cast<uint8_t>(((w >> 10u) & 0x3FFu) >> 2u);
+        r = static_cast<uint8_t>(((w >> 20u) & 0x3FFu) >> 2u);
       }
       cur_row[x * 3 + 0] = r;
       cur_row[x * 3 + 1] = g;
@@ -291,14 +291,14 @@ bool write_rgba_to_png(const std::string& path, const uint8_t* pixels, uint32_t 
   png.insert(png.end(), kPngSig, kPngSig + 8);
 
   uint8_t ihdr[13] = {0};
-  ihdr[0] = static_cast<uint8_t>((width >> 24) & 0xFF);
-  ihdr[1] = static_cast<uint8_t>((width >> 16) & 0xFF);
-  ihdr[2] = static_cast<uint8_t>((width >> 8) & 0xFF);
-  ihdr[3] = static_cast<uint8_t>(width & 0xFF);
-  ihdr[4] = static_cast<uint8_t>((height >> 24) & 0xFF);
-  ihdr[5] = static_cast<uint8_t>((height >> 16) & 0xFF);
-  ihdr[6] = static_cast<uint8_t>((height >> 8) & 0xFF);
-  ihdr[7] = static_cast<uint8_t>(height & 0xFF);
+  ihdr[0] = static_cast<uint8_t>((width >> 24u) & 0xFFu);
+  ihdr[1] = static_cast<uint8_t>((width >> 16u) & 0xFFu);
+  ihdr[2] = static_cast<uint8_t>((width >> 8u) & 0xFFu);
+  ihdr[3] = static_cast<uint8_t>(width & 0xFFu);
+  ihdr[4] = static_cast<uint8_t>((height >> 24u) & 0xFFu);
+  ihdr[5] = static_cast<uint8_t>((height >> 16u) & 0xFFu);
+  ihdr[6] = static_cast<uint8_t>((height >> 8u) & 0xFFu);
+  ihdr[7] = static_cast<uint8_t>(height & 0xFFu);
   ihdr[8] = 8;   // 8-bit depth
   ihdr[9] = 2;   // Color type 2 = Truecolor RGB
   ihdr[10] = 0;  // Compression method 0 (Deflate)

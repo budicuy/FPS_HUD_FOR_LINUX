@@ -1,3 +1,4 @@
+#include "parse_util.hpp"
 #include "recorder_ipc.hpp"
 #include "recorder_player.hpp"
 
@@ -40,10 +41,42 @@ extern "C" {
 // PulseAudio Asynchronous API for lightweight desktop/game audio recording
 #include <pulse/error.h>
 #include <pulse/pulseaudio.h>
+#include "pulse_audio_util.hpp"
+
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+extern "C" const char* __asan_default_options() {  // NOLINT(bugprone-reserved-identifier)
+  return "protect_shadow_gap=0";
+}
+
+extern "C" const char* __lsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
+  return "leak:libnvidia-ml.so\n"
+         "leak:init_gpu_sensors_locked\n"
+         "leak:libGLX_nvidia.so\n"
+         "leak:libcuda.so\n"
+         "leak:libnvidia-encode.so\n"
+         "leak:nvidia_drv_video.so\n"
+         "leak:libva.so\n"
+         "leak:libva-drm.so\n"
+         "leak:old_pthread_cond_broadcast\n"
+         "leak:pthread_cond_broadcast\n"
+         "leak:probe_hardware_encoders\n"
+         "leak:<unknown module>\n";
+}
+#endif
+
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+extern "C" const char* __tsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
+  return "race:libavutil\n"
+         "race:libavcodec\n"
+         "race:pthread_frame.c\n";
+}
+#endif
 
 namespace fs = std::filesystem;
 
 namespace {
+
+constexpr uint32_t kCodecFlagGlobalHeader = 1u << 22u;  // Matches AV_CODEC_FLAG_GLOBAL_HEADER
 
 std::atomic<bool> g_running{true};
 std::atomic<bool> g_has_received_game_frame{false};
@@ -57,44 +90,6 @@ std::string generate_timestamp_filename(const std::string& prefix, const std::st
   char buf[64];
   std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_buf);
   return prefix + "_" + buf + ext;
-}
-
-// Automatically discovers the active default monitor audio device name
-std::string get_default_monitor_source() {
-  // 1. Try pactl get-default-sink
-  FILE* fp = popen("pactl get-default-sink 2>/dev/null", "r");
-  if (fp) {
-    char buf[256] = {0};
-    if (std::fgets(buf, sizeof(buf), fp)) {
-      std::string s(buf);
-      while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-      if (!s.empty()) {
-        pclose(fp);
-        return s + ".monitor";
-      }
-    }
-    pclose(fp);
-  }
-  // 2. PulseAudio / PipeWire standard fallback alias
-  return "@DEFAULT_MONITOR@";
-}
-
-// Automatically discovers the active default microphone input source
-std::string get_default_mic_source() {
-  FILE* fp = popen("pactl get-default-source 2>/dev/null", "r");
-  if (fp) {
-    char buf[256] = {0};
-    if (std::fgets(buf, sizeof(buf), fp)) {
-      std::string s(buf);
-      while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-      if (!s.empty() && s.rfind(".monitor") == std::string::npos) {
-        pclose(fp);
-        return s;
-      }
-    }
-    pclose(fp);
-  }
-  return "@DEFAULT_SOURCE@";
 }
 
 AVBufferRef* create_vaapi_device() {
@@ -116,6 +111,7 @@ struct PulseAudioCapture {
   pa_mainloop* ml = nullptr;
   pa_context* ctx = nullptr;
   pa_stream* stream = nullptr;
+  std::string source_name;
 
   PulseAudioCapture() = default;
   ~PulseAudioCapture() { cleanup(); }
@@ -137,55 +133,155 @@ struct PulseAudioCapture {
       pa_mainloop_free(ml);
       ml = nullptr;
     }
+    source_name.clear();
   }
 
-  bool init(const std::string& monitor_source, const std::atomic<bool>& running) {
+  fpshud::PulseInitResult init(fpshud::AudioRole role, const std::atomic<bool>& running) {
+    if (!running.load(std::memory_order_relaxed)) {
+      return {fpshud::PulseInitStatus::Cancelled, {}};
+    }
+
     ml = pa_mainloop_new();
-    if (!ml) return false;
+    if (!ml) {
+      return {fpshud::PulseInitStatus::Error, "Failed to allocate PulseAudio mainloop"};
+    }
+
     pa_mainloop_api* api = pa_mainloop_get_api(ml);
     ctx = pa_context_new(api, "FPSHUD_Recorder");
     if (!ctx) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Error, "Failed to allocate PulseAudio context"};
     }
 
     if (pa_context_connect(ctx, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error,
+              (str && *str) ? str : "Failed to connect PulseAudio context"};
     }
 
-    auto start = std::chrono::steady_clock::now();
-    while (running.load(std::memory_order_relaxed)) {
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto kTimeout = std::chrono::milliseconds(1500);
+
+    // 1. Wait for PA_CONTEXT_READY
+    while (true) {
+      if (!running.load(std::memory_order_relaxed)) {
+        cleanup();
+        return {fpshud::PulseInitStatus::Cancelled, {}};
+      }
       pa_context_state_t state = pa_context_get_state(ctx);
-      if (state == PA_CONTEXT_READY) break;
+      if (state == PA_CONTEXT_READY) {
+        break;
+      }
       if (!PA_CONTEXT_IS_GOOD(state)) {
+        int err = pa_context_errno(ctx);
         cleanup();
-        return false;
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "PulseAudio context state failed"};
       }
-      pa_mainloop_iterate(ml, 0, nullptr);
       if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                start)
-              .count() > 500) {
+                                                                start_time) > kTimeout) {
         cleanup();
-        return false;
+        return {fpshud::PulseInitStatus::TimedOut, "PulseAudio context connection timed out"};
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (pa_mainloop_prepare(ml, 20000) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_mainloop_prepare failed"};
+      }
+      pa_mainloop_poll(ml);
+      if (pa_mainloop_dispatch(ml) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "pa_mainloop_dispatch failed"};
+      }
+    }
+
+    // 2. Query Server Info to resolve default sink / source names
+    struct ServerInfoData {
+      std::string default_sink;
+      std::string default_source;
+      bool done = false;
+    };
+    ServerInfoData info_data;
+
+    pa_operation* op = pa_context_get_server_info(
+        ctx,
+        [](pa_context*, const pa_server_info* info, void* userdata) {
+          auto* d = static_cast<ServerInfoData*>(userdata);
+          if (info) {
+            if (info->default_sink_name) d->default_sink = info->default_sink_name;
+            if (info->default_source_name) d->default_source = info->default_source_name;
+          }
+          d->done = true;
+        },
+        &info_data);
+
+    if (op) {
+      while (!info_data.done && pa_operation_get_state(op) == PA_OPERATION_RUNNING) {
+        if (!running.load(std::memory_order_relaxed)) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          cleanup();
+          return {fpshud::PulseInitStatus::Cancelled, {}};
+        }
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                  start_time) > kTimeout) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          cleanup();
+          return {fpshud::PulseInitStatus::TimedOut, "pa_context_get_server_info timed out"};
+        }
+        pa_context_state_t state = pa_context_get_state(ctx);
+        if (!PA_CONTEXT_IS_GOOD(state)) {
+          pa_operation_cancel(op);
+          pa_operation_unref(op);
+          int err = pa_context_errno(ctx);
+          cleanup();
+          const char* str = pa_strerror(err);
+          return {fpshud::PulseInitStatus::Error,
+                  (str && *str) ? str : "PulseAudio context state failed"};
+        }
+        if (pa_mainloop_prepare(ml, 20000) < 0) break;
+        pa_mainloop_poll(ml);
+        pa_mainloop_dispatch(ml);
+      }
+      pa_operation_unref(op);
     }
 
     if (!running.load(std::memory_order_relaxed)) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Cancelled, {}};
     }
 
+    if (role == fpshud::AudioRole::Microphone) {
+      source_name = fpshud::resolve_mic_source_name(
+          info_data.default_source.empty() ? nullptr : info_data.default_source.c_str(),
+          info_data.default_sink.empty() ? nullptr : info_data.default_sink.c_str());
+    } else {
+      source_name = fpshud::resolve_monitor_source_name(
+          info_data.default_sink.empty() ? nullptr : info_data.default_sink.c_str());
+    }
+
+    // 3. Connect Record Stream
     pa_sample_spec ss{};
     ss.format = PA_SAMPLE_S16LE;
     ss.rate = 48000;
     ss.channels = 2;
 
-    stream = pa_stream_new(ctx, "Gameplay Audio", &ss, nullptr);
+    const char* stream_title =
+        (role == fpshud::AudioRole::Microphone) ? "FPSHUD Microphone" : "FPSHUD Audio";
+    stream = pa_stream_new(ctx, stream_title, &ss, nullptr);
     if (!stream) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_stream_new failed"};
     }
 
     pa_buffer_attr attr{};
@@ -195,37 +291,58 @@ struct PulseAudioCapture {
     attr.prebuf = static_cast<uint32_t>(-1);
     attr.minreq = static_cast<uint32_t>(-1);
 
-    if (pa_stream_connect_record(stream, monitor_source.c_str(), &attr, PA_STREAM_ADJUST_LATENCY) <
+    if (pa_stream_connect_record(stream, source_name.c_str(), &attr, PA_STREAM_ADJUST_LATENCY) <
         0) {
+      int err = pa_context_errno(ctx);
       cleanup();
-      return false;
+      const char* str = pa_strerror(err);
+      return {fpshud::PulseInitStatus::Error,
+              (str && *str) ? str : "pa_stream_connect_record failed"};
     }
 
-    start = std::chrono::steady_clock::now();
-    while (running.load(std::memory_order_relaxed)) {
+    while (true) {
+      if (!running.load(std::memory_order_relaxed)) {
+        cleanup();
+        return {fpshud::PulseInitStatus::Cancelled, {}};
+      }
       pa_stream_state_t state = pa_stream_get_state(stream);
-      if (state == PA_STREAM_READY) break;
+      if (state == PA_STREAM_READY) {
+        break;
+      }
       if (!PA_STREAM_IS_GOOD(state)) {
+        int err = pa_context_errno(ctx);
         cleanup();
-        return false;
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_stream state error"};
       }
-      pa_mainloop_iterate(ml, 0, nullptr);
       if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                start)
-              .count() > 500) {
+                                                                start_time) > kTimeout) {
         cleanup();
-        return false;
+        return {fpshud::PulseInitStatus::TimedOut, "pa_stream connection timed out"};
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (pa_mainloop_prepare(ml, 20000) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error, (str && *str) ? str : "pa_mainloop_prepare failed"};
+      }
+      pa_mainloop_poll(ml);
+      if (pa_mainloop_dispatch(ml) < 0) {
+        int err = pa_context_errno(ctx);
+        cleanup();
+        const char* str = pa_strerror(err);
+        return {fpshud::PulseInitStatus::Error,
+                (str && *str) ? str : "pa_mainloop_dispatch failed"};
+      }
     }
 
     if (!running.load(std::memory_order_relaxed) ||
         pa_stream_get_state(stream) != PA_STREAM_READY) {
       cleanup();
-      return false;
+      return {fpshud::PulseInitStatus::Cancelled, {}};
     }
 
-    return true;
+    return {fpshud::PulseInitStatus::Connected, {}};
   }
 };
 
@@ -261,19 +378,20 @@ int main(int argc, char* argv[]) {
     else if (arg == "--shm" && i + 1 < argc)
       shm_path = argv[++i];
     else if (arg == "--width" && i + 1 < argc)
-      target_width = std::max(64, std::atoi(argv[++i]));
+      target_width = std::max(64, fpshud::parse::parse_int_or(argv[++i], target_width));
     else if (arg == "--height" && i + 1 < argc)
-      target_height = std::max(64, std::atoi(argv[++i]));
+      target_height = std::max(64, fpshud::parse::parse_int_or(argv[++i], target_height));
     else if (arg == "--fps" && i + 1 < argc)
-      target_fps = std::clamp(std::atoi(argv[++i]), 15, 240);
+      target_fps = std::clamp(fpshud::parse::parse_int_or(argv[++i], target_fps), 15, 240);
     else if (arg == "--bitrate" && i + 1 < argc)
-      target_bitrate_kbps = std::clamp(std::atoi(argv[++i]), 1000, 100000);
+      target_bitrate_kbps =
+          std::clamp(fpshud::parse::parse_int_or(argv[++i], target_bitrate_kbps), 1000, 100000);
     else if (arg == "--codec" && i + 1 < argc)
       codec_choice = argv[++i];
     else if (arg == "--cqp-mode" && i + 1 < argc)
-      quality_mode = std::clamp(std::atoi(argv[++i]), 0, 1);
+      quality_mode = std::clamp(fpshud::parse::parse_int_or(argv[++i], quality_mode), 0, 1);
     else if (arg == "--cqp" && i + 1 < argc)
-      target_cq = std::clamp(std::atoi(argv[++i]), 16, 30);
+      target_cq = std::clamp(fpshud::parse::parse_int_or(argv[++i], target_cq), 16, 30);
     else if (arg == "--dir" && i + 1 < argc)
       save_dir = argv[++i];
   }
@@ -393,11 +511,12 @@ int main(int argc, char* argv[]) {
     if (start_cfg.width > 0) target_width = std::max(64, static_cast<int>(start_cfg.width));
     if (start_cfg.height > 0) target_height = std::max(64, static_cast<int>(start_cfg.height));
     if (start_cfg.fps > 0) target_fps = std::clamp(static_cast<int>(start_cfg.fps), 15, 240);
-    if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = start_cfg.bitrate_kbps;
+    if (start_cfg.bitrate_kbps > 0) target_bitrate_kbps = static_cast<int>(start_cfg.bitrate_kbps);
     if (start_cfg.save_dir[0] != '\0') save_dir = start_cfg.save_dir;
     codec_choice = (start_cfg.codec == 1) ? "hevc" : "h264";
     quality_mode = (start_cfg.quality_mode == 1) ? 1 : 0;
-    if (start_cfg.cq_level >= 16 && start_cfg.cq_level <= 30) target_cq = start_cfg.cq_level;
+    if (start_cfg.cq_level >= 16 && start_cfg.cq_level <= 30)
+      target_cq = static_cast<int>(start_cfg.cq_level);
   }
 
   if (save_dir.empty()) {
@@ -407,8 +526,8 @@ int main(int argc, char* argv[]) {
   fs::create_directories(save_dir, ec);
 
   // Ensure width and height are even for YUV420p/NV12 video encoding and at least 64
-  target_width = std::max(64, target_width & ~1);
-  target_height = std::max(64, target_height & ~1);
+  target_width = std::max(64, static_cast<int>(static_cast<uint32_t>(target_width) & ~1u));
+  target_height = std::max(64, static_cast<int>(static_cast<uint32_t>(target_height) & ~1u));
 
   std::string ext =
       (start_cfg.container == 1) ? ".mkv" : ((start_cfg.container == 2) ? ".webm" : ".mp4");
@@ -467,6 +586,13 @@ int main(int argc, char* argv[]) {
 
     bool is_nv = (std::strstr(c->name, "nvenc") != nullptr);
     bool is_va = (std::strstr(c->name, "vaapi") != nullptr);
+
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+    if (is_nv || is_va) {
+      avcodec_free_context(&ctx);
+      continue;
+    }
+#endif
 
     if (is_va) {
       if (!hw_device_ctx) {
@@ -568,7 +694,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    ctx->flags = static_cast<int>(static_cast<uint32_t>(ctx->flags) | kCodecFlagGlobalHeader);
 
     if (avcodec_open2(ctx, c, nullptr) >= 0) {
       vcodec = c;
@@ -635,15 +761,15 @@ int main(int argc, char* argv[]) {
   vstream->time_base = vctx->time_base;
   avcodec_parameters_from_context(vstream->codecpar, vctx);
   if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
-    vstream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+    vstream->codecpar->codec_tag = static_cast<uint32_t>('h') | (static_cast<uint32_t>('v') << 8u) |
+                                   (static_cast<uint32_t>('c') << 16u) |
+                                   (static_cast<uint32_t>('1') << 24u);
   }
 
   // 4. Initialize Audio Stream via PulseAudio / PipeWire
   AVStream* astream = nullptr;
   AVCodecContext* actx = nullptr;
   bool audio_enabled = (start_cfg.audio_source != 3);  // 3 = Mute
-  std::string monitor_source;
-  std::string mic_source;
 
   if (audio_enabled) {
     const AVCodec* acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -655,7 +781,7 @@ int main(int argc, char* argv[]) {
         actx->sample_fmt = AV_SAMPLE_FMT_FLTP;
         actx->bit_rate = 192000;
         actx->time_base = AVRational{1, actx->sample_rate};
-        actx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        actx->flags = static_cast<int>(static_cast<uint32_t>(actx->flags) | kCodecFlagGlobalHeader);
 
         if (avcodec_open2(actx, acodec, nullptr) >= 0) {
           astream = avformat_new_stream(oc, nullptr);
@@ -663,14 +789,6 @@ int main(int argc, char* argv[]) {
             astream->id = 1;
             astream->time_base = actx->time_base;
             avcodec_parameters_from_context(astream->codecpar, actx);
-            if (start_cfg.audio_source == 1) {
-              monitor_source = get_default_mic_source();
-            } else if (start_cfg.audio_source == 2) {
-              monitor_source = get_default_monitor_source();
-              mic_source = get_default_mic_source();
-            } else {
-              monitor_source = get_default_monitor_source();
-            }
           } else {
             avcodec_free_context(&actx);
             audio_enabled = false;
@@ -703,8 +821,14 @@ int main(int argc, char* argv[]) {
     if (actx) avcodec_free_context(&actx);
     if (hw_device_ctx) av_buffer_unref(&hw_device_ctx);
     if (oc) {
-      if (oc->pb && !(oc->oformat->flags & AVFMT_NOFILE)) avio_closep(&oc->pb);
+      if (oc->pb &&
+          ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u))
+        avio_closep(&oc->pb);
       avformat_free_context(oc);
+    }
+    if (shm_base && shm_base != MAP_FAILED) {
+      munmap(shm_base, shm_size);
+      shm_base = nullptr;
     }
     if (client_fd >= 0) close(client_fd);
     if (server_fd >= 0) close(server_fd);
@@ -713,10 +837,11 @@ int main(int argc, char* argv[]) {
 
   bool is_replay = (start_cfg.replay_mode == 1);
   int replay_sec = std::clamp<int>(
-      start_cfg.replay_duration_sec > 0 ? start_cfg.replay_duration_sec : 30, 5, 300);
+      start_cfg.replay_duration_sec > 0 ? static_cast<int>(start_cfg.replay_duration_sec) : 30, 5,
+      300);
 
   if (!is_replay) {
-    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+    if ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) {
       if (avio_open(&oc->pb, out_filename.c_str(), AVIO_FLAG_WRITE) < 0) {
         std::fprintf(stderr, "[FPSHUD Recorder] Could not open output file: %s\n",
                      out_filename.c_str());
@@ -764,7 +889,9 @@ int main(int argc, char* argv[]) {
     auto now_tp = std::chrono::steady_clock::now();
     int64_t now_us =
         std::chrono::duration_cast<std::chrono::microseconds>(now_tp - replay_clock_start).count();
-    bool is_key = (stream_idx == 0) && ((cloned->flags & AV_PKT_FLAG_KEY) != 0);
+    bool is_key =
+        (stream_idx == 0) &&
+        ((static_cast<uint32_t>(cloned->flags) & static_cast<uint32_t>(AV_PKT_FLAG_KEY)) != 0u);
     packet_ring.push_back(BufferedPacket{cloned, stream_idx, now_us, is_key});
 
     int64_t cutoff_us = now_us - static_cast<int64_t>(replay_sec) * 1000000LL;
@@ -802,13 +929,16 @@ int main(int argc, char* argv[]) {
 
   // Initialize frame background
   if (vframe->data[0]) {
-    std::memset(vframe->data[0], 16, vframe->linesize[0] * target_height);
+    std::memset(vframe->data[0], 16,
+                static_cast<size_t>(vframe->linesize[0]) * static_cast<size_t>(target_height));
   }
   if (vframe->data[1]) {
-    std::memset(vframe->data[1], 128, vframe->linesize[1] * (target_height / 2));
+    std::memset(vframe->data[1], 128,
+                static_cast<size_t>(vframe->linesize[1]) * static_cast<size_t>(target_height / 2));
   }
   if (vframe->data[2]) {
-    std::memset(vframe->data[2], 128, vframe->linesize[2] * (target_height / 2));
+    std::memset(vframe->data[2], 128,
+                static_cast<size_t>(vframe->linesize[2]) * static_cast<size_t>(target_height / 2));
   }
 
   AVFrame* hw_frame = nullptr;
@@ -823,27 +953,41 @@ int main(int argc, char* argv[]) {
 
   // Spawn Audio Capture Thread (Asynchronous libpulse)
   std::thread audio_thread([&]() {
-    if (!actx || !audio_enabled || monitor_source.empty()) return;
+    if (!actx || !audio_enabled) return;
 
     PulseAudioCapture pulse;
-    if (!pulse.init(monitor_source, g_running)) {
-      std::fprintf(
-          stderr,
-          "[FPSHUD Recorder] PulseAudio connection failed or timeout, audio capture disabled.\n");
+    PulseAudioCapture pulse_mic;
+
+    fpshud::AudioRole primary_role =
+        (start_cfg.audio_source == 1) ? fpshud::AudioRole::Microphone : fpshud::AudioRole::Monitor;
+    fpshud::PulseInitResult res = pulse.init(primary_role, g_running);
+    if (res.status == fpshud::PulseInitStatus::Cancelled) {
+      return;
+    }
+    if (fpshud::should_log_pulse_init_failure(res.status)) {
+      std::string warn = fpshud::format_pulse_init_warning(res);
+      std::fputs(warn.c_str(), stderr);
       return;
     }
 
-    PulseAudioCapture pulse_mic;
-    bool has_mic = (!mic_source.empty() && pulse_mic.init(mic_source, g_running));
+    bool has_mic = false;
+    if (start_cfg.audio_source == 2) {
+      fpshud::PulseInitResult mic_res = pulse_mic.init(fpshud::AudioRole::Microphone, g_running);
+      if (mic_res.status == fpshud::PulseInitStatus::Connected) {
+        has_mic = true;
+      }
+    }
 
     std::fprintf(stderr, "[FPSHUD Recorder] Audio capture initialized on: %s%s\n",
-                 monitor_source.c_str(), has_mic ? (" + " + mic_source).c_str() : "");
+                 pulse.source_name.c_str(), has_mic ? (" + " + pulse_mic.source_name).c_str() : "");
 
     constexpr int kAudioSamplesPerFrame = 1024;
     std::vector<int16_t> pcm_ring;
     std::vector<int16_t> mic_ring;
-    pcm_ring.reserve(kAudioSamplesPerFrame * 8);
-    if (has_mic) mic_ring.reserve(kAudioSamplesPerFrame * 8);
+    size_t pcm_read_offset = 0;
+    size_t mic_read_offset = 0;
+    pcm_ring.reserve(static_cast<size_t>(kAudioSamplesPerFrame) * 8);
+    if (has_mic) mic_ring.reserve(static_cast<size_t>(kAudioSamplesPerFrame) * 8);
     int64_t audio_pts = 0;
 
     // Resampler from S16 to FLTP
@@ -877,6 +1021,11 @@ int main(int argc, char* argv[]) {
       const void* data = nullptr;
       size_t nbytes = 0;
       if (pa_stream_peek(pulse.stream, &data, &nbytes) == 0 && nbytes > 0) {
+        if (pcm_read_offset >= 4096) {
+          pcm_ring.erase(pcm_ring.begin(),
+                         pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
+          pcm_read_offset = 0;
+        }
         if (data == nullptr) {
           // Hole in stream: inject silence (zeros)
           size_t samples_to_inject = nbytes / sizeof(int16_t);
@@ -893,6 +1042,11 @@ int main(int argc, char* argv[]) {
         const void* mdata = nullptr;
         size_t mnbytes = 0;
         if (pa_stream_peek(pulse_mic.stream, &mdata, &mnbytes) == 0 && mnbytes > 0) {
+          if (mic_read_offset >= 4096) {
+            mic_ring.erase(mic_ring.begin(),
+                           mic_ring.begin() + static_cast<std::ptrdiff_t>(mic_read_offset));
+            mic_read_offset = 0;
+          }
           if (mdata == nullptr) {
             mic_ring.insert(mic_ring.end(), mnbytes / sizeof(int16_t), 0);
           } else {
@@ -907,25 +1061,42 @@ int main(int argc, char* argv[]) {
       // arrives so audio starts in exact lockstep with video PTS at 0.0s
       if (!g_has_received_game_frame.load(std::memory_order_relaxed)) {
         pcm_ring.clear();
+        pcm_read_offset = 0;
         mic_ring.clear();
+        mic_read_offset = 0;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
       }
 
-      while (pcm_ring.size() >= static_cast<size_t>(kAudioSamplesPerFrame * 2)) {
-        if (has_mic && !mic_ring.empty()) {
-          size_t mix_n = std::min<size_t>(kAudioSamplesPerFrame * 2, mic_ring.size());
+      while ((pcm_ring.size() - pcm_read_offset) >=
+             static_cast<size_t>(kAudioSamplesPerFrame) * 2) {
+        if (has_mic && (mic_ring.size() - mic_read_offset) > 0) {
+          size_t mic_avail = mic_ring.size() - mic_read_offset;
+          size_t mix_n =
+              std::min<size_t>(static_cast<size_t>(kAudioSamplesPerFrame) * 2, mic_avail);
           for (size_t i = 0; i < mix_n; ++i) {
-            int mixed = static_cast<int>(pcm_ring[i]) + static_cast<int>(mic_ring[i]);
-            pcm_ring[i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
+            int mixed = static_cast<int>(pcm_ring[pcm_read_offset + i]) +
+                        static_cast<int>(mic_ring[mic_read_offset + i]);
+            pcm_ring[pcm_read_offset + i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
           }
-          mic_ring.erase(mic_ring.begin(), mic_ring.begin() + mix_n);
+          mic_read_offset += mix_n;
+          if (mic_read_offset >= 4096) {
+            mic_ring.erase(mic_ring.begin(),
+                           mic_ring.begin() + static_cast<std::ptrdiff_t>(mic_read_offset));
+            mic_read_offset = 0;
+          }
         }
         if (av_frame_make_writable(aframe) < 0) {
-          pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+          pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
+          if (pcm_read_offset >= 4096) {
+            pcm_ring.erase(pcm_ring.begin(),
+                           pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
+            pcm_read_offset = 0;
+          }
           continue;
         }
-        const uint8_t* in_data[1] = {reinterpret_cast<const uint8_t*>(pcm_ring.data())};
+        const uint8_t* in_data[1] = {
+            reinterpret_cast<const uint8_t*>(pcm_ring.data() + pcm_read_offset)};
         if (swr) {
           swr_convert(swr, aframe->data, kAudioSamplesPerFrame, in_data, kAudioSamplesPerFrame);
         }
@@ -940,7 +1111,21 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        pcm_ring.erase(pcm_ring.begin(), pcm_ring.begin() + (kAudioSamplesPerFrame * 2));
+        pcm_read_offset += (static_cast<size_t>(kAudioSamplesPerFrame) * 2);
+        if (pcm_read_offset >= 4096) {
+          pcm_ring.erase(pcm_ring.begin(),
+                         pcm_ring.begin() + static_cast<std::ptrdiff_t>(pcm_read_offset));
+          pcm_read_offset = 0;
+        }
+      }
+
+      if (pcm_read_offset >= pcm_ring.size()) {
+        pcm_ring.clear();
+        pcm_read_offset = 0;
+      }
+      if (mic_read_offset >= mic_ring.size()) {
+        mic_ring.clear();
+        mic_read_offset = 0;
       }
 
       if (nbytes == 0) {
@@ -1070,7 +1255,7 @@ int main(int argc, char* argv[]) {
               size_t slot_offset = shm_hdr->offset[notify.slot];
               if (slot_offset < shm_size && frame_bytes <= (shm_size - slot_offset)) {
                 const uint8_t* src = static_cast<const uint8_t*>(shm_base) + slot_offset;
-                int stride = notify.width * 4;
+                int stride = static_cast<int>(notify.width * 4);
 
                 AVPixelFormat src_fmt = AV_PIX_FMT_BGRA;
                 if (notify.format == 1) {
@@ -1084,12 +1269,13 @@ int main(int argc, char* argv[]) {
                     last_src_w != static_cast<int>(notify.width) ||
                     last_src_h != static_cast<int>(notify.height)) {
                   if (sws_ctx) sws_freeContext(sws_ctx);
-                  sws_ctx = sws_getContext(notify.width, notify.height, src_fmt, target_width,
+                  sws_ctx = sws_getContext(static_cast<int>(notify.width),
+                                           static_cast<int>(notify.height), src_fmt, target_width,
                                            target_height, sw_pix_fmt, SWS_FAST_BILINEAR, nullptr,
                                            nullptr, nullptr);
                   last_src_fmt = src_fmt;
-                  last_src_w = notify.width;
-                  last_src_h = notify.height;
+                  last_src_w = static_cast<int>(notify.width);
+                  last_src_h = static_cast<int>(notify.height);
                 }
 
                 if (!sws_ctx) {
@@ -1118,13 +1304,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
                   encode_frame_to_stream(0);
                 } else if (is_vfr) {
@@ -1134,13 +1320,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
 
                   int64_t elapsed_us = 0;
@@ -1186,13 +1372,13 @@ int main(int argc, char* argv[]) {
                     const uint8_t* src_slice[1] = {src +
                                                    static_cast<size_t>(notify.height - 1) * stride};
                     int src_stride[1] = {-stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   } else {
                     const uint8_t* src_slice[1] = {src};
                     int src_stride[1] = {stride};
-                    sws_scale(sws_ctx, src_slice, src_stride, 0, notify.height, vframe->data,
-                              vframe->linesize);
+                    sws_scale(sws_ctx, src_slice, src_stride, 0, static_cast<int>(notify.height),
+                              vframe->data, vframe->linesize);
                   }
 
                   // If target_pts is fresh (next slot or greater), encode the new frame!
@@ -1246,7 +1432,9 @@ int main(int argc, char* argv[]) {
                 rv->time_base = vctx->time_base;
                 avcodec_parameters_from_context(rv->codecpar, vctx);
                 if (vcodec->id == AV_CODEC_ID_HEVC && (start_cfg.container == 0 || ext == ".mp4")) {
-                  rv->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+                  rv->codecpar->codec_tag =
+                      static_cast<uint32_t>('h') | (static_cast<uint32_t>('v') << 8u) |
+                      (static_cast<uint32_t>('c') << 16u) | (static_cast<uint32_t>('1') << 24u);
                 }
 
                 AVStream* ra = nullptr;
@@ -1264,7 +1452,8 @@ int main(int argc, char* argv[]) {
                 }
 
                 bool opened = true;
-                if (!(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                if ((static_cast<uint32_t>(replay_oc->oformat->flags) &
+                     static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) {
                   opened = (avio_open(&replay_oc->pb, replay_file.c_str(), AVIO_FLAG_WRITE) >= 0);
                 }
                 if (opened && avformat_write_header(replay_oc, &ropts) >= 0) {
@@ -1295,7 +1484,8 @@ int main(int argc, char* argv[]) {
                                 replay_file.c_str());
                 }
                 av_dict_free(&ropts);
-                if (replay_oc->pb && !(replay_oc->oformat->flags & AVFMT_NOFILE)) {
+                if (replay_oc->pb && ((static_cast<uint32_t>(replay_oc->oformat->flags) &
+                                       static_cast<uint32_t>(AVFMT_NOFILE)) == 0u)) {
                   avio_closep(&replay_oc->pb);
                 }
                 avformat_free_context(replay_oc);
@@ -1303,15 +1493,6 @@ int main(int argc, char* argv[]) {
             }
           }
           send(client_fd, &save_resp, sizeof(save_resp), 0);
-        } else if (cmd == fpshud::RecorderCommand::QueryStatus) {
-          fpshud::IpcStatusResponse status_resp{};
-          status_resp.magic = fpshud::kRecorderIpcMagic;
-          status_resp.status = static_cast<uint32_t>(fpshud::RecorderStatus::Recording);
-          status_resp.frame_count =
-              static_cast<uint32_t>(video_frame_idx.load(std::memory_order_relaxed));
-          auto now = std::chrono::steady_clock::now();
-          status_resp.elapsed_sec = std::chrono::duration<float>(now - session_start).count();
-          send(client_fd, &status_resp, sizeof(status_resp), 0);
         }
       }
     }
@@ -1376,7 +1557,9 @@ int main(int argc, char* argv[]) {
   send(client_fd, &final_resp, sizeof(final_resp), 0);
 
   // Cleanup FFmpeg resources
-  if (!is_replay && !(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
+  if (!is_replay &&
+      ((static_cast<uint32_t>(oc->oformat->flags) & static_cast<uint32_t>(AVFMT_NOFILE)) == 0u) &&
+      oc->pb) {
     avio_closep(&oc->pb);
   }
   avcodec_free_context(&vctx);

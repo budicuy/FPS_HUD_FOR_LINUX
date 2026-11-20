@@ -49,10 +49,7 @@ enum class LayoutPosition {
   BottomLeft = 3,
   BottomCenter = 4,
   BottomRight = 5,
-  Custom = 6,
-  // Backward-compatible aliases
-  CenterTop = TopCenter,
-  CenterBottom = BottomCenter
+  Custom = 6
 };
 
 struct Keybind {
@@ -142,14 +139,14 @@ struct HudConfig {
   int record_resolution = 0;
   // record_fps: 30, 60 (default), 0=Match Display
   int record_fps = 60;
-  // record_bitrate_kbps: 8000, 18000 (default), 32000, 50000
-  int record_bitrate_kbps = 18000;
+  // record_bitrate_kbps: 8000, 20000 (default), 32000, 50000
+  int record_bitrate_kbps = 20000;
   // record_audio_source: 0=Game Audio Only (@DEFAULT_MONITOR@), 1=Mic Only, 2=Game+Mic, 3=Mute
   int record_audio_source = 0;
   // record_container: 0=.mp4 (FastStart), 1=.mkv, 2=.webm
   int record_container = 0;
-  // record_codec: 0=H.264 (AVC), 1=HEVC (H.265 - 50% Hemat Disk, Rekomendasi)
-  int record_codec = 1;
+  // record_codec: 0=H.264 (AVC - default), 1=HEVC (H.265 - 50% Hemat Disk, Rekomendasi)
+  int record_codec = 0;
   // record_quality_mode: 0=CQP (Kualitas Adaptif - Rekomendasi), 1=Fixed VBR
   int record_quality_mode = 0;
   // record_cq_level: 16-30 (18=Ultra, 22=Balanced/Default, 26=Performance)
@@ -202,6 +199,8 @@ void reset_layout_to_default(HudConfig& cfg) noexcept;
 HudConfig init_config_from_env(const char* env_value);
 
 // Save / Load main config file (~/.config/fpshud/config.ini)
+bool save_config_to_disk();
+bool load_config_from_disk();
 bool save_config_to_disk(const HudConfig& cfg, std::string* out_path = nullptr);
 bool load_config_from_disk(HudConfig& cfg, std::string* out_path = nullptr);
 
@@ -218,7 +217,6 @@ std::mutex& get_config_mutex();
 // Helper names for GUI & CLI diagnostics
 float safe_strtof(std::string_view str, float fallback = 0.0f) noexcept;
 const char* layout_name(LayoutPosition p);
-const char* arrangement_name(ArrangementMode a);
 const char* linux_keycode_name(uint32_t code) noexcept;
 std::string format_keybind(const Keybind& kb);
 std::string get_default_record_dir();

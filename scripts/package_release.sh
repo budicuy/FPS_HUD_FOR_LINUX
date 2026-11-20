@@ -39,12 +39,6 @@ if [ -n "$STRIP_BIN" ]; then
     "$STRIP_BIN" --strip-unneeded "${STRIP_TARGETS[@]}"
 fi
 
-# Optional UPX compression for developer/CI releases
-if command -v upx >/dev/null 2>&1 && [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
-    echo "[*] UPX detected: Compressing fpshud_recorder_bin..."
-    upx --best "$BUILD_DIR/fpshud_recorder_bin" || true
-fi
-
 if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
     REC_SIZE="$(stat -c%s "$BUILD_DIR/fpshud_recorder_bin")"
     if [ "$REC_SIZE" -gt 5242880 ]; then
@@ -81,12 +75,30 @@ if LC_ALL=C readelf -d "$BUILD_DIR/libfpshud.so" | grep NEEDED | grep -E "lib(GL
 fi
 echo "[✓] DT_NEEDED graphics portability gate PASSED (0 direct GL/GLX/EGL dependencies)."
 
-CXX_GATE="${CXX:-$(command -v clang++ || command -v g++ || true)}"
-if [ -n "$CXX_GATE" ]; then
-    echo "[*] Verifying C++26 standalone compilation of recorder_main.cpp..."
-    "$CXX_GATE" -std=c++26 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsyntax-only -I"$PROJECT_DIR/src" -I"$PROJECT_DIR/src/recorder" -I"$PROJECT_DIR/src/core" "$PROJECT_DIR/src/recorder/recorder_main.cpp"
-    echo "[✓] C++26 recorder_main.cpp syntax gate PASSED."
+echo "[*] Verifying zero DT_NEEDED dependencies on libstdc++ and libgcc_s..."
+STATIC_STDLIB_TARGETS=("$BUILD_DIR/libfpshud.so")
+if [ -f "$BUILD_DIR/fpshud_recorder" ]; then
+    STATIC_STDLIB_TARGETS+=("$BUILD_DIR/fpshud_recorder")
 fi
+if [ -f "$BUILD_DIR/fpshud_recorder_bin" ]; then
+    STATIC_STDLIB_TARGETS+=("$BUILD_DIR/fpshud_recorder_bin")
+fi
+for bin_target in "${STATIC_STDLIB_TARGETS[@]}"; do
+    if LC_ALL=C readelf -d "$bin_target" | grep NEEDED | grep -E "libstdc\+\+|libgcc_s"; then
+        echo "[!] ERROR: Dynamic link to libstdc++ or libgcc_s detected in $(basename "$bin_target")! Aborting packaging." >&2
+        exit 1
+    fi
+done
+echo "[✓] Static libstdc++/libgcc_s gate PASSED (0 dynamic dependencies in release binaries)."
+
+CXX_GATE="${CXX:-$(command -v clang++ || true)}"
+if [ -z "$CXX_GATE" ]; then
+    echo "[!] ERROR: clang++ compiler not found for syntax verification gate! Aborting packaging." >&2
+    exit 1
+fi
+echo "[*] Verifying C++26 standalone compilation of recorder_main.cpp..."
+"$CXX_GATE" -std=c++26 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsyntax-only -I"$PROJECT_DIR/src" -I"$PROJECT_DIR/src/recorder" -I"$PROJECT_DIR/src/core" -I"$BUILD_DIR/ffmpeg_minimal/include" "$PROJECT_DIR/src/recorder/recorder_main.cpp"
+echo "[✓] C++26 recorder_main.cpp syntax gate PASSED."
 
 YMM_COUNT="$(objdump -d "$BUILD_DIR/libfpshud.so" | grep -c '%ymm' || true)"
 if [ "$YMM_COUNT" -gt 32 ]; then

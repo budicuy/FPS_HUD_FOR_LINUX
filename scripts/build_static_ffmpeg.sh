@@ -12,10 +12,17 @@ BUILD_CACHE="${FFMPEG_BUILD_CACHE:-/tmp/fpshud_ffmpeg_src_$(id -u)}"
 if [ -f "$OUT_DIR/lib/libavformat.a" ] && [ -f "$OUT_DIR/lib/libavcodec.a" ] && \
    [ -f "$OUT_DIR/lib/libswscale.a" ] && [ -f "$OUT_DIR/lib/libswresample.a" ] && \
    [ -f "$OUT_DIR/lib/libavutil.a" ] && \
-   nm "$OUT_DIR/lib/libavformat.a" 2>/dev/null | grep -q "ff_mov_demuxer"; then
+   (nm "$OUT_DIR/lib/libavformat.a" 2>/dev/null || true) | grep -q "ff_mov_demuxer"; then
     echo "[✓] Minimal static FFmpeg already built at: $OUT_DIR"
     exit 0
 fi
+
+for tool in curl git tar xz sha256sum make clang clang++; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "[!] ERROR: Utilitas build wajib '$tool' tidak ditemukan di PATH. Harap instal '$tool' terlebih dahulu." >&2
+        exit 1
+    fi
+done
 
 echo "=================================================================="
 echo "  Building Minimal Hardware-Only Static FFmpeg (< 4 MB)"
@@ -65,9 +72,22 @@ fi
 
 cd "ffmpeg-${FFMPEG_VERSION}"
 
+FFMPEG_CC="${CC:-clang}"
+FFMPEG_CXX="${CXX:-clang++}"
+FFMPEG_AR_OPTS=()
+if command -v llvm-ar >/dev/null 2>&1; then
+    FFMPEG_AR_OPTS+=( "--ar=llvm-ar" )
+fi
+if command -v llvm-ranlib >/dev/null 2>&1; then
+    FFMPEG_AR_OPTS+=( "--ranlib=llvm-ranlib" )
+fi
+
 echo "[*] Configuring ultra-minimal static FFmpeg (Hardware NVENC + VAAPI + MP4 only)..."
 ./configure \
     --prefix="$OUT_DIR" \
+    --cc="$FFMPEG_CC" \
+    --cxx="$FFMPEG_CXX" \
+    "${FFMPEG_AR_OPTS[@]}" \
     --enable-static \
     --disable-shared \
     --disable-all \
@@ -98,8 +118,9 @@ echo "[*] Configuring ultra-minimal static FFmpeg (Hardware NVENC + VAAPI + MP4 
     --disable-alsa \
     --disable-sndio \
     --disable-libxcb \
-    --extra-cflags="-O3 -fPIC -ffunction-sections -fdata-sections" \
-    --extra-cxxflags="-O3 -fPIC -ffunction-sections -fdata-sections"
+    --enable-small \
+    --extra-cflags="-fPIC -ffunction-sections -fdata-sections" \
+    --extra-cxxflags="-fPIC -ffunction-sections -fdata-sections"
 
 echo "[*] Compiling minimal static FFmpeg with $(nproc) parallel threads..."
 make -j"$(nproc)"

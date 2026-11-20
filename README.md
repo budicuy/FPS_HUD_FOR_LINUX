@@ -166,7 +166,36 @@ sha256sum -c fpshud-linux-x86_64.tar.gz.sha256
 # 3. Extract libraries and binaries into your user folder (~/.local):
 mkdir -p ~/.local/lib/fpshud ~/.local/bin ~/.local/share/vulkan/implicit_layer.d
 tar -xzf fpshud-linux-x86_64.tar.gz -C ~/.local/lib/fpshud/
-ln -sf ~/.local/lib/fpshud/fpshud_test ~/.local/bin/fpshud_test
+cp -f ~/.local/lib/fpshud/fpshud ~/.local/bin/fpshud
+cp -f ~/.local/lib/fpshud/fpshud_recorder ~/.local/bin/fpshud_recorder 2>/dev/null || true
+cp -f ~/.local/lib/fpshud/fpshud_recorder_bin ~/.local/bin/fpshud_recorder_bin 2>/dev/null || true
+chmod 755 ~/.local/bin/fpshud* ~/.local/lib/fpshud/libfpshud.so
+
+# 4. Generate Vulkan implicit layer manifest:
+cat > ~/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json << EOF
+{
+    "file_format_version": "1.2.1",
+    "layer": {
+        "name": "VK_LAYER_FPSHUD_overlay",
+        "type": "GLOBAL",
+        "library_path": "$HOME/.local/lib/fpshud/libfpshud.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "FPSHUD Minimalist Performance Overlay Layer",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion",
+            "vkGetInstanceProcAddr": "vkGetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "vkGetDeviceProcAddr"
+        },
+        "enable_environment": {
+            "FPS_HUD": "1"
+        },
+        "disable_environment": {
+            "DISABLE_FPS_HUD": "1"
+        }
+    }
+}
+EOF
 ```
 
 ### Hardware Permissions, Sudo Transparency & Security Model
@@ -462,7 +491,7 @@ To prevent speculation, FPSHUD's real-world overhead was empirically measured in
 > **Resource Consumption Summary**
 > - **CPU Utilization Range:** **0.01% – 0.05% of 1 CPU core** during gameplay at 60 FPS (**0.03% – 0.11% @ 144 FPS**); background hardware telemetry adds **~0.045% of 1 core**. Total impact on a modern multi-core processor is **< 0.01% of total CPU capacity**.
 > - **Memory (RAM) Footprint Range:** **~4.5 MB** internal data & font atlas footprint (**~17 MB** total isolated process VmRSS), with **0 bytes/frame** heap allocation during active gameplay.
-> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the 99-check automated simulation test suite (`./build/fpshud_test 1`). Benchmark contributions across AMD and Intel Arc hardware are welcome via issues or pull requests.
+> - **Hardware Testbed Disclosure:** Live bare-metal hardware benchmarks above were measured on our reference Linux testbed (**Intel Core i3-12100F @ 4.10 GHz, NVIDIA GeForce GTX 1660 SUPER, Linux 6.x Wayland**). AMD Radeon (`amdgpu`/`hwmon`) and Intel Arc (`i915`/`xe`/Level Zero) telemetry implementations are validated using the automated modular doctest test suite (`./build/fpshud_test`). Benchmark contributions across AMD and Intel Arc hardware are welcome via issues or pull requests.
 
 ---
 
@@ -476,7 +505,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 | Requirement | Minimum Version / Specification | Purpose |
 | :--- | :--- | :--- |
-| **C++ Compiler** | **Clang 19+** (Clang 23 recommended) or **GCC 15+** | Pure ISO C++26 (`-std=c++26`) native implementation |
+| **C++ Compiler** | **Clang 19+** (Clang 23 recommended) | Pure ISO C++26 (`-std=c++26`) native implementation |
 | **Build System** | **CMake >= 3.25** & **Ninja** | Fast multi-threaded build orchestration |
 | **Linker** | **LLD (`lld`)** | Fast linking with ThinLTO (`-flto=thin`) optimization |
 | **Graphics APIs** | **Vulkan Headers & Loader (>= 1.3)** & **libglvnd (OpenGL / EGL)** | Swapchain presentation hooking |
@@ -487,7 +516,7 @@ To build FPSHUD from source, ensure your environment meets these specifications:
 
 > [!NOTE]
 > **ISO C++26 Architecture**
-> - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ or GCC 15+.
+> - **Native Standard Library Support:** Uses pure native ISO C++26 `<inplace_vector>` (`std::inplace_vector`) and language Pack Indexing (`Types...[N]` and `args...[N]`), requiring Clang 19+ (Clang 23 recommended).
 > - **Zero Polyfills & Shims:** Zero polyfills or legacy standard fallbacks. Enforced via CMake `FATAL_ERROR` gates to ensure modern language standards and strict compile-time verification.
 > - **Why C++26?** Guarantees zero heap allocation churn in the per-frame render loop via fixed inline vector storage and compile-time metric layout serialization.
 
@@ -499,8 +528,8 @@ cd FPS_HUD_FOR_LINUX
 # 1. High-Performance Build with Clang 23 + LLD + ThinLTO (-O3 Extreme)
 ./scripts/build_clang.sh
 
-# 2. Run the automated 99-check verification suite across 5 simulated device profiles + memory safety:
-./build/fpshud_test 1
+# 2. Run the automated doctest verification suite across simulated device profiles, ABI verification, and memory safety:
+./build/fpshud_test
 
 # 3. (Optional) Install local build directly to ~/.local (offline / no download):
 ./scripts/install.sh
@@ -536,12 +565,15 @@ FPS_HUD_FOR_LINUX/
 │   ├── core/                            # Config manager, INI parser, native C++26 pack_indexing
 │   ├── experimental-feature/            # Pure 1:1 Adaptive VFR controller & Experimental GUI menu
 │   ├── input/                           # In-process Wayland + X11 hooks & Linux evdev mouse lock
-│   ├── layer/                           # Vulkan Implicit Layer, OpenGL GLX/EGL hooks & glibc_compat.c
-│   ├── recorder/                        # FFmpeg daemon, Instant Replay, PNG writer & recorder_launcher.c
+│   ├── layer/                           # Vulkan Implicit Layer, OpenGL GLX/EGL hooks & glibc_compat.cpp
+│   ├── recorder/                        # FFmpeg daemon, Instant Replay, PNG writer & recorder_launcher.cpp
 │   ├── telemetry/                       # Multi-vendor GPU/CPU/Storage/Net telemetry & CSV benchmark
 │   └── ui/                              # Dear ImGui 3-column GUI menu, two-tone HUD & embedded fonts
 └── tests/
-    └── test_cli.cpp                     # Automated 99-check 5-device simulation, sensor probe & safety suite
+    ├── test_main.cpp                    # Doctest entrypoint, CLI filter & probe flag dispatcher
+    ├── test_common.hpp                  # RAII ScopedTempDir, binary locators & doctest shims
+    ├── suites/                          # Modular test suites (core, telemetry, layer ABI, recorder, input)
+    └── tools/                           # Sensor probe hardware diagnostics CLI tool
 ```
 
 ---
@@ -567,7 +599,7 @@ FPS_HUD_FOR_LINUX/
 ## 10. Contributing, Credits & License
 
 ### Contributing
-Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test 1` to ensure all 99 multi-vendor checks and memory safety tests pass.
+Pull requests, issue reports, and hardware test feedback are always welcome! Before opening a PR, please run `./build/fpshud_test` to ensure all modular doctest suites and memory safety tests pass.
 
 ### Credits & Acknowledgments
 - **[Dear ImGui](https://github.com/ocornut/imgui)** by Omar Cornut — Immediate Mode GUI library powering the overlay and live configurator.

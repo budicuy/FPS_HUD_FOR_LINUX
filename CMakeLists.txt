@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
-project(FPSHUD VERSION 1.0.0 LANGUAGES C CXX)
+project(FPSHUD VERSION 1.0.0 LANGUAGES CXX)
+
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "FPSHUD requires LLVM/Clang compiler (Clang 19+ or 23+ recommended). Non-Clang compiler '${CMAKE_CXX_COMPILER_ID}' is not supported.")
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -15,8 +19,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "-std=c++26")
 check_cxx_source_compiles("
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"
+#ifdef __clang__
+#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"
 #endif
 #include <inplace_vector>
 int main() {
@@ -26,7 +30,7 @@ int main() {
 }
 " FPSHUD_HAS_CXX26_INPLACE_VECTOR)
 if(NOT FPSHUD_HAS_CXX26_INPLACE_VECTOR)
-    message(FATAL_ERROR "FPSHUD requires pure native ISO C++26 <inplace_vector> support (Clang 19+ or GCC 15+). Polyfill has been deprecated.")
+    message(FATAL_ERROR "FPSHUD requires pure native ISO C++26 <inplace_vector> support (Clang 19+ or 23+). Polyfill has been deprecated.")
 endif()
 
 check_cxx_source_compiles("
@@ -46,6 +50,17 @@ option(ENABLE_ASAN "Enable AddressSanitizer and LeakSanitizer" OFF)
 option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(FPSHUD_ENABLE_EXPERIMENTAL "Enable isolated experimental features" ON)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT ON)
+else()
+    set(FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT OFF)
+endif()
+option(FPSHUD_ENABLE_DEBUG_LOGGING "Enable development and trace/debug logging" ${FPSHUD_ENABLE_DEBUG_LOGGING_DEFAULT})
+
+if(FPSHUD_ENABLE_DEBUG_LOGGING)
+    add_compile_definitions(FPSHUD_ENABLE_DEBUG_LOGGING=1)
+endif()
 
 if(FPSHUD_ENABLE_EXPERIMENTAL)
     add_compile_definitions(FPSHUD_ENABLE_EXPERIMENTAL=1)
@@ -78,14 +93,16 @@ check_symbol_exists(__GLIBC__ "features.h" FPSHUD_IS_GLIBC)
 set(FPSHUD_GLIBC_COMPAT_SOURCES "")
 set(FPSHUD_GLIBC_COMPAT_LINK_OPTS "")
 if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT USE_SANITIZERS)
-    set_source_files_properties(src/layer/glibc_compat.c PROPERTIES COMPILE_OPTIONS "-fno-lto")
-    set(FPSHUD_GLIBC_COMPAT_SOURCES src/layer/glibc_compat.c)
+    set_source_files_properties(src/layer/glibc_compat.cpp PROPERTIES COMPILE_OPTIONS "-fno-lto")
+    set(FPSHUD_GLIBC_COMPAT_SOURCES src/layer/glibc_compat.cpp)
     set(FPSHUD_GLIBC_COMPAT_LINK_OPTS
         -Wl,--wrap=acosf
         -Wl,--wrap=atan2f
+        -Wl,--wrap=fmod
         -Wl,--wrap=fmodf
         -Wl,--wrap=sinh
         -Wl,--wrap=cosh
+        -Wl,--wrap=sqrtf
         -Wl,--wrap=__isoc23_sscanf
         -Wl,--wrap=__isoc23_strtol
         -Wl,--wrap=__isoc23_strtoul
@@ -96,7 +113,17 @@ if(FPSHUD_IS_GLIBC AND UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x8
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(NOT USE_SANITIZERS)
+    set(FPSHUD_MEMORY_SAFETY_WARNINGS
+        -Wall
+        -Wextra
+        -Werror=return-stack-address
+        -Werror=dangling
+        -Werror=dangling-gsl
+        -Werror=self-move
+        -Werror=uninitialized
+        -Werror=sometimes-uninitialized
+    )
+    if(NOT USE_SANITIZERS AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) with LLD & ThinLTO (Extreme Release)")
         add_compile_options(
             -O3
@@ -107,10 +134,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             -ffunction-sections
             -fdata-sections
             -fstack-protector-strong
+            -ftrivial-auto-var-init=zero
             -fno-math-errno
             -fno-trapping-math
-            -Wall
-            -Wextra
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
         add_link_options(
             -fuse-ld=lld
@@ -121,67 +148,46 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
             -static-libgcc
         )
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT USE_SANITIZERS)
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Debug Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
+        add_compile_options(
+            -O0
+            -g3
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
+        )
+        add_link_options(-fuse-ld=lld)
     else()
-        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
+        message(STATUS "Toolchain: LLVM/Clang (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build + STL Hardening]")
+        add_compile_definitions(_GLIBCXX_ASSERTIONS=1)
         add_compile_options(
             -O1
             -g
             -fno-omit-frame-pointer
             -fno-optimize-sibling-calls
-            -Wall
-            -Wextra
+            -ftrivial-auto-var-init=pattern
+            ${FPSHUD_MEMORY_SAFETY_WARNINGS}
         )
-    endif()
-else()
-    if(NOT USE_SANITIZERS)
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION})")
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-        add_compile_options(
-            -O3
-            -DNDEBUG
-            -ffunction-sections
-            -fdata-sections
-            -fstack-protector-strong
-            -fno-math-errno
-            -fno-trapping-math
-            -Wall
-            -Wextra
-        )
-        add_link_options(
-            -Wl,--gc-sections
-            -Wl,-O2
-            -Wl,--as-needed
-            $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
-            -static-libgcc
-        )
-    else()
-        message(STATUS "Toolchain: GNU/GCC (${CMAKE_CXX_COMPILER_VERSION}) [Diagnostic Sanitizer Build]")
-        add_compile_options(
-            -O1
-            -g
-            -fno-omit-frame-pointer
-            -fno-optimize-sibling-calls
-            -Wall
-            -Wextra
-        )
+        add_link_options(-fuse-ld=lld)
     endif()
 endif()
 
 if(ENABLE_ASAN)
-    message(STATUS "  -> AddressSanitizer + LeakSanitizer: ENABLED")
-    add_compile_options(-fsanitize=address)
+    message(STATUS "  -> AddressSanitizer + LeakSanitizer (Strict Use-After-Scope): ENABLED")
+    add_compile_options(-fsanitize=address -fsanitize-address-use-after-scope)
     add_link_options(-fsanitize=address)
 endif()
 
 if(ENABLE_UBSAN)
-    message(STATUS "  -> UndefinedBehaviorSanitizer: ENABLED")
-    add_compile_options(-fsanitize=undefined -fno-sanitize-recover=all)
-    add_link_options(-fsanitize=undefined)
+    message(STATUS "  -> UndefinedBehaviorSanitizer (Strict + Bounds + Float-Div-By-Zero): ENABLED")
+    add_compile_options(-fsanitize=undefined -fsanitize=bounds -fsanitize=float-divide-by-zero -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=undefined -fsanitize=bounds -fsanitize=float-divide-by-zero)
 endif()
 
 if(ENABLE_TSAN)
-    message(STATUS "  -> ThreadSanitizer: ENABLED")
-    add_compile_options(-fsanitize=thread)
+    message(STATUS "  -> ThreadSanitizer (Strict Data-Race Detection): ENABLED")
+    add_compile_options(-fsanitize=thread -fno-sanitize-recover=all)
     add_link_options(-fsanitize=thread)
 endif()
 
@@ -198,9 +204,11 @@ FetchContent_MakeAvailable(imgui)
 
 find_package(Vulkan REQUIRED)
 find_path(FPSHUD_GL_INCLUDE_DIR NAMES GL/gl.h REQUIRED)
+find_path(FPSHUD_GLX_INCLUDE_DIR NAMES GL/glx.h REQUIRED)
 find_path(FPSHUD_EGL_INCLUDE_DIR NAMES EGL/egl.h REQUIRED)
+find_path(FPSHUD_X11_INCLUDE_DIR NAMES X11/Xlib.h X11/keysym.h REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 # Automatically generate src/ui/embedded_fonts.hpp if not already present
 if(Python3_Interpreter_FOUND)
@@ -222,26 +230,78 @@ set(IMGUI_SOURCES
 )
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
-add_library(fpshud SHARED
+# Deduplicated common object library for layer and test runner
+add_library(fpshud_common_obj OBJECT
     src/core/config.cpp
+    src/core/logger.cpp
     src/telemetry/telemetry.cpp
+    src/telemetry/analytics/frametime_analyzer.cpp
+    src/telemetry/analytics/benchmark_recorder.cpp
+    src/telemetry/providers/cpu_provider.cpp
+    src/telemetry/providers/ram_provider.cpp
+    src/telemetry/providers/system_provider.cpp
+    src/telemetry/providers/gpu_nvidia.cpp
+    src/telemetry/providers/gpu_drm.cpp
+    src/telemetry/providers/gpu_levelzero.cpp
     src/recorder/png_writer.cpp
     src/recorder/recorder_ipc.cpp
+    src/input/backends/evdev_backend.cpp
+    src/input/backends/wayland_backend.cpp
+    src/input/backends/x11_backend.cpp
     src/input/input_manager.cpp
     src/ui/gui_menu.cpp
     src/ui/overlay_ui.cpp
-    src/layer/vulkan_layer.cpp
-    src/layer/opengl_hook.cpp
-    ${IMGUI_SOURCES}
+    ${IMGUI_CORE_SOURCES}
     ${FPSHUD_GLIBC_COMPAT_SOURCES}
     ${FPSHUD_EXPERIMENTAL_SOURCES}
+)
+
+set_target_properties(fpshud_common_obj PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+
+target_include_directories(fpshud_common_obj PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
+    ${FPSHUD_EXPERIMENTAL_INCLUDES}
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+    ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
+    ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
+)
+
+add_library(fpshud SHARED
+    $<TARGET_OBJECTS:fpshud_common_obj>
+    src/layer/vulkan_hooks.cpp
+    src/layer/vulkan_swapchain.cpp
+    src/layer/vulkan_capture.cpp
+    src/layer/vulkan_player_stream.cpp
+    src/layer/vulkan_layer.cpp
+    src/layer/opengl_hook.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
 target_include_directories(fpshud PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
@@ -250,7 +310,9 @@ target_include_directories(fpshud PRIVATE
     ${imgui_SOURCE_DIR}/backends
     ${Vulkan_INCLUDE_DIRS}
     ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
     ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
 )
 
 target_compile_definitions(fpshud PRIVATE
@@ -272,39 +334,44 @@ target_link_options(fpshud PRIVATE
 # Hide internal symbols except exported Vulkan Layer & OpenGL hook entrypoints
 set_target_properties(fpshud PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-    C_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
     PREFIX "lib"
     OUTPUT_NAME "fpshud"
 )
 
-# CLI Test Utility for Config & Hardware Telemetry
+# CLI Test Runner for Config, Telemetry, Layer ABI, Recorder & Input (Modular Doctest)
 add_executable(fpshud_test
-    tests/test_cli.cpp
-    src/core/config.cpp
-    src/telemetry/telemetry.cpp
-    src/input/input_manager.cpp
-    src/recorder/png_writer.cpp
-    src/recorder/recorder_ipc.cpp
+    $<TARGET_OBJECTS:fpshud_common_obj>
+    tests/test_main.cpp
+    tests/tools/sensor_probe.cpp
+    tests/suites/test_core.cpp
+    tests/suites/test_telemetry_hardware.cpp
+    tests/suites/test_telemetry_analytics.cpp
+    tests/suites/test_layer_abi.cpp
+    tests/suites/test_recorder_player.cpp
+    tests/suites/test_input.cpp
     src/recorder/recorder_player.cpp
-    src/ui/gui_menu.cpp
-    src/ui/overlay_ui.cpp
-    ${IMGUI_CORE_SOURCES}
-    ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    ${FPSHUD_EXPERIMENTAL_SOURCES}
 )
 
 target_include_directories(fpshud_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/input
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
     ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
     ${FPSHUD_EXPERIMENTAL_INCLUDES}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${FPSHUD_GL_INCLUDE_DIR}
+    ${FPSHUD_GLX_INCLUDE_DIR}
+    ${FPSHUD_EGL_INCLUDE_DIR}
+    ${FPSHUD_X11_INCLUDE_DIR}
 )
 
 target_link_libraries(fpshud_test PRIVATE
@@ -316,151 +383,153 @@ target_link_options(fpshud_test PRIVATE
     ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
 )
 
-# Screen Recorder Helper Daemon (On-Demand)
+enable_testing()
+add_test(
+    NAME fpshud_test
+    COMMAND fpshud_test
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(fpshud_test PROPERTIES TIMEOUT 120)
+
+set(FPSHUD_CTEST_ENV "")
+if(ENABLE_ASAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:strict_string_checks=1:detect_invalid_pointer_pairs=2:protect_shadow_gap=0"
+        "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tests/lsan_suppressions.txt"
+    )
+endif()
+if(ENABLE_UBSAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
+    )
+endif()
+if(ENABLE_TSAN)
+    list(APPEND FPSHUD_CTEST_ENV
+        "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1:history_size=7"
+    )
+endif()
+if(FPSHUD_CTEST_ENV)
+    set_property(TEST fpshud_test PROPERTY ENVIRONMENT ${FPSHUD_CTEST_ENV})
+endif()
+
+# Screen Recorder Helper Daemon (Mandatory Minimal Hardware Static FFmpeg - Opsi A)
 set(FFMPEG_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/ffmpeg_minimal" CACHE PATH "Path to minimal static FFmpeg build")
-set(FPSHUD_STATIC_RECORDER "AUTO" CACHE STRING "Statically link recorder binary with minimal FFmpeg (AUTO/ON/OFF)")
 
-set(BUILD_STATIC_RECORDER FALSE)
-if(FPSHUD_STATIC_RECORDER STREQUAL "ON" OR
-   (FPSHUD_STATIC_RECORDER STREQUAL "AUTO" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswscale.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswresample.a" AND
-    EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavutil.a"))
-    set(BUILD_STATIC_RECORDER TRUE)
+find_package(PkgConfig REQUIRED)
+find_package(ZLIB REQUIRED)
+
+pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
+pkg_check_modules(LIBVA REQUIRED IMPORTED_TARGET libva)
+pkg_check_modules(LIBVA_DRM REQUIRED IMPORTED_TARGET libva-drm)
+pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
+
+set(FFMPEG_LIBS_FOUND FALSE)
+if(EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswscale.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libswresample.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/lib/libavutil.a" AND
+   EXISTS "${FFMPEG_MINIMAL_DIR}/include/libavformat/avformat.h")
+    find_program(NM_EXE NAMES nm llvm-nm)
+    if(NM_EXE)
+        execute_process(
+            COMMAND ${NM_EXE} "${FFMPEG_MINIMAL_DIR}/lib/libavformat.a"
+            COMMAND grep -q "ff_mov_demuxer"
+            RESULT_VARIABLE NM_RES
+        )
+        if(NM_RES EQUAL 0)
+            set(FFMPEG_LIBS_FOUND TRUE)
+        endif()
+    else()
+        set(FFMPEG_LIBS_FOUND TRUE)
+    endif()
 endif()
 
-find_package(PkgConfig QUIET)
-if (PKG_CONFIG_FOUND)
-    pkg_check_modules(AVFORMAT IMPORTED_TARGET libavformat)
-    pkg_check_modules(AVCODEC IMPORTED_TARGET libavcodec)
-    pkg_check_modules(AVUTIL IMPORTED_TARGET libavutil)
-    pkg_check_modules(SWSCALE IMPORTED_TARGET libswscale)
-    pkg_check_modules(SWRESAMPLE IMPORTED_TARGET libswresample)
-    pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
-    pkg_check_modules(LIBVA IMPORTED_TARGET libva)
-    pkg_check_modules(LIBVA_DRM IMPORTED_TARGET libva-drm)
-    pkg_check_modules(LIBDRM IMPORTED_TARGET libdrm)
+if(NOT FFMPEG_LIBS_FOUND)
+    message(STATUS "Building minimal static FFmpeg dependency via scripts/build_static_ffmpeg.sh...")
+    execute_process(
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_static_ffmpeg.sh" "${FFMPEG_MINIMAL_DIR}"
+        RESULT_VARIABLE FFMPEG_BUILD_RES
+    )
+    if(NOT FFMPEG_BUILD_RES EQUAL 0)
+        message(FATAL_ERROR "Failed to build minimal static FFmpeg! Check output above.")
+    endif()
 endif()
 
-if (BUILD_STATIC_RECORDER)
-    add_executable(fpshud_recorder_bin
-        src/recorder/recorder_main.cpp
-        src/recorder/recorder_player.cpp
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
+add_executable(fpshud_recorder_bin
+    src/recorder/recorder_main.cpp
+    src/recorder/recorder_player.cpp
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
+)
 
-    target_compile_definitions(fpshud_recorder_bin PRIVATE
-        FPSHUD_RECORDER_DAEMON=1
-    )
+target_compile_definitions(fpshud_recorder_bin PRIVATE
+    FPSHUD_RECORDER_DAEMON=1
+)
 
-    target_include_directories(fpshud_recorder_bin PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-        ${FFMPEG_MINIMAL_DIR}/include
-    )
+target_include_directories(fpshud_recorder_bin PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${FFMPEG_MINIMAL_DIR}/include
+)
 
-    target_compile_options(fpshud_recorder_bin PRIVATE
-        -ffunction-sections
-        -fdata-sections
-    )
+target_compile_options(fpshud_recorder_bin PRIVATE
+    -ffunction-sections
+    -fdata-sections
+)
 
-    target_link_libraries(fpshud_recorder_bin PRIVATE
-        ${FFMPEG_MINIMAL_DIR}/lib/libavformat.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libswscale.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libswresample.a
-        ${FFMPEG_MINIMAL_DIR}/lib/libavutil.a
-        $<$<TARGET_EXISTS:PkgConfig::PULSE>:PkgConfig::PULSE>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::PULSE>>:pulse>
-        $<$<TARGET_EXISTS:PkgConfig::LIBVA>:PkgConfig::LIBVA>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA>>:va>
-        $<$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>:PkgConfig::LIBVA_DRM>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBVA_DRM>>:va-drm>
-        $<$<TARGET_EXISTS:PkgConfig::LIBDRM>:PkgConfig::LIBDRM>
-        $<$<NOT:$<TARGET_EXISTS:PkgConfig::LIBDRM>>:drm>
-        z
-        m
-        Threads::Threads
-        ${CMAKE_DL_LIBS}
-    )
+target_link_libraries(fpshud_recorder_bin PRIVATE
+    ${FFMPEG_MINIMAL_DIR}/lib/libavformat.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libavcodec.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libswscale.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libswresample.a
+    ${FFMPEG_MINIMAL_DIR}/lib/libavutil.a
+    PkgConfig::PULSE
+    PkgConfig::LIBVA
+    PkgConfig::LIBVA_DRM
+    PkgConfig::LIBDRM
+    ZLIB::ZLIB
+    m
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+)
 
+target_link_options(fpshud_recorder_bin PRIVATE
+    -Wl,--gc-sections
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+)
+if(NOT USE_SANITIZERS)
     target_link_options(fpshud_recorder_bin PRIVATE
-        -Wl,--gc-sections
         $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
         -static-libgcc
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
     )
-
-    # Universal lightweight container-aware launcher
-    add_executable(fpshud_recorder
-        src/recorder/recorder_launcher.c
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-    target_link_libraries(fpshud_recorder PRIVATE
-        ${CMAKE_DL_LIBS}
-    )
-    target_link_options(fpshud_recorder PRIVATE
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    message(STATUS "Screen Recorder: ENABLED [Minimal Hardware Static FFmpeg < 5 MB] (fpshud_recorder & fpshud_recorder_bin)")
-elseif (TARGET PkgConfig::AVFORMAT AND TARGET PkgConfig::AVCODEC AND TARGET PkgConfig::AVUTIL AND
-        TARGET PkgConfig::SWSCALE AND TARGET PkgConfig::SWRESAMPLE AND TARGET PkgConfig::PULSE)
-    add_executable(fpshud_recorder_bin
-        src/recorder/recorder_main.cpp
-        src/recorder/recorder_player.cpp
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-
-    target_compile_definitions(fpshud_recorder_bin PRIVATE
-        FPSHUD_RECORDER_DAEMON=1
-    )
-
-    target_include_directories(fpshud_recorder_bin PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-    )
-
-    target_link_libraries(fpshud_recorder_bin PRIVATE
-        PkgConfig::AVFORMAT
-        PkgConfig::AVCODEC
-        PkgConfig::AVUTIL
-        PkgConfig::SWSCALE
-        PkgConfig::SWRESAMPLE
-        PkgConfig::PULSE
-        Threads::Threads
-        ${CMAKE_DL_LIBS}
-    )
-
-    set_target_properties(fpshud_recorder_bin PROPERTIES
-        BUILD_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
-        INSTALL_RPATH "\$ORIGIN:\$ORIGIN/../lib:/run/host/usr/lib/x86_64-linux-gnu:/run/host/usr/lib/x86_64-linux-gnu/pulseaudio:/run/host/usr/lib64:/run/host/usr/lib:/run/host/usr/lib/pulseaudio:/usr/lib"
-    )
-    target_link_options(fpshud_recorder_bin PRIVATE
-        "-Wl,--disable-new-dtags"
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    # Universal lightweight container-aware launcher
-    add_executable(fpshud_recorder
-        src/recorder/recorder_launcher.c
-        ${FPSHUD_GLIBC_COMPAT_SOURCES}
-    )
-    target_link_libraries(fpshud_recorder PRIVATE
-        ${CMAKE_DL_LIBS}
-    )
-    target_link_options(fpshud_recorder PRIVATE
-        ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
-    )
-
-    message(STATUS "Screen Recorder: ENABLED [Dynamic System FFmpeg] (fpshud_recorder & fpshud_recorder_bin will be built)")
-else()
-    message(WARNING "Screen Recorder: DISABLED (libavformat, libavcodec, libswscale, libswresample, or libpulse not found)")
 endif()
+
+# Universal lightweight container-aware launcher
+add_executable(fpshud_recorder
+    src/recorder/recorder_launcher.cpp
+    ${FPSHUD_GLIBC_COMPAT_SOURCES}
+)
+target_include_directories(fpshud_recorder PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+target_link_libraries(fpshud_recorder PRIVATE
+    ${CMAKE_DL_LIBS}
+    m
+)
+target_link_options(fpshud_recorder PRIVATE
+    ${FPSHUD_GLIBC_COMPAT_LINK_OPTS}
+)
+if(NOT USE_SANITIZERS)
+    target_link_options(fpshud_recorder PRIVATE
+        $<$<LINK_LANGUAGE:CXX>:-static-libstdc++>
+        -static-libgcc
+    )
+endif()
+
+message(STATUS "Screen Recorder: ENABLED [Minimal Hardware Static FFmpeg < 5 MB] (fpshud_recorder & fpshud_recorder_bin)")
 
 # Generate Vulkan Implicit Layer JSON manifest with absolute path to libfpshud.so
 set(FPSHUD_LIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/libfpshud.so")
@@ -484,26 +553,67 @@ find_program(CLANG_TIDY_EXE NAMES clang-tidy)
 if(CLANG_TIDY_EXE)
     set(SRC_FILES_FOR_TIDY
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/frametime_analyzer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/benchmark_recorder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/system_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/png_writer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/overlay_ui.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
     )
-    add_custom_target(clang-tidy
-        COMMAND ${CLANG_TIDY_EXE}
-            -p ${CMAKE_CURRENT_BINARY_DIR}
-            ${SRC_FILES_FOR_TIDY}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Running clang-tidy static analysis on src/..."
-        VERBATIM
-    )
-    message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
+    find_program(RUN_CLANG_TIDY_EXE NAMES run-clang-tidy run-clang-tidy-23 run-clang-tidy-20)
+    if(RUN_CLANG_TIDY_EXE)
+        include(ProcessorCount)
+        ProcessorCount(FPSHUD_TIDY_JOBS)
+        if(FPSHUD_TIDY_JOBS EQUAL 0)
+            set(FPSHUD_TIDY_JOBS 4)
+        endif()
+        string(REGEX REPLACE "([.+*?^$()\\[\\]{}|\\\\])" "\\\\\\1" FPSHUD_TIDY_SRC_REGEX "${CMAKE_CURRENT_SOURCE_DIR}/src/")
+        add_custom_target(clang-tidy
+            COMMAND ${RUN_CLANG_TIDY_EXE}
+                -p ${CMAKE_CURRENT_BINARY_DIR}
+                -clang-tidy-binary ${CLANG_TIDY_EXE}
+                -j ${FPSHUD_TIDY_JOBS}
+                -quiet
+                "^${FPSHUD_TIDY_SRC_REGEX}"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Running parallel clang-tidy (${FPSHUD_TIDY_JOBS} threads) on src/..."
+            VERBATIM
+        )
+        message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy', parallel via run-clang-tidy)")
+    else()
+        add_custom_target(clang-tidy
+            COMMAND ${CLANG_TIDY_EXE}
+                -p ${CMAKE_CURRENT_BINARY_DIR}
+                ${SRC_FILES_FOR_TIDY}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Running clang-tidy static analysis on src/..."
+            VERBATIM
+        )
+        message(STATUS "Static Analysis: clang-tidy target AVAILABLE ('ninja clang-tidy')")
+    endif()
 endif()
 
 # Automated Code Formatting with clang-format (Google Style)
@@ -512,9 +622,35 @@ if(CLANG_FORMAT_EXE)
     set(FORMAT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack_indexing.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/parse_util.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/sysfs_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/telemetry.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/frametime_analyzer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/frametime_analyzer.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/benchmark_recorder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/analytics/benchmark_recorder.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/system_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/system_provider.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/cpu_provider.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/ram_provider.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_nvidia.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_drm.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/providers/gpu_levelzero.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/evdev_backend.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/wayland_backend.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/input/backends/x11_backend.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/input/input_manager.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_menu.cpp
@@ -526,16 +662,34 @@ if(CLANG_FORMAT_EXE)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_ipc.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_playback_protocol.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/pulse_audio_util.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_player.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_launcher.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/recorder/recorder_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_hooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_swapchain.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_capture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_player_stream.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/vulkan_layer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/opengl_hook.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/layer/glibc_compat.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/experimental-feature/adaptive_vfr.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_common.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/sensor_probe.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_core.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_hardware.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_telemetry_analytics.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_layer_abi.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_recorder_player.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/suites/test_input.cpp
     )
 
     add_custom_target(format
