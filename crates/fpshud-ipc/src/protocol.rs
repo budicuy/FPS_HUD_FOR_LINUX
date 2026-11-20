@@ -8,7 +8,7 @@ use std::io;
 pub const IPC_MAGIC: [u8; 4] = *b"FPSH";
 pub const MAX_IPC_PAYLOAD: usize = 65_536;
 const MAX_CONFIG_METRICS: usize = 32;
-const MAX_INPUT_EVENTS: usize = 256;
+pub const MAX_INPUT_EVENTS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameBackendKind {

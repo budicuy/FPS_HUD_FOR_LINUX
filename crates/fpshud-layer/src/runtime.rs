@@ -423,7 +423,7 @@ impl LayerRuntime {
                 let _ = self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
             }
             if !ui_events.is_empty() {
-                let _ = self.send_to_ui(&LayerToUiMsg::InputEvents(ui_events));
+                let _ = self.push_ui_events(&ui_events);
             }
         }
 
@@ -436,6 +436,16 @@ impl LayerRuntime {
             let snap = self.telemetry.get_snapshot();
             let _ = self.send_to_ui(&LayerToUiMsg::TelemetryUpdate(Box::new(snap)));
         }
+    }
+
+    pub fn push_ui_events(&mut self, ui_events: &[fpshud_input::UiInputEvent]) -> usize {
+        let mut sent = 0;
+        for chunk in ui_events.chunks(fpshud_ipc::protocol::MAX_INPUT_EVENTS) {
+            if self.send_to_ui(&LayerToUiMsg::InputEvents(chunk.to_vec())) {
+                sent += chunk.len();
+            }
+        }
+        sent
     }
 
     pub fn attach_ipc_for_test(&mut self, conn: IpcConnection) {

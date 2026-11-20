@@ -221,4 +221,7 @@ fn shm_corrupt_header_truncated_and_oob_rejected() {
     oob_slot.write_all_at(&0_u32.to_ne_bytes(), 8).unwrap(); // slot = 0 (valid)
     oob_slot.write_all_at(&999_u32.to_ne_bytes(), 40).unwrap(); // OFF_BYTE_LEN > map_len & cap
     assert!(oob_reader.read_latest().is_none());
+
+    // Kapasitas slot >= 4 GiB harus ditolak sebelum truncating cast u32
+    assert!(ShmRingWriter::validate_slot_capacity(65_536, 16_384).is_err());
 }

@@ -2,7 +2,7 @@ use crate::runtime::LayerRuntime;
 use fpshud_screenshot::{PixelFormat, RawFrameCapture};
 use glow::HasContext;
 use std::cell::RefCell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::num::NonZeroU32;
 use std::sync::{Mutex, OnceLock};
 
@@ -95,6 +95,8 @@ pub trait GlStateOps {
     fn set_enabled(&self, cap: u32, enable: bool);
     fn blend_func(&self, src: u32, dst: u32);
     fn viewport(&self, vp: [i32; 4]);
+    fn active_texture(&self, unit: u32);
+    fn bind_texture_2d(&self, tex: u32);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +203,30 @@ impl GlStateOps for glow::Context {
     fn viewport(&self, vp: [i32; 4]) {
         unsafe { <Self as HasContext>::viewport(self, vp[0], vp[1], vp[2], vp[3]) };
     }
+
+    fn active_texture(&self, unit: u32) {
+        unsafe { <Self as HasContext>::active_texture(self, unit) };
+    }
+
+    fn bind_texture_2d(&self, tex: u32) {
+        unsafe {
+            <Self as HasContext>::bind_texture(
+                self,
+                glow::TEXTURE_2D,
+                NonZeroU32::new(tex).map(glow::NativeTexture),
+            );
+        }
+    }
+}
+
+/// Switches to `GL_TEXTURE0`, saves `TEXTURE0`'s 2D binding, executes `draw`, and restores `TEXTURE0` before restoring `ACTIVE_TEXTURE`.
+pub fn with_overlay_texture_unit<F: FnOnce()>(ops: &dyn GlStateOps, draw: F) {
+    let prev_active_tex = ops.get_integerv(glow::ACTIVE_TEXTURE);
+    ops.active_texture(glow::TEXTURE0);
+    let prev_tex0 = ops.get_integerv(glow::TEXTURE_BINDING_2D);
+    draw();
+    ops.bind_texture_2d(prev_tex0.max(0) as u32);
+    ops.active_texture(prev_active_tex.max(glow::TEXTURE0 as i32) as u32);
 }
 
 struct GlOverlayRenderer {
@@ -220,23 +246,80 @@ thread_local! {
     static THREAD_GL_CTX: RefCell<Option<(&'static str, glow::Context)>> = const { RefCell::new(None) };
 }
 
-fn with_thread_gl_context<R>(
+fn is_parseable_gl_version(mut src: &str) -> bool {
+    let webgl_sig = "WebGL ";
+    if src.starts_with(webgl_sig) {
+        let pos = src.rfind(webgl_sig).unwrap_or(0);
+        src = &src[pos + webgl_sig.len()..];
+    } else if let Some(pos) = src.rfind(" ES ") {
+        src = &src[pos + " ES ".len()..];
+    }
+    if let Some(pos) = src.find("GLSL ES ") {
+        src = &src[pos + "GLSL ES ".len()..];
+    }
+    let version = src.split_once(' ').map_or(src, |(v, _)| v);
+    let mut it = version.split('.');
+    let major_ok = it.next().is_some_and(|s| s.parse::<u32>().is_ok());
+    let minor_ok = it.next().is_some_and(|s| {
+        let trimmed = if s.starts_with('0') {
+            "0"
+        } else {
+            s.trim_end_matches('0')
+        };
+        trimmed.parse::<u32>().is_ok()
+    });
+    major_ok && minor_ok
+}
+
+unsafe fn has_active_gl_context(
+    proc_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
+) -> bool {
+    let sym = unsafe { proc_lookup(c"glGetString".as_ptr()) };
+    if sym.is_null() {
+        return false;
+    }
+    let get_string: unsafe extern "C" fn(u32) -> *const c_char =
+        unsafe { std::mem::transmute(sym) };
+    let ver = unsafe { get_string(glow::VERSION) };
+    if ver.is_null() {
+        return false;
+    }
+    // SAFETY: `glGetString(GL_VERSION)` returns a static NUL-terminated string while context is current.
+    unsafe { CStr::from_ptr(ver) }
+        .to_str()
+        .is_ok_and(is_parseable_gl_version)
+}
+
+fn try_with_thread_gl_context<R>(
     api_name: &'static str,
     proc_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
     f: impl FnOnce(&glow::Context) -> R,
-) -> R {
+) -> Option<R> {
+    if !unsafe { has_active_gl_context(proc_lookup) } {
+        return None;
+    }
     THREAD_GL_CTX.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let needs_init = !matches!(&*slot, Some((cached_api, _)) if *cached_api == api_name);
-        if needs_init {
-            let ctx = unsafe {
-                glow::Context::from_loader_function_cstr(|sym| proc_lookup(sym.as_ptr()))
-            };
-            *slot = Some((api_name, ctx));
+        {
+            let mut slot = cell.try_borrow_mut().ok()?;
+            let needs_init = !matches!(&*slot, Some((cached_api, _)) if *cached_api == api_name);
+            if needs_init {
+                let ctx = unsafe {
+                    glow::Context::from_loader_function_cstr(|sym| proc_lookup(sym.as_ptr()))
+                };
+                *slot = Some((api_name, ctx));
+            }
         }
-        let (_, gl) = slot.as_ref().expect("GL context initialized");
-        f(gl)
+        let slot = cell.try_borrow().ok()?;
+        let (_, gl) = slot.as_ref()?;
+        Some(f(gl))
     })
+}
+
+pub fn try_with_thread_gl_context_for_test(
+    api_name: &'static str,
+    proc_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
+) -> Option<()> {
+    try_with_thread_gl_context(api_name, proc_lookup, |_| ())
 }
 
 impl GlOverlayRenderer {
@@ -398,7 +481,7 @@ pub(crate) unsafe fn on_swap_buffers(
         return;
     }
 
-    with_thread_gl_context(api_name, proc_lookup, |gl| {
+    try_with_thread_gl_context(api_name, proc_lookup, |gl| {
         let (w, h) = if hint_w > 0 && hint_h > 0 {
             (hint_w, hint_h)
         } else {
@@ -436,8 +519,6 @@ pub(crate) unsafe fn on_swap_buffers(
 
         if draw_overlay && let Some((ow, oh, ogen, rgba)) = overlay {
             let backup = GlStateBackup::capture(gl);
-            let prev_active_tex = gl.get_integerv(glow::ACTIVE_TEXTURE);
-            let prev_tex = gl.get_integerv(glow::TEXTURE_BINDING_2D);
             let prev_row_len = gl.get_integerv(glow::UNPACK_ROW_LENGTH);
             let prev_align = gl.get_integerv(glow::UNPACK_ALIGNMENT);
             let prev_depth = GlStateOps::is_enabled(gl, glow::DEPTH_TEST);
@@ -456,78 +537,74 @@ pub(crate) unsafe fn on_swap_buffers(
                 })
             });
 
-            if let Ok(mut gr) = renderer.lock()
-                && gr.ensure_initialized(gl)
-            {
-                GlStateOps::bind_framebuffer(gl, 0);
-                gl.bind_unpack_buffer(0);
-                unsafe {
-                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
-                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-                    gl.active_texture(glow::TEXTURE0);
-                    gl.bind_texture(glow::TEXTURE_2D, gr.texture);
-                }
+            with_overlay_texture_unit(gl, || {
+                if let Ok(mut gr) = renderer.lock()
+                    && gr.ensure_initialized(gl)
+                {
+                    GlStateOps::bind_framebuffer(gl, 0);
+                    gl.bind_unpack_buffer(0);
+                    unsafe {
+                        gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
+                        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+                        gl.bind_texture(glow::TEXTURE_2D, gr.texture);
+                    }
 
-                let expected = (ow as usize).saturating_mul(oh as usize).saturating_mul(4);
-                if rgba.len() >= expected && expected > 0 {
-                    let slice = &rgba[..expected];
-                    if gr.tex_w != ow || gr.tex_h != oh {
-                        unsafe {
-                            gl.tex_image_2d(
-                                glow::TEXTURE_2D,
-                                0,
-                                glow::RGBA8 as i32,
-                                ow as i32,
-                                oh as i32,
-                                0,
-                                glow::RGBA,
-                                glow::UNSIGNED_BYTE,
-                                glow::PixelUnpackData::Slice(Some(slice)),
-                            );
+                    let expected = (ow as usize).saturating_mul(oh as usize).saturating_mul(4);
+                    if rgba.len() >= expected && expected > 0 {
+                        let slice = &rgba[..expected];
+                        if gr.tex_w != ow || gr.tex_h != oh {
+                            unsafe {
+                                gl.tex_image_2d(
+                                    glow::TEXTURE_2D,
+                                    0,
+                                    glow::RGBA8 as i32,
+                                    ow as i32,
+                                    oh as i32,
+                                    0,
+                                    glow::RGBA,
+                                    glow::UNSIGNED_BYTE,
+                                    glow::PixelUnpackData::Slice(Some(slice)),
+                                );
+                            }
+                            gr.tex_w = ow;
+                            gr.tex_h = oh;
+                            gr.uploaded_generation = ogen;
+                        } else if gr.uploaded_generation != ogen {
+                            unsafe {
+                                gl.tex_sub_image_2d(
+                                    glow::TEXTURE_2D,
+                                    0,
+                                    0,
+                                    0,
+                                    ow as i32,
+                                    oh as i32,
+                                    glow::RGBA,
+                                    glow::UNSIGNED_BYTE,
+                                    glow::PixelUnpackData::Slice(Some(slice)),
+                                );
+                            }
+                            gr.uploaded_generation = ogen;
                         }
-                        gr.tex_w = ow;
-                        gr.tex_h = oh;
-                        gr.uploaded_generation = ogen;
-                    } else if gr.uploaded_generation != ogen {
-                        unsafe {
-                            gl.tex_sub_image_2d(
-                                glow::TEXTURE_2D,
-                                0,
-                                0,
-                                0,
-                                ow as i32,
-                                oh as i32,
-                                glow::RGBA,
-                                glow::UNSIGNED_BYTE,
-                                glow::PixelUnpackData::Slice(Some(slice)),
-                            );
-                        }
-                        gr.uploaded_generation = ogen;
+                    }
+
+                    gl.set_enabled(glow::SCISSOR_TEST, false);
+                    gl.set_enabled(glow::DEPTH_TEST, false);
+                    gl.set_enabled(glow::CULL_FACE, false);
+                    gl.set_enabled(glow::BLEND, true);
+                    GlStateOps::blend_func(gl, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                    GlStateOps::viewport(gl, [0, 0, w as i32, h as i32]);
+                    unsafe {
+                        <glow::Context as HasContext>::use_program(gl, gr.program);
+                        <glow::Context as HasContext>::bind_vertex_array(gl, gr.vao);
+                        gl.uniform_1_i32(gr.sampler_loc.as_ref(), 0);
+                        gl.draw_arrays(glow::TRIANGLES, 0, 3);
                     }
                 }
-
-                gl.set_enabled(glow::SCISSOR_TEST, false);
-                gl.set_enabled(glow::DEPTH_TEST, false);
-                gl.set_enabled(glow::CULL_FACE, false);
-                gl.set_enabled(glow::BLEND, true);
-                GlStateOps::blend_func(gl, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-                GlStateOps::viewport(gl, [0, 0, w as i32, h as i32]);
-                unsafe {
-                    <glow::Context as HasContext>::use_program(gl, gr.program);
-                    <glow::Context as HasContext>::bind_vertex_array(gl, gr.vao);
-                    gl.uniform_1_i32(gr.sampler_loc.as_ref(), 0);
-                    gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                }
-            }
+            });
 
             unsafe {
                 gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, prev_row_len.max(0));
                 gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, prev_align.max(1));
-                gl.bind_texture(
-                    glow::TEXTURE_2D,
-                    NonZeroU32::new(prev_tex.max(0) as u32).map(glow::NativeTexture),
-                );
-                gl.active_texture(prev_active_tex.max(glow::TEXTURE0 as i32) as u32);
             }
             gl.set_enabled(glow::DEPTH_TEST, prev_depth);
             gl.set_enabled(glow::CULL_FACE, prev_cull);

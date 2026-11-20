@@ -78,6 +78,57 @@ pub fn translate_input_event(ev: InputEvent) -> Option<EvdevEvent> {
 }
 
 /// Optional sudo-free `/dev/input/event*` reader built on pure-Rust `evdev` (keyboards and mice only).
+pub const MAX_FETCH_BATCHES_PER_POLL: usize = 16;
+
+/// Abstraction over a single non-blocking batch read so `poll_events` avoids extra allocation and stays testable without `/dev/input`.
+pub trait EventBatchSource {
+    fn drain_one_batch(&mut self, out: &mut Vec<EvdevEvent>) -> std::io::Result<usize>;
+}
+
+impl EventBatchSource for Device {
+    fn drain_one_batch(&mut self, out: &mut Vec<EvdevEvent>) -> std::io::Result<usize> {
+        let mut raw_count = 0usize;
+        for ev in self.fetch_events()? {
+            raw_count += 1;
+            if let Some(mapped) = translate_input_event(ev) {
+                out.push(mapped);
+            }
+        }
+        Ok(raw_count)
+    }
+}
+
+impl<F, I> EventBatchSource for F
+where
+    F: FnMut() -> std::io::Result<I>,
+    I: Iterator<Item = InputEvent>,
+{
+    fn drain_one_batch(&mut self, out: &mut Vec<EvdevEvent>) -> std::io::Result<usize> {
+        let mut raw_count = 0usize;
+        for ev in (self)()? {
+            raw_count += 1;
+            if let Some(mapped) = translate_input_event(ev) {
+                out.push(mapped);
+            }
+        }
+        Ok(raw_count)
+    }
+}
+
+/// Drains up to [`MAX_FETCH_BATCHES_PER_POLL`] non-blocking event batches until `WouldBlock`.
+pub fn drain_event_batches(source: &mut impl EventBatchSource) -> Vec<EvdevEvent> {
+    let mut out = Vec::new();
+    for _ in 0..MAX_FETCH_BATCHES_PER_POLL {
+        match source.drain_one_batch(&mut out) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 pub struct EvdevBackend {
     devices: Vec<Device>,
     grabbed: bool,
@@ -141,11 +192,7 @@ impl EvdevBackend {
     pub fn poll_events(&mut self) -> Vec<EvdevEvent> {
         let mut out = Vec::new();
         for device in &mut self.devices {
-            match device.fetch_events() {
-                Ok(iter) => out.extend(iter.filter_map(translate_input_event)),
-                Err(err) if err.kind() == ErrorKind::WouldBlock => {}
-                Err(_) => {}
-            }
+            out.extend(drain_event_batches(device));
         }
         out
     }

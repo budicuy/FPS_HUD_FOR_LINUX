@@ -194,3 +194,39 @@ fn proc_self_maps_parser_handles_spaces_anon_and_resolves_self() {
     let resolved = fpshud::launcher::resolve_self_so_path().expect("resolve self executable/so path");
     assert!(resolved.exists());
 }
+
+#[test]
+fn runtime_chunks_ui_input_events_above_256_without_dropping() {
+    let mut rt = fpshud::runtime::LayerRuntime::new_for_test();
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("chunk_events.sock");
+    let server = fpshud_ipc::IpcServer::bind(&sock).unwrap();
+    let mut client = fpshud_ipc::IpcClient::connect(&sock).unwrap();
+    client.set_nonblocking(true).unwrap();
+    let conn = server.accept_verified().unwrap();
+    conn.set_nonblocking(true).unwrap();
+    rt.attach_ipc_for_test(conn);
+
+    let burst: Vec<fpshud_input::UiInputEvent> = (0..300)
+        .map(|i| fpshud_input::UiInputEvent::MouseMove {
+            x: i as f32,
+            y: i as f32,
+        })
+        .collect();
+    let sent = rt.push_ui_events(&burst);
+    assert_eq!(sent, 300);
+
+    let mut buf = vec![0_u8; 65_600];
+    let mut chunk_sizes = Vec::new();
+    while let Ok((n, _)) = client.recv_msg(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        if let fpshud_ipc::LayerToUiMsg::InputEvents(evs) =
+            fpshud_ipc::LayerToUiMsg::decode(&buf[..n]).unwrap()
+        {
+            chunk_sizes.push(evs.len());
+        }
+    }
+    assert_eq!(chunk_sizes, vec![256, 44]);
+}

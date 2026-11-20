@@ -229,3 +229,45 @@ fn evdev_caps_filtering_and_stationary_cursor_dedup() {
     mgr.notify_wayland_swapchain();
     assert!(mgr.should_grab_evdev(&cfg));
 }
+
+#[test]
+fn evdev_drain_event_batches_reads_until_wouldblock_and_bounds_batches() {
+    use fpshud_input::evdev::{EvdevEvent, MAX_FETCH_BATCHES_PER_POLL, drain_event_batches};
+    use std::io;
+
+    let mut step = 0usize;
+    let drained = drain_event_batches(&mut || {
+        step += 1;
+        match step {
+            1 => Ok(vec![
+                evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_X.0, 5),
+            ]
+            .into_iter()),
+            2 => Ok(vec![
+                evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_Y.0, -3),
+            ]
+            .into_iter()),
+            _ => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+        }
+    });
+    assert_eq!(
+        drained,
+        vec![
+            EvdevEvent::RelMotion { dx: 5, dy: 0 },
+            EvdevEvent::RelMotion { dx: 0, dy: -3 },
+        ]
+    );
+
+    let mut calls = 0usize;
+    let bounded = drain_event_batches(&mut || {
+        calls += 1;
+        Ok(vec![evdev::InputEvent::new(
+            evdev::EventType::RELATIVE.0,
+            evdev::RelativeAxisCode::REL_X.0,
+            1,
+        )]
+        .into_iter())
+    });
+    assert_eq!(calls, MAX_FETCH_BATCHES_PER_POLL);
+    assert_eq!(bounded.len(), MAX_FETCH_BATCHES_PER_POLL);
+}

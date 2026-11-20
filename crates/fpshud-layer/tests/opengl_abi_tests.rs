@@ -66,6 +66,14 @@ impl GlStateOps for MockGlOps {
         self.log.borrow_mut().push(("viewport_w", vp[2]));
         self.log.borrow_mut().push(("viewport_h", vp[3]));
     }
+
+    fn active_texture(&self, unit: u32) {
+        self.log.borrow_mut().push(("active_texture", unit as i32));
+    }
+
+    fn bind_texture_2d(&self, tex: u32) {
+        self.log.borrow_mut().push(("bind_texture_2d", tex as i32));
+    }
 }
 
 #[test]
@@ -144,4 +152,99 @@ fn gl_state_backup_and_readpixels_capture_wiring() {
     assert_eq!(shot.height, 2);
     assert_eq!(shot.format, PixelFormat::Rgba8);
     assert!(shot.flip_y);
+}
+
+#[test]
+fn gl_context_probe_rejects_missing_or_corrupt_version_without_panic() {
+    use fpshud::opengl::blit::try_with_thread_gl_context_for_test;
+    use std::ffi::{c_char, c_void};
+
+    unsafe extern "C" fn null_lookup(_name: *const c_char) -> *const c_void {
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn null_get_string(_pname: u32) -> *const c_char {
+        std::ptr::null()
+    }
+    unsafe extern "C" fn lookup_null_ver(name: *const c_char) -> *const c_void {
+        let s = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+        if s == b"glGetString" {
+            return null_get_string as *const c_void;
+        }
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn corrupt_get_string(_pname: u32) -> *const c_char {
+        c"corrupt_no_gl_context".as_ptr()
+    }
+    unsafe extern "C" fn lookup_corrupt_ver(name: *const c_char) -> *const c_void {
+        let s = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+        if s == b"glGetString" {
+            return corrupt_get_string as *const c_void;
+        }
+        std::ptr::null()
+    }
+
+    assert!(try_with_thread_gl_context_for_test("OPENGL_GLX", null_lookup).is_none());
+    assert!(try_with_thread_gl_context_for_test("OPENGL_GLX", lookup_null_ver).is_none());
+    assert!(try_with_thread_gl_context_for_test("OPENGL_GLX", lookup_corrupt_ver).is_none());
+}
+
+#[test]
+fn gl_overlay_texture_unit_preserves_non_zero_active_unit() {
+    use fpshud::opengl::blit::with_overlay_texture_unit;
+
+    struct UnitMockOps {
+        active_unit: RefCell<u32>,
+        bound_tex: RefCell<[u32; 4]>,
+    }
+
+    impl GlStateOps for UnitMockOps {
+        fn get_integerv(&self, pname: u32) -> i32 {
+            match pname {
+                0x84E0 => *self.active_unit.borrow() as i32, // GL_ACTIVE_TEXTURE
+                0x8069 => {
+                    let idx = (*self.active_unit.borrow() - 0x84C0) as usize;
+                    self.bound_tex.borrow()[idx] as i32
+                } // GL_TEXTURE_BINDING_2D
+                _ => 0,
+            }
+        }
+        fn get_viewport(&self) -> [i32; 4] {
+            [0; 4]
+        }
+        fn is_enabled(&self, _cap: u32) -> bool {
+            false
+        }
+        fn use_program(&self, _prog: u32) {}
+        fn bind_vertex_array(&self, _vao: u32) {}
+        fn bind_framebuffer(&self, _fbo: u32) {}
+        fn bind_unpack_buffer(&self, _buf: u32) {}
+        fn set_enabled(&self, _cap: u32, _enable: bool) {}
+        fn blend_func(&self, _src: u32, _dst: u32) {}
+        fn viewport(&self, _vp: [i32; 4]) {}
+        fn active_texture(&self, unit: u32) {
+            *self.active_unit.borrow_mut() = unit;
+        }
+        fn bind_texture_2d(&self, tex: u32) {
+            let idx = (*self.active_unit.borrow() - 0x84C0) as usize;
+            self.bound_tex.borrow_mut()[idx] = tex;
+        }
+    }
+
+    // Game has GL_TEXTURE3 active with tex=99 while TEXTURE0 holds tex=42
+    let ops = UnitMockOps {
+        active_unit: RefCell::new(0x84C3),
+        bound_tex: RefCell::new([42, 0, 0, 99]),
+    };
+
+    let mut unit_during_draw = 0;
+    with_overlay_texture_unit(&ops, || {
+        unit_during_draw = *ops.active_unit.borrow();
+        ops.bind_texture_2d(77);
+    });
+
+    assert_eq!(unit_during_draw, 0x84C0); // Switched to TEXTURE0 before draw/bind
+    assert_eq!(*ops.active_unit.borrow(), 0x84C3); // Restored GL_TEXTURE3
+    assert_eq!(*ops.bound_tex.borrow(), [42, 0, 0, 99]); // Neither unit clobbered!
 }
