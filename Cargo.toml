@@ -6,6 +6,7 @@ members = [
     "crates/fpshud-telemetry",
     "crates/fpshud-screenshot",
     "crates/fpshud-input",
+    "crates/fpshud-ipc",
 ]
 
 [workspace.package]

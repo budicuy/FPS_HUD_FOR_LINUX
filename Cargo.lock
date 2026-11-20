@@ -93,6 +93,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fpshud-ipc"
+version = "0.1.0"
+dependencies = [
+ "fpshud-analytics",
+ "fpshud-core",
+ "fpshud-input",
+ "fpshud-telemetry",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "fpshud-screenshot"
 version = "0.1.0"
 dependencies = [
