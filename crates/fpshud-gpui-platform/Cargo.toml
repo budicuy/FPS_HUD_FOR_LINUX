@@ -1,0 +1,24 @@
+[package]
+name = "fpshud-gpui-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+fpshud-input = { path = "../fpshud-input" }
+fpshud-ipc = { path = "../fpshud-ipc" }
+gpui.workspace = true
+gpui_ce_parley.workspace = true
+gpui_ce_wgpu.workspace = true
+parking_lot = "0.12"
+raw-window-handle = "0.6"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
