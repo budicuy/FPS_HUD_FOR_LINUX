@@ -179,6 +179,11 @@ impl EvdevBackend {
         self.devices.len()
     }
 
+    #[must_use]
+    pub fn is_grabbed(&self) -> bool {
+        self.grabbed
+    }
+
     pub fn set_grab(&mut self, grab: bool) {
         if self.devices.is_empty() || self.grabbed == grab {
             return;

@@ -346,3 +346,62 @@ fn dashboard_drag_moves_panel_and_preview_drag_continues_outside_box() {
         "dragging preview dot outside preview_box must continue updating custom_pos to (1.0, 1.0)"
     );
 }
+
+#[test]
+fn software_cursor_defaults_off_and_toggles_via_ipc_sync() {
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot::default();
+    let mut rt = OffscreenGpuiRuntime::new_with_view(640, 480, 1.0, move |_, _| {
+        FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut writer = ShmRingWriter::new(640, 480).unwrap();
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+
+    let initial_sw = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                root_any
+                    .downcast::<FpshudRootView>()
+                    .unwrap()
+                    .read(cx)
+                    .software_cursor_enabled()
+            })
+            .unwrap()
+    });
+    assert!(!initial_sw, "software cursor must default to off so native OS cursor is used without double cursor");
+
+    rt.update_app(|cx| FpshudRootView::set_software_cursor(cx, true));
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+    let enabled_sw = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                root_any
+                    .downcast::<FpshudRootView>()
+                    .unwrap()
+                    .read(cx)
+                    .software_cursor_enabled()
+            })
+            .unwrap()
+    });
+    assert!(enabled_sw, "software cursor should activate when evdev/hidden grab requests it");
+
+    rt.update_app(|cx| FpshudRootView::set_software_cursor(cx, false));
+    let _ = rt.render_scene_to_slot(&mut writer).unwrap();
+    let disabled_sw = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                root_any
+                    .downcast::<FpshudRootView>()
+                    .unwrap()
+                    .read(cx)
+                    .software_cursor_enabled()
+            })
+            .unwrap()
+    });
+    assert!(!disabled_sw);
+}

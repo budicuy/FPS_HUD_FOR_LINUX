@@ -77,6 +77,8 @@ pub fn map_preview_point_to_norm(
 pub struct FpshudRootView {
     pub(crate) store: UiStore,
     pub(crate) last_applied_seq: u64,
+    pub(crate) last_cursor_seq: u64,
+    pub(crate) draw_software_cursor: bool,
     pub(crate) started_at: std::time::Instant,
     pub(crate) preview_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub(crate) dashboard_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -93,6 +95,8 @@ impl FpshudRootView {
         Self {
             store,
             last_applied_seq: 0,
+            last_cursor_seq: 0,
+            draw_software_cursor: false,
             started_at: std::time::Instant::now(),
             preview_bounds: Rc::new(Cell::new(Bounds::default())),
             dashboard_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -102,6 +106,11 @@ impl FpshudRootView {
             drag_gui_start_cursor: (0.0, 0.0),
             drag_gui_start_origin: (0.0, 0.0),
         }
+    }
+
+    #[must_use]
+    pub fn software_cursor_enabled(&self) -> bool {
+        self.draw_software_cursor
     }
 
     #[must_use]

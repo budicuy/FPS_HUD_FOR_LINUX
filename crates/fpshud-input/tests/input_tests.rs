@@ -325,3 +325,23 @@ fn wayland_runtime_resolves_system_wl_interfaces_without_incompatible_size() {
         );
     }
 }
+
+#[test]
+fn software_cursor_disabled_on_wayland_and_when_os_cursor_visible() {
+    let mut mgr = InputManager::new_headless();
+    let closed_cfg = HudConfig {
+        gui_open: false,
+        ..HudConfig::default()
+    };
+    assert!(!mgr.should_draw_software_cursor(&closed_cfg));
+
+    let open_wayland_cfg = HudConfig {
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    mgr.notify_wayland_swapchain();
+    assert!(
+        !mgr.should_draw_software_cursor(&open_wayland_cfg),
+        "Wayland compositor draws the native OS cursor; software cursor must stay disabled to prevent double cursor"
+    );
+}

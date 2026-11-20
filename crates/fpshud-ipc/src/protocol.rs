@@ -45,6 +45,7 @@ pub enum LayerToUiMsg {
         height: u32,
         scale: f32,
     },
+    SoftwareCursor(bool),
     Shutdown,
 }
 

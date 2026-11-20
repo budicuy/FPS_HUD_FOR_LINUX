@@ -115,6 +115,7 @@ pub struct LayerRuntime {
     _daemon: Option<UiDaemonHandle>,
     init_sent: bool,
     last_sent_size: (u32, u32),
+    last_software_cursor: bool,
     last_telemetry_push: Instant,
     next_input_poll: Instant,
     socket_path: Option<PathBuf>,
@@ -148,6 +149,7 @@ impl LayerRuntime {
                 _daemon: None,
                 init_sent: false,
                 last_sent_size: (0, 0),
+                last_software_cursor: false,
                 last_telemetry_push: Instant::now() - Duration::from_secs(1),
                 next_input_poll: Instant::now(),
                 socket_path: None,
@@ -175,6 +177,7 @@ impl LayerRuntime {
             _daemon: None,
             init_sent: false,
             last_sent_size: (0, 0),
+            last_software_cursor: false,
             last_telemetry_push: Instant::now(),
             next_input_poll: Instant::now(),
             socket_path: None,
@@ -384,6 +387,7 @@ impl LayerRuntime {
         {
             self.ipc_conn = Some(conn);
             self.init_sent = false;
+            self.last_software_cursor = false;
         }
 
         self.overlay_sync.reset_for_resize(w, h);
@@ -424,6 +428,13 @@ impl LayerRuntime {
             }
             if !ui_events.is_empty() {
                 let _ = self.push_ui_events(&ui_events);
+            }
+            let sw_cursor = self.input.should_draw_software_cursor(&self.config);
+            if self.init_sent
+                && sw_cursor != self.last_software_cursor
+                && self.send_to_ui(&LayerToUiMsg::SoftwareCursor(sw_cursor))
+            {
+                self.last_software_cursor = sw_cursor;
             }
         }
 

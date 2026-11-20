@@ -39,6 +39,8 @@ fn protocol_all_variants_and_corrupt_rejection() {
             height: 1440,
             scale: 1.5,
         },
+        LayerToUiMsg::SoftwareCursor(true),
+        LayerToUiMsg::SoftwareCursor(false),
         LayerToUiMsg::Shutdown,
     ];
     for msg in &l2u_cases {

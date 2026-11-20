@@ -343,6 +343,21 @@ impl InputManager {
         (cfg.gui_open || self.pending_ungrab) && !self.should_use_x11_grab(true)
     }
 
+    /// Software cursor is drawn ONLY when `evdev` grabbed pointer devices or X11 hid the OS cursor;
+    /// on Wayland and standard X11 grabs, the native OS cursor stays visible without double cursor.
+    #[must_use]
+    pub fn should_draw_software_cursor(&self, cfg: &HudConfig) -> bool {
+        if !cfg.gui_open {
+            return false;
+        }
+        let evdev_grabbed = self.evdev.as_ref().is_some_and(EvdevBackend::is_grabbed);
+        let x11_cursor_hidden = self
+            .x11
+            .as_ref()
+            .is_some_and(X11Backend::is_pointer_cursor_hidden);
+        evdev_grabbed || x11_cursor_hidden
+    }
+
     pub fn sync_grab_state(&mut self, cfg: &HudConfig) {
         let any_mouse_down = self.mouse_buttons.iter().any(|&b| b);
         self.pending_ungrab = !cfg.gui_open && any_mouse_down;

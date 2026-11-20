@@ -31,6 +31,13 @@ struct UiOutgoingQueueGlobal {
 
 impl Global for UiOutgoingQueueGlobal {}
 
+struct UiSoftwareCursorGlobal {
+    seq: u64,
+    enabled: bool,
+}
+
+impl Global for UiSoftwareCursorGlobal {}
+
 pub(crate) fn push_outgoing_global(cx: &mut App, mut msgs: Vec<UiToLayerMsg>) {
     let mut existing = cx
         .try_global::<UiOutgoingQueueGlobal>()
@@ -47,6 +54,18 @@ impl FpshudRootView {
             seq: next_seq,
             config,
             telemetry,
+        });
+        cx.refresh_windows();
+    }
+
+    /// Enables or disables the software fallback cursor when evdev/X11 hides the native OS cursor.
+    pub fn set_software_cursor(cx: &mut App, enabled: bool) {
+        let next_seq = cx
+            .try_global::<UiSoftwareCursorGlobal>()
+            .map_or(1, |g| g.seq + 1);
+        cx.set_global(UiSoftwareCursorGlobal {
+            seq: next_seq,
+            enabled,
         });
         cx.refresh_windows();
     }
@@ -78,6 +97,12 @@ impl Render for FpshudRootView {
             self.store.config = synced.config.clone();
             self.store.telemetry = synced.telemetry.clone();
             self.last_applied_seq = synced.seq;
+        }
+        if let Some(sw) = cx.try_global::<UiSoftwareCursorGlobal>()
+            && sw.seq > self.last_cursor_seq
+        {
+            self.draw_software_cursor = sw.enabled;
+            self.last_cursor_seq = sw.seq;
         }
         if !self.store.config.gui_open {
             self.dragging_gui = false;
@@ -162,7 +187,7 @@ impl Render for FpshudRootView {
             );
         }
 
-        if self.store.config.gui_open {
+        if self.store.config.gui_open && self.draw_software_cursor {
             let cur = window.mouse_position();
             let cursor_x = f32::from(cur.x).clamp(0.0, (viewport_w - 6.0).max(0.0));
             let cursor_y = f32::from(cur.y).clamp(0.0, (viewport_h - 6.0).max(0.0));

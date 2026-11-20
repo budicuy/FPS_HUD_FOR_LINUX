@@ -73,6 +73,7 @@ pub fn should_retry_grab(elapsed: Duration) -> bool {
 struct SharedState {
     desired_grab: AtomicBool,
     is_grabbed: AtomicBool,
+    pointer_cursor_hidden: AtomicBool,
     target_window: AtomicU32,
     stop: AtomicBool,
     events: Mutex<Vec<X11Event>>,
@@ -103,6 +104,7 @@ impl X11Backend {
         let shared = Arc::new(SharedState {
             desired_grab: AtomicBool::new(false),
             is_grabbed: AtomicBool::new(false),
+            pointer_cursor_hidden: AtomicBool::new(false),
             target_window: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             events: Mutex::new(Vec::new()),
@@ -163,6 +165,11 @@ impl X11Backend {
         self.shared.is_grabbed.load(Ordering::Relaxed)
     }
 
+    #[must_use]
+    pub fn is_pointer_cursor_hidden(&self) -> bool {
+        self.shared.pointer_cursor_hidden.load(Ordering::Relaxed)
+    }
+
     pub fn drain_events(&self) -> Vec<X11Event> {
         self.shared
             .events
@@ -206,6 +213,33 @@ fn create_blank_cursor(conn: &RustConnection, root: u32) -> Option<u32> {
     let _ = conn.free_gc(gc);
     let _ = conn.flush();
     Some(cursor)
+}
+
+/// Creates a native X11 `XC_left_ptr` cursor so X11 grabs preserve the OS pointer appearance,
+/// falling back to a hidden blank cursor (triggering the software cursor) only if unavailable.
+fn create_native_or_blank_cursor(conn: &RustConnection, root: u32) -> (u32, bool) {
+    if let (Ok(font), Ok(cursor)) = (conn.generate_id(), conn.generate_id())
+        && conn
+            .open_font(font, b"cursor")
+            .ok()
+            .and_then(|c| c.check().ok())
+            .is_some()
+    {
+        let created = conn
+            .create_glyph_cursor(cursor, font, font, 68, 69, 0, 0, 0, 0xFFFF, 0xFFFF, 0xFFFF)
+            .ok()
+            .and_then(|c| c.check().ok())
+            .is_some();
+        let _ = conn.close_font(font);
+        let _ = conn.flush();
+        if created {
+            return (cursor, false);
+        }
+    }
+    match create_blank_cursor(conn, root) {
+        Some(blank) => (blank, true),
+        None => (x11rb::NONE, false),
+    }
 }
 
 fn translate_root_to_target(
@@ -254,7 +288,7 @@ fn try_grab_pointer_on(
 }
 
 fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
-    let blank_cursor = create_blank_cursor(&conn, root).unwrap_or(x11rb::NONE);
+    let (grab_cursor, cursor_hidden) = create_native_or_blank_cursor(&conn, root);
     let mut prev_keymap = [0_u8; 32];
     let mut prev_buttons = [false; 3];
     let mut grab_active = false;
@@ -272,10 +306,10 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                     let mask = EventMask::BUTTON_PRESS
                         | EventMask::BUTTON_RELEASE
                         | EventMask::POINTER_MOTION;
-                    let mut p_ok = try_grab_pointer_on(&conn, grab_win, mask, blank_cursor);
+                    let mut p_ok = try_grab_pointer_on(&conn, grab_win, mask, grab_cursor);
                     let mut active_win = grab_win;
                     if !p_ok && grab_win != root {
-                        p_ok = try_grab_pointer_on(&conn, root, mask, blank_cursor);
+                        p_ok = try_grab_pointer_on(&conn, root, mask, grab_cursor);
                         active_win = root;
                     }
                     let k_ok = if p_ok {
@@ -299,6 +333,9 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                         let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
                     }
                     shared.is_grabbed.store(grab_active, Ordering::Relaxed);
+                    shared
+                        .pointer_cursor_hidden
+                        .store(grab_active && cursor_hidden, Ordering::Relaxed);
                 }
             } else {
                 let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
@@ -309,6 +346,7 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
                 grab_active = false;
                 kbd_grab_active = false;
                 shared.is_grabbed.store(false, Ordering::Relaxed);
+                shared.pointer_cursor_hidden.store(false, Ordering::Relaxed);
             }
         }
 
@@ -383,8 +421,9 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
     if kbd_grab_active {
         let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
     }
-    if blank_cursor != x11rb::NONE {
-        let _ = conn.free_cursor(blank_cursor);
+    if grab_cursor != x11rb::NONE {
+        let _ = conn.free_cursor(grab_cursor);
     }
+    shared.pointer_cursor_hidden.store(false, Ordering::Relaxed);
     let _ = conn.flush();
 }

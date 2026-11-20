@@ -124,6 +124,7 @@ struct DaemonState {
     pub surface_scale: f32,
     surface_width: u32,
     surface_height: u32,
+    software_cursor: bool,
 }
 
 impl DaemonState {
@@ -140,6 +141,7 @@ impl DaemonState {
             surface_scale: 1.0,
             surface_width: 1280,
             surface_height: 720,
+            software_cursor: false,
         }
     }
 
@@ -170,13 +172,19 @@ impl DaemonState {
             self.shm_fd_dirty = true;
             let cfg = self.config.clone();
             let snap = self.telemetry.clone();
-            rt.update_app(|cx| FpshudRootView::sync_all(cx, cfg, snap));
+            let sw = self.software_cursor;
+            rt.update_app(|cx| {
+                FpshudRootView::sync_all(cx, cfg, snap);
+                FpshudRootView::set_software_cursor(cx, sw);
+            });
         } else {
             let cfg = self.config.clone();
             let snap = self.telemetry.clone();
-            let rt = OffscreenGpuiRuntime::new_with_view(w, h, s, |_, _| {
+            let sw = self.software_cursor;
+            let mut rt = OffscreenGpuiRuntime::new_with_view(w, h, s, |_, _| {
                 FpshudRootView::new(UiStore::new(cfg, snap))
             })?;
+            rt.update_app(|cx| FpshudRootView::set_software_cursor(cx, sw));
             let writer = ShmRingWriter::new(w, h)?;
             self.runtime = Some(rt);
             self.shm_writer = Some(writer);
@@ -241,6 +249,13 @@ impl DaemonState {
             LayerToUiMsg::InputEvents(events) => {
                 if let Some(rt) = &mut self.runtime {
                     rt.dispatch_input(&events);
+                    self.scheduler.mark_dirty();
+                }
+            }
+            LayerToUiMsg::SoftwareCursor(enabled) => {
+                self.software_cursor = enabled;
+                if let Some(rt) = &mut self.runtime {
+                    rt.update_app(|cx| FpshudRootView::set_software_cursor(cx, enabled));
                     self.scheduler.mark_dirty();
                 }
             }
