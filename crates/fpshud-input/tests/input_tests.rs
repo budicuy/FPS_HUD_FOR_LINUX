@@ -345,3 +345,42 @@ fn software_cursor_disabled_on_wayland_and_when_os_cursor_visible() {
         "Wayland compositor draws the native OS cursor; software cursor must stay disabled to prevent double cursor"
     );
 }
+
+#[test]
+fn wayland_input_shield_isolates_pointer_and_tears_down_cleanly() {
+    use fpshud_input::wayland::WaylandBackend;
+    use std::ffi::c_void;
+
+    let mut wl = WaylandBackend::new_for_test();
+    assert!(!wl.is_shield_active());
+    // Headless null-display guard must never crash or mark shield active
+    wl.sync_input_shield(true, 1280, 720);
+    assert!(!wl.is_shield_active());
+
+    // InputManager tracking for parent wl_surface and cleanup on surface destroy
+    let mut mgr = InputManager::new_headless();
+    let fake_dpy = std::ptr::dangling_mut::<c_void>();
+    let fake_surf = std::ptr::dangling_mut::<c_void>();
+    mgr.attach_wayland_display_with_surface(fake_dpy, fake_surf);
+    mgr.clear_wayland_surface_if_matches(fake_surf);
+
+    // Live compositor verification when running in a Wayland session
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && let Some((dpy, parent_surf, display_err)) =
+            fpshud_input::wayland::test_roundtrip_subsurface_shield(640, 480)
+    {
+        assert!(dpy && parent_surf && display_err == 0);
+    }
+}
+
+#[test]
+fn x11_fp1616_translation_and_xinput2_button_mapping() {
+    use fpshud_input::x11::{fp1616_to_i16, x11_detail_to_button_idx};
+
+    assert_eq!(fp1616_to_i16(123 << 16), 123);
+    assert_eq!(fp1616_to_i16((450 << 16) + 32768), 450);
+    assert_eq!(fp1616_to_i16(-15 << 16), -15);
+    assert_eq!(x11_detail_to_button_idx(1), Some(0));
+    assert_eq!(x11_detail_to_button_idx(3), Some(1));
+    assert_eq!(x11_detail_to_button_idx(2), Some(2));
+}

@@ -39,7 +39,7 @@ rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "
 serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
 wayland-sys = { version = "0.31", default-features = false, features = ["client", "dlopen"] }
-x11rb = "0.14"
+x11rb = { version = "0.14", features = ["xinput"] }
 
 [patch.crates-io]
 gpui_ce_wgpu = { path = "crates/vendor/gpui_ce_wgpu" }

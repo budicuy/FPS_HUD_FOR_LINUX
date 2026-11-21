@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
+use x11rb::protocol::xinput::{ConnectionExt as XiExt, DeviceType, GrabOwner, XIEventMask};
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateGCAux, EventMask, GrabMode, GrabStatus, Rectangle,
 };
@@ -32,6 +33,12 @@ pub const fn x11_detail_to_button_idx(detail: u8) -> Option<usize> {
         2 => Some(2),
         _ => None,
     }
+}
+
+/// Converts XInput2 `Fp1616` (16.16 fixed point) screen coordinates to integer `i16`.
+#[must_use]
+pub fn fp1616_to_i16(raw: i32) -> i16 {
+    (raw >> 16).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -266,11 +273,65 @@ fn translate_root_to_target(
     (f32::from(root_x), f32::from(root_y))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveGrab {
+    None,
+    Xi2 { ptr_id: u16, kbd_id: Option<u16> },
+    Core { kbd_grabbed: bool },
+}
+
+impl ActiveGrab {
+    fn is_active(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+fn query_xi2_master_devices(conn: &RustConnection) -> Option<(u16, Option<u16>)> {
+    let ver = conn.xinput_xi_query_version(2, 0).ok()?.reply().ok()?;
+    if ver.major_version < 2 {
+        return None;
+    }
+    let devs = conn.xinput_xi_query_device(1_u16).ok()?.reply().ok()?;
+    let mut master_ptr = None;
+    let mut master_kbd = None;
+    for d in &devs.infos {
+        if d.type_ == DeviceType::MASTER_POINTER && master_ptr.is_none() {
+            master_ptr = Some(d.deviceid);
+        } else if d.type_ == DeviceType::MASTER_KEYBOARD && master_kbd.is_none() {
+            master_kbd = Some(d.deviceid);
+        }
+    }
+    master_ptr.map(|p| (p, master_kbd))
+}
+
+fn try_xi2_grab_on(
+    conn: &RustConnection,
+    win: u32,
+    dev_id: u16,
+    cursor: u32,
+    mask: u32,
+) -> bool {
+    let mask_arr = [mask];
+    conn.xinput_xi_grab_device(
+        win,
+        x11rb::CURRENT_TIME,
+        cursor,
+        dev_id,
+        GrabMode::ASYNC,
+        GrabMode::ASYNC,
+        GrabOwner::NO_OWNER,
+        &mask_arr,
+    )
+    .ok()
+    .and_then(|c| c.reply().ok())
+    .is_some_and(|r| r.status == GrabStatus::SUCCESS)
+}
+
 fn try_grab_pointer_on(
     conn: &RustConnection,
     win: u32,
     mask: EventMask,
-    blank_cursor: u32,
+    cursor: u32,
 ) -> bool {
     conn.grab_pointer(
         false,
@@ -279,7 +340,7 @@ fn try_grab_pointer_on(
         GrabMode::ASYNC,
         GrabMode::ASYNC,
         x11rb::NONE,
-        blank_cursor,
+        cursor,
         x11rb::CURRENT_TIME,
     )
     .ok()
@@ -287,64 +348,125 @@ fn try_grab_pointer_on(
     .is_some_and(|r| r.status == GrabStatus::SUCCESS)
 }
 
+fn try_acquire_grab(
+    conn: &RustConnection,
+    root: u32,
+    target: u32,
+    grab_cursor: u32,
+    xi2_masters: Option<(u16, Option<u16>)>,
+) -> ActiveGrab {
+    let grab_win = if target > 1 { target } else { root };
+
+    if let Some((ptr_id, kbd_id)) = xi2_masters {
+        let ptr_mask = u32::from(
+            XIEventMask::BUTTON_PRESS | XIEventMask::BUTTON_RELEASE | XIEventMask::MOTION,
+        );
+        let mut active_win = grab_win;
+        let mut p_ok = try_xi2_grab_on(conn, grab_win, ptr_id, grab_cursor, ptr_mask);
+        if !p_ok && grab_win != root {
+            p_ok = try_xi2_grab_on(conn, root, ptr_id, grab_cursor, ptr_mask);
+            active_win = root;
+        }
+        if p_ok {
+            let kbd_mask = u32::from(XIEventMask::KEY_PRESS | XIEventMask::KEY_RELEASE);
+            let k_id = kbd_id.filter(|&kid| {
+                try_xi2_grab_on(conn, active_win, kid, x11rb::NONE, kbd_mask)
+            });
+            return ActiveGrab::Xi2 { ptr_id, kbd_id: k_id };
+        }
+    }
+
+    let core_mask =
+        EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
+    let mut active_win = grab_win;
+    let mut p_ok = try_grab_pointer_on(conn, grab_win, core_mask, grab_cursor);
+    if !p_ok && grab_win != root {
+        p_ok = try_grab_pointer_on(conn, root, core_mask, grab_cursor);
+        active_win = root;
+    }
+    if !p_ok {
+        return ActiveGrab::None;
+    }
+    let kbd_grabbed = conn
+        .grab_keyboard(
+            false,
+            active_win,
+            x11rb::CURRENT_TIME,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+        )
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .is_some_and(|r| r.status == GrabStatus::SUCCESS);
+    ActiveGrab::Core { kbd_grabbed }
+}
+
+fn release_active_grab(conn: &RustConnection, active_grab: &mut ActiveGrab) {
+    match *active_grab {
+        ActiveGrab::None => return,
+        ActiveGrab::Xi2 { ptr_id, kbd_id } => {
+            let _ = conn.xinput_xi_ungrab_device(x11rb::CURRENT_TIME, ptr_id);
+            if let Some(kid) = kbd_id {
+                let _ = conn.xinput_xi_ungrab_device(x11rb::CURRENT_TIME, kid);
+            }
+        }
+        ActiveGrab::Core { kbd_grabbed } => {
+            let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
+            if kbd_grabbed {
+                let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+            }
+        }
+    }
+    let _ = conn.flush();
+    *active_grab = ActiveGrab::None;
+}
+
+fn push_pointer_btn_at(
+    conn: &RustConnection,
+    win_ctx: (u32, u32),
+    btn: (u8, bool),
+    root_pos: (i16, i16),
+    prev_buttons: &mut [bool; 3],
+    batch: &mut Vec<X11Event>,
+) {
+    let (root, target) = win_ctx;
+    let (detail, pressed) = btn;
+    let (root_x, root_y) = root_pos;
+    let (wx, wy) = translate_root_to_target(conn, root, target, root_x, root_y);
+    batch.push(X11Event::CursorPos { x: wx, y: wy });
+    if let Some(idx) = x11_detail_to_button_idx(detail)
+        && prev_buttons[idx] != pressed
+    {
+        prev_buttons[idx] = pressed;
+        batch.push(X11Event::MouseButtons(*prev_buttons));
+    }
+}
+
 fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
     let (grab_cursor, cursor_hidden) = create_native_or_blank_cursor(&conn, root);
+    let xi2_masters = query_xi2_master_devices(&conn);
     let mut prev_keymap = [0_u8; 32];
     let mut prev_buttons = [false; 3];
-    let mut grab_active = false;
-    let mut kbd_grab_active = false;
+    let mut active_grab = ActiveGrab::None;
     let mut last_grab_attempt = Instant::now() - GRAB_RETRY_INTERVAL;
 
     while !shared.stop.load(Ordering::Relaxed) {
         let want_grab = shared.desired_grab.load(Ordering::Relaxed);
-        if want_grab != grab_active {
+        if want_grab != active_grab.is_active() {
             if want_grab {
                 if should_retry_grab(last_grab_attempt.elapsed()) {
                     last_grab_attempt = Instant::now();
                     let target = shared.target_window.load(Ordering::Relaxed);
-                    let grab_win = if target > 1 { target } else { root };
-                    let mask = EventMask::BUTTON_PRESS
-                        | EventMask::BUTTON_RELEASE
-                        | EventMask::POINTER_MOTION;
-                    let mut p_ok = try_grab_pointer_on(&conn, grab_win, mask, grab_cursor);
-                    let mut active_win = grab_win;
-                    if !p_ok && grab_win != root {
-                        p_ok = try_grab_pointer_on(&conn, root, mask, grab_cursor);
-                        active_win = root;
-                    }
-                    let k_ok = if p_ok {
-                        conn.grab_keyboard(
-                            false,
-                            active_win,
-                            x11rb::CURRENT_TIME,
-                            GrabMode::ASYNC,
-                            GrabMode::ASYNC,
-                        )
-                        .ok()
-                        .and_then(|c| c.reply().ok())
-                        .is_some_and(|r| r.status == GrabStatus::SUCCESS)
-                    } else {
-                        false
-                    };
-                    grab_active = p_ok;
-                    kbd_grab_active = k_ok;
-                    if !grab_active {
-                        let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
-                        let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
-                    }
-                    shared.is_grabbed.store(grab_active, Ordering::Relaxed);
+                    active_grab = try_acquire_grab(&conn, root, target, grab_cursor, xi2_masters);
+                    shared
+                        .is_grabbed
+                        .store(active_grab.is_active(), Ordering::Relaxed);
                     shared
                         .pointer_cursor_hidden
-                        .store(grab_active && cursor_hidden, Ordering::Relaxed);
+                        .store(active_grab.is_active() && cursor_hidden, Ordering::Relaxed);
                 }
             } else {
-                let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
-                if kbd_grab_active {
-                    let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
-                }
-                let _ = conn.flush();
-                grab_active = false;
-                kbd_grab_active = false;
+                release_active_grab(&conn, &mut active_grab);
                 shared.is_grabbed.store(false, Ordering::Relaxed);
                 shared.pointer_cursor_hidden.store(false, Ordering::Relaxed);
             }
@@ -353,33 +475,50 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
         let mut batch = Vec::new();
         let target = shared.target_window.load(Ordering::Relaxed);
 
-        // Drain queued X11 events so fast clicks and motion while grabbed are never dropped
+        // Drain queued Core + XInput2 events so fast clicks and motion while grabbed are never dropped
         while let Ok(Some(ev)) = conn.poll_for_event() {
             match ev {
                 Event::MotionNotify(m) => {
                     let (wx, wy) = translate_root_to_target(&conn, root, target, m.root_x, m.root_y);
                     batch.push(X11Event::CursorPos { x: wx, y: wy });
                 }
-                Event::ButtonPress(b) => {
-                    let (wx, wy) = translate_root_to_target(&conn, root, target, b.root_x, b.root_y);
+                Event::XinputMotion(m) => {
+                    let (rx, ry) = (fp1616_to_i16(m.root_x), fp1616_to_i16(m.root_y));
+                    let (wx, wy) = translate_root_to_target(&conn, root, target, rx, ry);
                     batch.push(X11Event::CursorPos { x: wx, y: wy });
-                    if let Some(idx) = x11_detail_to_button_idx(b.detail)
-                        && !prev_buttons[idx]
-                    {
-                        prev_buttons[idx] = true;
-                        batch.push(X11Event::MouseButtons(prev_buttons));
-                    }
                 }
-                Event::ButtonRelease(b) => {
-                    let (wx, wy) = translate_root_to_target(&conn, root, target, b.root_x, b.root_y);
-                    batch.push(X11Event::CursorPos { x: wx, y: wy });
-                    if let Some(idx) = x11_detail_to_button_idx(b.detail)
-                        && prev_buttons[idx]
-                    {
-                        prev_buttons[idx] = false;
-                        batch.push(X11Event::MouseButtons(prev_buttons));
-                    }
-                }
+                Event::ButtonPress(b) => push_pointer_btn_at(
+                    &conn,
+                    (root, target),
+                    (b.detail, true),
+                    (b.root_x, b.root_y),
+                    &mut prev_buttons,
+                    &mut batch,
+                ),
+                Event::ButtonRelease(b) => push_pointer_btn_at(
+                    &conn,
+                    (root, target),
+                    (b.detail, false),
+                    (b.root_x, b.root_y),
+                    &mut prev_buttons,
+                    &mut batch,
+                ),
+                Event::XinputButtonPress(b) => push_pointer_btn_at(
+                    &conn,
+                    (root, target),
+                    (b.detail as u8, true),
+                    (fp1616_to_i16(b.root_x), fp1616_to_i16(b.root_y)),
+                    &mut prev_buttons,
+                    &mut batch,
+                ),
+                Event::XinputButtonRelease(b) => push_pointer_btn_at(
+                    &conn,
+                    (root, target),
+                    (b.detail as u8, false),
+                    (fp1616_to_i16(b.root_x), fp1616_to_i16(b.root_y)),
+                    &mut prev_buttons,
+                    &mut batch,
+                ),
                 _ => {}
             }
         }
@@ -415,12 +554,7 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
         thread::sleep(Duration::from_millis(8));
     }
 
-    if grab_active {
-        let _ = conn.ungrab_pointer(x11rb::CURRENT_TIME);
-    }
-    if kbd_grab_active {
-        let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
-    }
+    release_active_grab(&conn, &mut active_grab);
     if grab_cursor != x11rb::NONE {
         let _ = conn.free_cursor(grab_cursor);
     }

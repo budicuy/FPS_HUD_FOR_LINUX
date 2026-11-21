@@ -9,6 +9,7 @@ license.workspace = true
 evdev.workspace = true
 fpshud-core = { path = "../fpshud-core" }
 libloading.workspace = true
+rustix.workspace = true
 serde.workspace = true
 wayland-sys.workspace = true
 x11rb.workspace = true

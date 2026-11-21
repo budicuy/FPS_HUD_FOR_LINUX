@@ -280,7 +280,7 @@ pub(crate) unsafe extern "system" fn hook_create_xlib_surface_khr(
             && let Ok(mut reg) = registry().lock()
         {
             reg.surfaces
-                .insert(surf.as_raw(), (SurfaceBackendType::X11, win));
+                .insert(surf.as_raw(), (SurfaceBackendType::X11, win as u64));
         }
     }
     res
@@ -310,7 +310,7 @@ pub(crate) unsafe extern "system" fn hook_create_xcb_surface_khr(
             && let Ok(mut reg) = registry().lock()
         {
             reg.surfaces
-                .insert(surf.as_raw(), (SurfaceBackendType::X11, win));
+                .insert(surf.as_raw(), (SurfaceBackendType::X11, win as u64));
         }
     }
     res
@@ -331,16 +331,22 @@ pub(crate) unsafe extern "system" fn hook_create_wayland_surface_khr(
     let res = unsafe { fp(instance, p_create_info, p_allocator, p_surface) };
     if res == vk::Result::SUCCESS && !p_surface.is_null() {
         let surf = unsafe { *p_surface };
+        let wl_surf_raw = if p_create_info.is_null() {
+            0_u64
+        } else {
+            unsafe { (*p_create_info).surface as usize as u64 }
+        };
         if surf != vk::SurfaceKHR::null()
             && let Ok(mut reg) = registry().lock()
         {
             reg.surfaces
-                .insert(surf.as_raw(), (SurfaceBackendType::Wayland, 0));
+                .insert(surf.as_raw(), (SurfaceBackendType::Wayland, wl_surf_raw));
         }
         if let Ok(mut rt) = LayerRuntime::global().lock() {
             if !p_create_info.is_null() {
                 let wl_dpy = unsafe { (*p_create_info).display.cast::<c_void>() };
-                rt.input.attach_wayland_display(wl_dpy);
+                let wl_surf = unsafe { (*p_create_info).surface.cast::<c_void>() };
+                rt.input.attach_wayland_display_with_surface(wl_dpy, wl_surf);
             }
             rt.input.attach_wayland_display_hint(true);
         }
@@ -358,11 +364,19 @@ pub(crate) unsafe extern "system" fn hook_destroy_surface_khr(
             .lock()
             .ok()
             .and_then(|mut reg| reg.surfaces.remove(&surface.as_raw()));
-        if let Some((SurfaceBackendType::X11, win_id)) = info
-            && win_id != 0
-            && let Ok(mut rt) = LayerRuntime::global().lock()
-        {
-            rt.input.clear_x11_target_window_if_matches(win_id);
+        match info {
+            Some((SurfaceBackendType::X11, win_id)) if win_id != 0 => {
+                if let Ok(mut rt) = LayerRuntime::global().lock() {
+                    rt.input.clear_x11_target_window_if_matches(win_id as u32);
+                }
+            }
+            Some((SurfaceBackendType::Wayland, wl_surf_raw)) if wl_surf_raw != 0 => {
+                if let Ok(mut rt) = LayerRuntime::global().lock() {
+                    rt.input
+                        .clear_wayland_surface_if_matches(wl_surf_raw as usize as *mut c_void);
+                }
+            }
+            _ => {}
         }
     }
     if let Some(id) = find_instance_by_key(dispatch_key_from_raw(instance.as_raw()))
@@ -640,7 +654,7 @@ pub(crate) unsafe extern "system" fn hook_create_swapchain_khr(
             })
         && let Ok(mut rt) = LayerRuntime::global().lock()
     {
-        rt.notify_surface_swapchain(backend, win_id);
+        rt.notify_surface_swapchain(backend, win_id as u32);
     }
 
     let mut sd = SwapchainData {

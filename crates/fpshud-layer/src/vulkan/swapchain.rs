@@ -261,7 +261,7 @@ pub struct HookRegistry {
     pub instances: HashMap<usize, Arc<InstanceData>>,
     pub devices: HashMap<usize, Arc<DeviceData>>,
     pub swapchains: HashMap<u64, Arc<Mutex<SwapchainData>>>,
-    pub surfaces: HashMap<u64, (SurfaceBackendType, u32)>,
+    pub surfaces: HashMap<u64, (SurfaceBackendType, u64)>,
 }
 
 static REGISTRY: OnceLock<Mutex<HookRegistry>> = OnceLock::new();

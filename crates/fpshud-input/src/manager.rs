@@ -117,11 +117,30 @@ impl InputManager {
     }
 
     pub fn attach_wayland_display(&mut self, display: *mut c_void) {
+        self.attach_wayland_display_with_surface(display, std::ptr::null_mut());
+    }
+
+    pub fn attach_wayland_display_with_surface(
+        &mut self,
+        display: *mut c_void,
+        surface: *mut c_void,
+    ) {
         if !display.is_null() {
             self.wayland_display_hint = true;
             if let Some(wl) = &mut self.wayland {
                 wl.attach_display(display);
+                if !surface.is_null() {
+                    wl.set_parent_surface(surface);
+                }
             }
+        }
+    }
+
+    pub fn clear_wayland_surface_if_matches(&mut self, surface: *mut c_void) {
+        if !surface.is_null()
+            && let Some(wl) = &mut self.wayland
+        {
+            wl.clear_parent_surface_if_matches(surface);
         }
     }
 
@@ -527,7 +546,14 @@ impl InputManager {
         self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
 
         self.sync_grab_state(cfg);
-        let grabbed = self.x11.as_ref().is_some_and(X11Backend::is_grabbed);
+        let want_wl_shield = cfg.gui_open
+            && !self.x11_swapchain_active
+            && (self.wayland_swapchain_active || self.wayland_display_hint);
+        if let Some(wl) = &mut self.wayland {
+            wl.sync_input_shield(want_wl_shield, max_w as u32, max_h as u32);
+        }
+        let grabbed = self.x11.as_ref().is_some_and(X11Backend::is_grabbed)
+            || self.wayland.as_ref().is_some_and(WaylandBackend::is_shield_active);
         (actions, ui_events, grabbed)
     }
 }

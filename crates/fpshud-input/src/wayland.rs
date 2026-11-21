@@ -2,8 +2,9 @@
 //! zero `DT_NEEDED`, zero `#[repr(C)]`, zero `libc`.
 
 use libloading::Library;
+use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::{Mutex, OnceLock};
 use wayland_sys::client::{WaylandClient, wayland_client_option, wl_display, wl_event_queue, wl_proxy};
 use wayland_sys::common::{wl_argument, wl_interface};
@@ -33,6 +34,14 @@ struct WaylandIfaces {
     seat: *const wl_interface,
     keyboard: *const wl_interface,
     pointer: *const wl_interface,
+    compositor: *const wl_interface,
+    subcompositor: *const wl_interface,
+    shm: *const wl_interface,
+    shm_pool: *const wl_interface,
+    buffer: *const wl_interface,
+    surface: *const wl_interface,
+    subsurface: *const wl_interface,
+    region: *const wl_interface,
 }
 
 unsafe impl Send for WaylandIfaces {}
@@ -63,6 +72,14 @@ fn load_wayland_runtime() -> Option<&'static WaylandRuntime> {
         let seat = get_iface(b"wl_seat_interface\0")?;
         let keyboard = get_iface(b"wl_keyboard_interface\0")?;
         let pointer = get_iface(b"wl_pointer_interface\0")?;
+        let compositor = get_iface(b"wl_compositor_interface\0")?;
+        let subcompositor = get_iface(b"wl_subcompositor_interface\0")?;
+        let shm = get_iface(b"wl_shm_interface\0")?;
+        let shm_pool = get_iface(b"wl_shm_pool_interface\0")?;
+        let buffer = get_iface(b"wl_buffer_interface\0")?;
+        let surface = get_iface(b"wl_surface_interface\0")?;
+        let subsurface = get_iface(b"wl_subsurface_interface\0")?;
+        let region = get_iface(b"wl_region_interface\0")?;
         Some(WaylandRuntime {
             client,
             ifaces: WaylandIfaces {
@@ -71,6 +88,14 @@ fn load_wayland_runtime() -> Option<&'static WaylandRuntime> {
                 seat,
                 keyboard,
                 pointer,
+                compositor,
+                subcompositor,
+                shm,
+                shm_pool,
+                buffer,
+                surface,
+                subsurface,
+                region,
             },
         })
     })
@@ -100,10 +125,66 @@ struct SharedWaylandState {
     seat: *mut wl_proxy,
     keyboard: *mut wl_proxy,
     pointer: *mut wl_proxy,
+    compositor: *mut wl_proxy,
+    subcompositor: *mut wl_proxy,
+    shm: *mut wl_proxy,
+    parent_surface: *mut wl_proxy,
+    shield_surface: *mut wl_proxy,
+    shield_subsurface: *mut wl_proxy,
+    shield_pool: *mut wl_proxy,
+    shield_buffer: *mut wl_proxy,
+    shield_fd: Option<OwnedFd>,
+    shield_size: (u32, u32),
+    shield_active: bool,
 }
 
 unsafe impl Send for SharedWaylandState {}
 unsafe impl Sync for SharedWaylandState {}
+
+unsafe fn destroy_proxy(
+    client: &WaylandClient,
+    slot: &mut *mut wl_proxy,
+    destroy_opcode: Option<u32>,
+) {
+    if !slot.is_null() {
+        if let Some(op) = destroy_opcode {
+            unsafe { (client.wl_proxy_marshal_array)(*slot, op, std::ptr::null_mut()) };
+        }
+        unsafe { (client.wl_proxy_destroy)(*slot) };
+        *slot = std::ptr::null_mut();
+    }
+}
+
+unsafe fn bind_wl_global(
+    rt: &WaylandRuntime,
+    registry: *mut wl_proxy,
+    name: u32,
+    bind_ver: u32,
+    iface: *const wl_interface,
+    queue: *mut wl_event_queue,
+) -> *mut wl_proxy {
+    let mut args = [
+        wl_argument { u: name },
+        wl_argument {
+            s: unsafe { (*iface).name },
+        },
+        wl_argument { u: bind_ver },
+        wl_argument { n: 0 },
+    ];
+    let proxy = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor_versioned)(
+            registry,
+            0,
+            args.as_mut_ptr(),
+            iface,
+            bind_ver,
+        )
+    };
+    if !proxy.is_null() {
+        unsafe { (rt.client.wl_proxy_set_queue)(proxy, queue) };
+    }
+    proxy
+}
 
 impl SharedWaylandState {
     fn new() -> Box<Self> {
@@ -114,6 +195,17 @@ impl SharedWaylandState {
             seat: std::ptr::null_mut(),
             keyboard: std::ptr::null_mut(),
             pointer: std::ptr::null_mut(),
+            compositor: std::ptr::null_mut(),
+            subcompositor: std::ptr::null_mut(),
+            shm: std::ptr::null_mut(),
+            parent_surface: std::ptr::null_mut(),
+            shield_surface: std::ptr::null_mut(),
+            shield_subsurface: std::ptr::null_mut(),
+            shield_pool: std::ptr::null_mut(),
+            shield_buffer: std::ptr::null_mut(),
+            shield_fd: None,
+            shield_size: (0, 0),
+            shield_active: false,
         })
     }
 
@@ -126,27 +218,40 @@ impl SharedWaylandState {
         }
     }
 
+    unsafe fn teardown_shield_buffer(&mut self, client: &WaylandClient) {
+        unsafe {
+            destroy_proxy(client, &mut self.shield_buffer, Some(0));
+            destroy_proxy(client, &mut self.shield_pool, Some(1));
+        }
+        self.shield_fd = None;
+        self.shield_size = (0, 0);
+    }
+
+    unsafe fn teardown_shield_proxies(&mut self, client: &WaylandClient) {
+        unsafe {
+            self.teardown_shield_buffer(client);
+            destroy_proxy(client, &mut self.shield_subsurface, Some(0));
+            destroy_proxy(client, &mut self.shield_surface, Some(0));
+        }
+        self.shield_active = false;
+    }
+
     unsafe fn teardown_proxies(&mut self, client: &WaylandClient) {
-        if !self.pointer.is_null() {
-            unsafe { (client.wl_proxy_destroy)(self.pointer) };
-            self.pointer = std::ptr::null_mut();
-        }
-        if !self.keyboard.is_null() {
-            unsafe { (client.wl_proxy_destroy)(self.keyboard) };
-            self.keyboard = std::ptr::null_mut();
-        }
-        if !self.seat.is_null() {
-            unsafe { (client.wl_proxy_destroy)(self.seat) };
-            self.seat = std::ptr::null_mut();
-        }
-        if !self.registry.is_null() {
-            unsafe { (client.wl_proxy_destroy)(self.registry) };
-            self.registry = std::ptr::null_mut();
+        unsafe {
+            self.teardown_shield_proxies(client);
+            destroy_proxy(client, &mut self.pointer, None);
+            destroy_proxy(client, &mut self.keyboard, None);
+            destroy_proxy(client, &mut self.seat, None);
+            destroy_proxy(client, &mut self.shm, None);
+            destroy_proxy(client, &mut self.subcompositor, Some(0));
+            destroy_proxy(client, &mut self.compositor, None);
+            destroy_proxy(client, &mut self.registry, None);
         }
         if !self.queue.is_null() {
             unsafe { (client.wl_event_queue_destroy)(self.queue) };
             self.queue = std::ptr::null_mut();
         }
+        self.parent_surface = std::ptr::null_mut();
     }
 }
 
@@ -161,44 +266,58 @@ unsafe extern "C" fn wl_reg_global(
         return;
     }
     let state = unsafe { &mut *(data.cast::<SharedWaylandState>()) };
-    if !state.seat.is_null() {
-        return;
-    }
     let Ok(iface_name) = unsafe { CStr::from_ptr(interface) }.to_str() else {
         return;
     };
-    if iface_name != "wl_seat" {
-        return;
-    }
     let Some(rt) = load_wayland_runtime() else {
         return;
     };
-    let bind_ver = version.min(7);
-    let seat_iface = rt.ifaces.seat;
-    let mut args = [
-        wl_argument { u: name },
-        wl_argument {
-            s: unsafe { (*seat_iface).name },
-        },
-        wl_argument { u: bind_ver },
-        wl_argument { n: 0 },
-    ];
-    let seat = unsafe {
-        (rt.client.wl_proxy_marshal_array_constructor_versioned)(
-            registry,
-            0,
-            args.as_mut_ptr(),
-            seat_iface,
-            bind_ver,
-        )
-    };
-    if seat.is_null() {
-        return;
-    }
-    state.seat = seat;
-    unsafe {
-        (rt.client.wl_proxy_set_queue)(seat, state.queue);
-        let _ = (rt.client.wl_proxy_add_listener)(seat, SEAT_LISTENER.as_ptr().cast_mut(), data);
+    match iface_name {
+        "wl_seat" if state.seat.is_null() => {
+            let seat = unsafe {
+                bind_wl_global(rt, registry, name, version.min(7), rt.ifaces.seat, state.queue)
+            };
+            if !seat.is_null() {
+                state.seat = seat;
+                unsafe {
+                    let _ = (rt.client.wl_proxy_add_listener)(
+                        seat,
+                        SEAT_LISTENER.as_ptr().cast_mut(),
+                        data,
+                    );
+                }
+            }
+        }
+        "wl_compositor" if state.compositor.is_null() => {
+            state.compositor = unsafe {
+                bind_wl_global(
+                    rt,
+                    registry,
+                    name,
+                    version.min(4),
+                    rt.ifaces.compositor,
+                    state.queue,
+                )
+            };
+        }
+        "wl_subcompositor" if state.subcompositor.is_null() => {
+            state.subcompositor = unsafe {
+                bind_wl_global(
+                    rt,
+                    registry,
+                    name,
+                    version.min(1),
+                    rt.ifaces.subcompositor,
+                    state.queue,
+                )
+            };
+        }
+        "wl_shm" if state.shm.is_null() => {
+            state.shm = unsafe {
+                bind_wl_global(rt, registry, name, version.min(1), rt.ifaces.shm, state.queue)
+            };
+        }
+        _ => {}
     }
 }
 
@@ -579,6 +698,11 @@ impl WaylandBackend {
         !self.display.is_null()
     }
 
+    #[must_use]
+    pub fn is_shield_active(&self) -> bool {
+        self.shared.shield_active
+    }
+
     pub fn attach_display(&mut self, display: *mut c_void) {
         if display.is_null() {
             return;
@@ -590,6 +714,159 @@ impl WaylandBackend {
         self.detach_display(std::ptr::null_mut());
         self.display = next;
         self.queue_initialized = false;
+    }
+
+    pub fn set_parent_surface(&mut self, surface: *mut c_void) {
+        if surface.is_null() {
+            return;
+        }
+        let next = surface.cast::<wl_proxy>();
+        if self.shared.parent_surface == next {
+            return;
+        }
+        if let Some(rt) = load_wayland_runtime() {
+            unsafe { self.shared.teardown_shield_proxies(rt.client) };
+        }
+        self.shared.parent_surface = next;
+    }
+
+    pub fn clear_parent_surface_if_matches(&mut self, surface: *mut c_void) {
+        if surface.is_null() {
+            return;
+        }
+        if self.shared.parent_surface == surface.cast::<wl_proxy>() {
+            if let Some(rt) = load_wayland_runtime() {
+                unsafe { self.shared.teardown_shield_proxies(rt.client) };
+            }
+            self.shared.parent_surface = std::ptr::null_mut();
+        }
+    }
+
+    pub fn sync_input_shield(&mut self, active: bool, width: u32, height: u32) {
+        if self.display.is_null() {
+            return;
+        }
+        if !active {
+            if !self.shared.shield_active {
+                return;
+            }
+            if !self.shared.shield_surface.is_null()
+                && let Some(rt) = load_wayland_runtime()
+            {
+                unsafe {
+                    let mut att = [
+                        wl_argument { o: std::ptr::null() },
+                        wl_argument { i: 0 },
+                        wl_argument { i: 0 },
+                    ];
+                    (rt.client.wl_proxy_marshal_array)(
+                        self.shared.shield_surface,
+                        1, // wl_surface::attach(NULL, 0, 0)
+                        att.as_mut_ptr(),
+                    );
+                    if !self.shared.compositor.is_null() {
+                        let empty_reg = make_wl_region(rt, self.shared.compositor, None);
+                        if !empty_reg.is_null() {
+                            let mut reg_arg = [wl_argument { o: empty_reg.cast() }];
+                            (rt.client.wl_proxy_marshal_array)(
+                                self.shared.shield_surface,
+                                5, // wl_surface::set_input_region
+                                reg_arg.as_mut_ptr(),
+                            );
+                            let mut reg_slot = empty_reg;
+                            destroy_proxy(rt.client, &mut reg_slot, Some(0));
+                        }
+                    }
+                    (rt.client.wl_proxy_marshal_array)(
+                        self.shared.shield_surface,
+                        6, // wl_surface::commit
+                        std::ptr::null_mut(),
+                    );
+                    let _ = (rt.client.wl_display_flush)(self.display);
+                }
+            }
+            self.shared.shield_active = false;
+            return;
+        }
+
+        self.ensure_queue();
+        if self.shared.parent_surface.is_null()
+            || self.shared.compositor.is_null()
+            || self.shared.subcompositor.is_null()
+            || self.shared.shm.is_null()
+        {
+            return;
+        }
+        let Some(rt) = load_wayland_runtime() else {
+            return;
+        };
+
+        let w = width.clamp(1, 8192);
+        let h = height.clamp(1, 8192);
+        if self.shared.shield_active && self.shared.shield_size == (w, h) {
+            return;
+        }
+
+        if !unsafe { ensure_shield_surface(rt, &mut self.shared) } {
+            return;
+        }
+        if !unsafe { ensure_shield_shm_buffer(rt, &mut self.shared, w, h) } {
+            return;
+        }
+
+        unsafe {
+            let opaque_reg = make_wl_region(rt, self.shared.compositor, None);
+            let input_reg = make_wl_region(
+                rt,
+                self.shared.compositor,
+                Some((0, 0, w as i32, h as i32)),
+            );
+
+            let mut att = [
+                wl_argument {
+                    o: self.shared.shield_buffer.cast(),
+                },
+                wl_argument { i: 0 },
+                wl_argument { i: 0 },
+            ];
+            (rt.client.wl_proxy_marshal_array)(self.shared.shield_surface, 1, att.as_mut_ptr());
+
+            if !opaque_reg.is_null() {
+                let mut o_arg = [wl_argument { o: opaque_reg.cast() }];
+                (rt.client.wl_proxy_marshal_array)(
+                    self.shared.shield_surface,
+                    4, // wl_surface::set_opaque_region
+                    o_arg.as_mut_ptr(),
+                );
+            }
+            if !input_reg.is_null() {
+                let mut i_arg = [wl_argument { o: input_reg.cast() }];
+                (rt.client.wl_proxy_marshal_array)(
+                    self.shared.shield_surface,
+                    5, // wl_surface::set_input_region
+                    i_arg.as_mut_ptr(),
+                );
+            }
+            let mut dmg = [
+                wl_argument { i: 0 },
+                wl_argument { i: 0 },
+                wl_argument { i: w as i32 },
+                wl_argument { i: h as i32 },
+            ];
+            (rt.client.wl_proxy_marshal_array)(self.shared.shield_surface, 2, dmg.as_mut_ptr());
+            (rt.client.wl_proxy_marshal_array)(
+                self.shared.shield_surface,
+                6, // wl_surface::commit
+                std::ptr::null_mut(),
+            );
+
+            let mut o_slot = opaque_reg;
+            destroy_proxy(rt.client, &mut o_slot, Some(0));
+            let mut i_slot = input_reg;
+            destroy_proxy(rt.client, &mut i_slot, Some(0));
+            let _ = (rt.client.wl_display_flush)(self.display);
+        }
+        self.shared.shield_active = true;
     }
 
     pub fn detach_display(&mut self, display: *mut c_void) {
@@ -674,6 +951,214 @@ impl WaylandBackend {
             .map(|mut g| std::mem::take(&mut *g))
             .unwrap_or_default()
     }
+}
+
+unsafe fn make_wl_region(
+    rt: &WaylandRuntime,
+    compositor: *mut wl_proxy,
+    rect: Option<(i32, i32, i32, i32)>,
+) -> *mut wl_proxy {
+    let mut args = [wl_argument { n: 0 }];
+    let reg = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            compositor,
+            1, // wl_compositor::create_region
+            args.as_mut_ptr(),
+            rt.ifaces.region,
+        )
+    };
+    if !reg.is_null()
+        && let Some((x, y, w, h)) = rect
+    {
+        let mut radd = [
+            wl_argument { i: x },
+            wl_argument { i: y },
+            wl_argument { i: w },
+            wl_argument { i: h },
+        ];
+        unsafe { (rt.client.wl_proxy_marshal_array)(reg, 1, radd.as_mut_ptr()) };
+    }
+    reg
+}
+
+unsafe fn ensure_shield_surface(rt: &WaylandRuntime, state: &mut SharedWaylandState) -> bool {
+    if !state.shield_surface.is_null() && !state.shield_subsurface.is_null() {
+        return true;
+    }
+    let mut args = [wl_argument { n: 0 }];
+    let surf = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            state.compositor,
+            0, // wl_compositor::create_surface
+            args.as_mut_ptr(),
+            rt.ifaces.surface,
+        )
+    };
+    if surf.is_null() {
+        return false;
+    }
+    unsafe { (rt.client.wl_proxy_set_queue)(surf, state.queue) };
+
+    let mut sargs = [
+        wl_argument { n: 0 },
+        wl_argument { o: surf.cast() },
+        wl_argument {
+            o: state.parent_surface.cast(),
+        },
+    ];
+    let sub = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            state.subcompositor,
+            1, // wl_subcompositor::get_subsurface
+            sargs.as_mut_ptr(),
+            rt.ifaces.subsurface,
+        )
+    };
+    if sub.is_null() {
+        let mut s_slot = surf;
+        unsafe { destroy_proxy(rt.client, &mut s_slot, Some(0)) };
+        return false;
+    }
+    unsafe {
+        (rt.client.wl_proxy_set_queue)(sub, state.queue);
+        (rt.client.wl_proxy_marshal_array)(sub, 5 /* set_desync */, std::ptr::null_mut());
+        let mut pos = [wl_argument { i: 0 }, wl_argument { i: 0 }];
+        (rt.client.wl_proxy_marshal_array)(sub, 1 /* set_position */, pos.as_mut_ptr());
+        let mut above = [wl_argument {
+            o: state.parent_surface.cast(),
+        }];
+        (rt.client.wl_proxy_marshal_array)(sub, 2 /* place_above */, above.as_mut_ptr());
+    }
+    state.shield_surface = surf;
+    state.shield_subsurface = sub;
+    true
+}
+
+unsafe fn ensure_shield_shm_buffer(
+    rt: &WaylandRuntime,
+    state: &mut SharedWaylandState,
+    w: u32,
+    h: u32,
+) -> bool {
+    if !state.shield_buffer.is_null() && state.shield_size == (w, h) {
+        return true;
+    }
+    unsafe { state.teardown_shield_buffer(rt.client) };
+
+    let stride = match w.checked_mul(4) {
+        Some(s) if s <= i32::MAX as u32 => s,
+        _ => return false,
+    };
+    let byte_len = match stride.checked_mul(h) {
+        Some(len) if len > 0 && len <= i32::MAX as u32 => len,
+        _ => return false,
+    };
+    let Ok(fd) = memfd_create(c"fpshud-wl-shield", MemfdFlags::CLOEXEC) else {
+        return false;
+    };
+    if ftruncate(&fd, u64::from(byte_len)).is_err() {
+        return false;
+    }
+
+    let mut pargs = [
+        wl_argument { n: 0 },
+        wl_argument { h: fd.as_raw_fd() },
+        wl_argument { i: byte_len as i32 },
+    ];
+    let pool = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            state.shm,
+            0, // wl_shm::create_pool
+            pargs.as_mut_ptr(),
+            rt.ifaces.shm_pool,
+        )
+    };
+    if pool.is_null() {
+        return false;
+    }
+    unsafe { (rt.client.wl_proxy_set_queue)(pool, state.queue) };
+
+    let mut bargs = [
+        wl_argument { n: 0 },
+        wl_argument { i: 0 },
+        wl_argument { i: w as i32 },
+        wl_argument { i: h as i32 },
+        wl_argument { i: stride as i32 },
+        wl_argument { u: 0 }, // WL_SHM_FORMAT_ARGB8888 (zeroed memfd = 100% transparent)
+    ];
+    let buf = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            pool,
+            0, // wl_shm_pool::create_buffer
+            bargs.as_mut_ptr(),
+            rt.ifaces.buffer,
+        )
+    };
+    if buf.is_null() {
+        let mut p_slot = pool;
+        unsafe { destroy_proxy(rt.client, &mut p_slot, Some(1)) };
+        return false;
+    }
+    unsafe { (rt.client.wl_proxy_set_queue)(buf, state.queue) };
+
+    state.shield_fd = Some(fd);
+    state.shield_pool = pool;
+    state.shield_buffer = buf;
+    state.shield_size = (w, h);
+    true
+}
+
+/// Live Wayland compositor test helper: attaches a dummy parent `wl_surface`, activates &
+/// deactivates the subsurface input shield, and checks `wl_display_get_error == 0`.
+#[must_use]
+pub fn test_roundtrip_subsurface_shield(width: u32, height: u32) -> Option<(bool, bool, i32)> {
+    let rt = load_wayland_runtime()?;
+    let dpy = unsafe { (rt.client.wl_display_connect)(std::ptr::null()) };
+    if dpy.is_null() {
+        return None;
+    }
+
+    let mut wb = WaylandBackend::new();
+    wb.attach_display(dpy.cast());
+    wb.ensure_queue();
+    if wb.shared.compositor.is_null() {
+        drop(wb);
+        unsafe { (rt.client.wl_display_disconnect)(dpy) };
+        return None;
+    }
+
+    let mut a = [wl_argument { n: 0 }];
+    let mut parent = unsafe {
+        (rt.client.wl_proxy_marshal_array_constructor)(
+            wb.shared.compositor,
+            0,
+            a.as_mut_ptr(),
+            rt.ifaces.surface,
+        )
+    };
+    if parent.is_null() {
+        drop(wb);
+        unsafe { (rt.client.wl_display_disconnect)(dpy) };
+        return None;
+    }
+
+    wb.set_parent_surface(parent.cast());
+    wb.sync_input_shield(true, width, height);
+    let _ = unsafe { (rt.client.wl_display_roundtrip_queue)(dpy, wb.shared.queue) };
+    let was_active = wb.is_shield_active();
+
+    wb.sync_input_shield(false, width, height);
+    let _ = unsafe { (rt.client.wl_display_roundtrip_queue)(dpy, wb.shared.queue) };
+    let deactivated = !wb.is_shield_active();
+
+    let err = unsafe { (rt.client.wl_display_get_error)(dpy) };
+    wb.clear_parent_surface_if_matches(parent.cast());
+    unsafe { destroy_proxy(rt.client, &mut parent, Some(0)) };
+    drop(wb);
+    unsafe {
+        (rt.client.wl_display_disconnect)(dpy);
+    }
+    Some((was_active, deactivated, err))
 }
 
 impl Drop for WaylandBackend {
