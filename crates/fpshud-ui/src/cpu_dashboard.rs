@@ -218,6 +218,7 @@ enum HitAction {
     SetTextColor(ColorRgba),
     ToggleCustomTextColor,
     ToggleThermalWarnings,
+    ToggleDimLabels,
     ToggleHudGraph,
     ResetLayout,
     SetSensorFilter(SensorFilter),
@@ -599,6 +600,7 @@ impl CpuDashboard {
             HitAction::SetTextColor(c) => self.store.set_text_color(c),
             HitAction::ToggleCustomTextColor => self.store.toggle_custom_text_color(),
             HitAction::ToggleThermalWarnings => self.store.toggle_thermal_warnings(),
+            HitAction::ToggleDimLabels => self.store.toggle_dim_labels(),
             HitAction::ToggleHudGraph => self.store.toggle_hud_graph(),
             HitAction::ResetLayout => {
                 self.open_dropdown = None;
@@ -1147,6 +1149,16 @@ impl CpuDashboard {
             "Warning Colors",
             self.store.config.thermal_warnings_enabled,
             HitAction::ToggleThermalWarnings,
+        );
+        y += 23.0;
+
+        self.paint_switch_row(
+            canvas,
+            rasterizer,
+            Rect::new(ix, y, iw, 21.0),
+            "Dim Labels",
+            self.store.config.dim_labels_enabled,
+            HitAction::ToggleDimLabels,
         );
         y += 23.0;
 

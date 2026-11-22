@@ -7,7 +7,7 @@
 use crate::cpu_canvas::{CpuCanvas, Rect, TextRasterizer};
 use crate::state::{
     MetricCategory, UiStore, category_color_rgba, category_label, color_to_rgba_u32,
-    effective_text_color, group_metrics_ordered, hud_metric_short_label, rgba_u32,
+    effective_text_color, group_metrics_ordered, rgba_u32,
 };
 use fpshud_core::{ArrangementMode, BackgroundStyle, FontFamily, LayoutPosition, MetricType};
 
@@ -678,6 +678,44 @@ const fn clean_tabular_prefix(metric: MetricType) -> Option<&'static str> {
     }
 }
 
+fn split_value_and_unit(val: &str) -> (&str, Option<&str>) {
+    const UNITS: &[&str] = &[
+        " GB/s", " MB/s", " MHz", " GB", " ms", " W", "°C", "%",
+    ];
+    for &unit in UNITS {
+        if let Some(num) = val.strip_suffix(unit)
+            && !num.is_empty()
+        {
+            return (num, Some(unit));
+        }
+    }
+    (val, None)
+}
+
+fn push_value_spans(
+    spans: &mut Vec<TextSpan>,
+    val: String,
+    val_col: u32,
+    dim_col: u32,
+    dim_enabled: bool,
+) {
+    if dim_enabled && let (num, Some(unit)) = split_value_and_unit(&val) {
+        spans.push(TextSpan {
+            text: num.to_string(),
+            color: val_col,
+        });
+        spans.push(TextSpan {
+            text: unit.to_string(),
+            color: dim_col,
+        });
+        return;
+    }
+    spans.push(TextSpan {
+        text: val,
+        color: val_col,
+    });
+}
+
 fn build_tabular_cells(
     rasterizer: &mut TextRasterizer,
     font: FontFamily,
@@ -686,21 +724,23 @@ fn build_tabular_cells(
     metrics: &[MetricType],
     alpha: u8,
 ) -> Vec<MeasuredCell> {
-    let muted_lbl = rgba_u32(165, 178, 198, alpha);
+    let dim_enabled = store.config.dim_labels_enabled;
+    let lbl_col = if dim_enabled {
+        rgba_u32(150, 164, 184, alpha)
+    } else {
+        color_to_rgba_u32(effective_text_color(&store.config), alpha)
+    };
     let mut cells = Vec::with_capacity(metrics.len());
     for &metric in metrics {
         let (_, val, val_col, _) = store.format_metric_row(metric);
-        let mut spans = Vec::with_capacity(2);
+        let mut spans = Vec::with_capacity(3);
         if let Some(prefix) = clean_tabular_prefix(metric) {
             spans.push(TextSpan {
                 text: prefix.to_string(),
-                color: muted_lbl,
+                color: lbl_col,
             });
         }
-        spans.push(TextSpan {
-            text: val,
-            color: val_col,
-        });
+        push_value_spans(&mut spans, val, val_col, lbl_col, dim_enabled);
         let width = CpuHudRenderer::measure_spans(rasterizer, font, font_size, &spans);
         cells.push(MeasuredCell { spans, width });
     }
@@ -715,36 +755,32 @@ fn build_group_spans_inline(
 ) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let cat_col = category_color_rgba(cat, &store.config, alpha);
-    let label_col = if store.config.category_colors_enabled {
-        cat_col
+    let dim_enabled = store.config.dim_labels_enabled;
+    let lbl_col = if dim_enabled {
+        rgba_u32(150, 164, 184, alpha)
     } else {
         color_to_rgba_u32(effective_text_color(&store.config), alpha)
     };
-    let sep_col = rgba_u32(130, 145, 168, alpha);
 
-    if !matches!(cat, MetricCategory::Fps) {
-        spans.push(TextSpan {
-            text: format!("{}  ", category_label(cat)),
-            color: cat_col,
-        });
-    }
+    spans.push(TextSpan {
+        text: format!("{} ", category_label(cat)),
+        color: cat_col,
+    });
     for (idx, &metric) in metrics.iter().enumerate() {
         if idx > 0 {
             spans.push(TextSpan {
-                text: " \u{00B7} ".to_string(),
-                color: sep_col,
+                text: "  ".to_string(),
+                color: lbl_col,
             });
         }
         let (_, val, val_col, _) = store.format_metric_row(metric);
-        let short = hud_metric_short_label(metric);
-        spans.push(TextSpan {
-            text: format!("{short} "),
-            color: label_col,
-        });
-        spans.push(TextSpan {
-            text: val,
-            color: val_col,
-        });
+        if let Some(prefix) = clean_tabular_prefix(metric) {
+            spans.push(TextSpan {
+                text: prefix.to_string(),
+                color: lbl_col,
+            });
+        }
+        push_value_spans(&mut spans, val, val_col, lbl_col, dim_enabled);
     }
     spans
 }

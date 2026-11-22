@@ -649,6 +649,11 @@ impl UiStore {
         self.emit_config_updated();
     }
 
+    pub fn toggle_dim_labels(&mut self) {
+        self.config.dim_labels_enabled = !self.config.dim_labels_enabled;
+        self.emit_config_updated();
+    }
+
     pub fn cycle_text_color(&mut self) {
         const PALETTE: [ColorRgba; 4] = [
             ColorRgba::new(255, 255, 255, 255),
