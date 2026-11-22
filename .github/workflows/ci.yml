@@ -1,144 +1,119 @@
-name: Rust CI Build, Test & Release
+name: Pure-Rust CI
 
 on:
   push:
-    branches: [ "main", "master", "rust-rewrite", "testing" ]
-    tags: [ "v*" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master", "rust-rewrite", "testing" ]
+    branches: ["main", "master"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build-test-release:
-    runs-on: ubuntu-latest
-    container: ubuntu:22.04
-    env:
-      CARGO_TERM_COLOR: always
-      FPSHUD_STRICT_GLIBC: "1"
+  lint-and-test:
+    name: Clippy & Workspace Tests
+    runs-on: ubuntu-24.04
     steps:
-      - name: Install Toolchain & Headless Vulkan Dependencies (Ubuntu 22.04 GLIBC 2.35)
-        run: |
-          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git build-essential pkg-config binutils file \
-            mesa-vulkan-drivers vulkan-tools xvfb libx11-xcb1 libxcb1
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component clippy
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Cargo Registry & Target
-        uses: actions/cache@v4
+      - name: Install Rust Toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-ubuntu22-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            rust-ubuntu22-${{ runner.arch }}-
+          components: clippy
 
-      - name: Run Full Workspace Tests & Strict Clippy Gate
-        run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)"
-          VK_DRIVER_FILES="$LVP_ICD" cargo test --workspace
-          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Cache Cargo Build
+        uses: Swatinem/rust-cache@v2
 
-      - name: Build Portable Release, Enforce ABI + GLIBC 2.35 Gates & Package
-        run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          ./scripts/package_release.sh
+      - name: Clippy Strict Gate
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Verify Real Vulkan Hook & Pure-Rust CPU HUD Rendering (Headless Lavapipe 120 frames)
+      - name: Workspace Unit & Integration Tests
+        run: cargo test --workspace
+
+  package-and-e2e:
+    name: Portable Release (GLIBC 2.35) & Headless E2E
+    runs-on: ubuntu-22.04
+    env:
+      FPSHUD_STRICT_GLIBC: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Headless Vulkan & Xvfb Tools
         run: |
-          env -u WAYLAND_DISPLAY -u DISPLAY ./scripts/test_vulkan_headless.sh
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools xvfb binutils file
+
+      - name: Install Rust Toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ubuntu-22.04-release
+
+      - name: Build Portable Release & Enforce ABI / GLIBC 2.35 Gates
+        run: ./scripts/package_release.sh
+
+      - name: Verify Real Vulkan Hook & CPU HUD (Headless Lavapipe 120 frames)
+        run: env -u WAYLAND_DISPLAY -u DISPLAY ./scripts/test_vulkan_headless.sh
 
       - name: Verify Zero-Sudo Install & Uninstall Lifecycle
-        run: |
-          export FPSHUD_RELEASE_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz"
-          export FPSHUD_RELEASE_SHA_URL="file://${PWD}/dist/fpshud-linux-x86_64.tar.gz.sha256"
-          ./scripts/test_e2e_install.sh
+        env:
+          FPSHUD_RELEASE_URL: file://${{ github.workspace }}/dist/fpshud-linux-x86_64.tar.gz
+          FPSHUD_RELEASE_SHA_URL: file://${{ github.workspace }}/dist/fpshud-linux-x86_64.tar.gz.sha256
+        run: ./scripts/test_e2e_install.sh
 
-      - name: Upload Build Artifact
+      - name: Upload Portable Artifact
         uses: actions/upload-artifact@v4
         with:
           name: fpshud-linux-x86_64
+          retention-days: 7
           path: |
             dist/fpshud-linux-x86_64.tar.gz
             dist/fpshud-linux-x86_64.tar.gz.sha256
 
-  distro-compatibility-matrix:
-    needs: build-test-release
-    runs-on: ubuntu-latest
+  distro-compat:
+    name: Distro Smoke (${{ matrix.distro.name }})
+    needs: package-and-e2e
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         distro:
-          - name: "Arch Linux (Rolling)"
-            image: "archlinux:latest"
-            cmd: "pacman -Syu --noconfirm --needed tar gzip vulkan-icd-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ./fpshud-ui --bad-arg 2>/dev/null; test $? -ne 0"
-          - name: "Fedora Latest (RPM)"
-            image: "fedora:latest"
+          - name: Arch Linux
+            image: archlinux:latest
+            cmd: "pacman -Syu --noconfirm --needed tar gzip vulkan-icd-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && (! ./fpshud-ui --bad-arg 2>/dev/null)"
+          - name: Fedora Latest
+            image: fedora:latest
             cmd: "dnf install -y tar gzip vulkan-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
-          - name: "Debian 12 (Bookworm)"
-            image: "debian:bookworm-slim"
+          - name: Debian 12 (Bookworm)
+            image: debian:bookworm-slim
             cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
-          - name: "Ubuntu 22.04 LTS (Jammy - GLIBC 2.35 Baseline)"
-            image: "ubuntu:22.04"
+          - name: Ubuntu 22.04 LTS
+            image: ubuntu:22.04
             cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
-          - name: "Ubuntu 24.04 LTS (Noble)"
-            image: "ubuntu:24.04"
+          - name: Ubuntu 24.04 LTS
+            image: ubuntu:24.04
             cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
     steps:
-      - name: Download Portable Build Artifact
+      - name: Download Portable Artifact
         uses: actions/download-artifact@v4
         with:
           name: fpshud-linux-x86_64
-          path: dist_test
+          path: dist
 
-      - name: Flatten Artifact Directory
+      - name: Verify Shared Libraries & CLI in Container
         run: |
-          find dist_test -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} dist_test/ \;
-
-      - name: Verify Shared Library Linkage on ${{ matrix.distro.name }}
-        run: |
-          docker run --rm -v "$PWD/dist_test:/test" -w /test "${{ matrix.distro.image }}" bash -c "${{ matrix.distro.cmd }}"
-
-  publish-release:
-    needs: [build-test-release, distro-compatibility-matrix]
-    if: |
-      always() &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
-      !contains(needs.*.result, 'skipped') &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download Portable Build Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: fpshud-linux-x86_64
-          path: release_pkg
-
-      - name: Flatten Artifact Directory
-        run: |
-          find release_pkg -name "fpshud-linux-x86_64.tar.gz*" -exec cp -v {} release_pkg/ \;
-
-      - name: Publish Portable Binary to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "latest"
-          target_commitish: ${{ github.sha }}
-          make_latest: true
-          name: "FPSHUD Latest Portable Release (Linux x86_64)"
-          files: |
-            release_pkg/fpshud-linux-x86_64.tar.gz
-            release_pkg/fpshud-linux-x86_64.tar.gz.sha256
-          prerelease: false
+          docker run --rm -v "${{ github.workspace }}/dist:/work" -w /work "${{ matrix.distro.image }}" \
+            bash -euo pipefail -c "${{ matrix.distro.cmd }}"

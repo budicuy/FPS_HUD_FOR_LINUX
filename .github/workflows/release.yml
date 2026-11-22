@@ -1,0 +1,72 @@
+name: Pure-Rust Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FPSHUD_STRICT_GLIBC: "1"
+
+jobs:
+  release:
+    name: Build, Verify & Publish Linux x86_64 Release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Headless Vulkan & Xvfb Tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools xvfb binutils file
+
+      - name: Install Rust Toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ubuntu-22.04-release
+
+      - name: Clippy & Workspace Tests
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Build Portable Release & Enforce ABI / GLIBC 2.35 Gates
+        run: ./scripts/package_release.sh
+
+      - name: Verify Real Vulkan Hook & CPU HUD (Headless Lavapipe 120 frames)
+        run: env -u WAYLAND_DISPLAY -u DISPLAY ./scripts/test_vulkan_headless.sh
+
+      - name: Verify Zero-Sudo Install & Uninstall Lifecycle
+        env:
+          FPSHUD_RELEASE_URL: file://${{ github.workspace }}/dist/fpshud-linux-x86_64.tar.gz
+          FPSHUD_RELEASE_SHA_URL: file://${{ github.workspace }}/dist/fpshud-linux-x86_64.tar.gz.sha256
+        run: ./scripts/test_e2e_install.sh
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/fpshud-linux-x86_64.tar.gz
+            dist/fpshud-linux-x86_64.tar.gz.sha256
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/fpshud-linux-x86_64.tar.gz
+            dist/fpshud-linux-x86_64.tar.gz.sha256
