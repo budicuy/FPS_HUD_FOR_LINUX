@@ -213,6 +213,7 @@ impl DaemonState {
     }
 
     fn merge_frame_tick(&mut self, tick: FrameTickData) {
+        let was_bench_active = self.telemetry.benchmark_active;
         if let Some(tc) = &self.telemetry_collector {
             self.telemetry = tc.get_snapshot();
         }
@@ -230,6 +231,26 @@ impl DaemonState {
         }
         if self.telemetry.benchmark_active {
             self.pending_bench_loads = Some((self.telemetry.cpu_load, self.telemetry.gpu_load));
+        }
+        if !was_bench_active && self.telemetry.benchmark_active {
+            if let Some(dash) = &mut self.dashboard {
+                dash.store.status_message = Some("Benchmark recording...".to_string());
+            }
+            self.overlay_dirty.mark_dirty();
+        } else if was_bench_active && !self.telemetry.benchmark_active {
+            let msg = if let Some(summary) = &self.telemetry.last_benchmark {
+                format!(
+                    "Benchmark saved ({:.0} FPS avg, {:.0} 1% low)",
+                    summary.avg_fps, summary.fps_1pct_low
+                )
+            } else {
+                "Benchmark stopped.".to_string()
+            };
+            if let Some(dash) = &mut self.dashboard {
+                dash.store.status_message = Some(msg.clone());
+            }
+            self.overlay_dirty.mark_dirty();
+            self.push_toast(msg);
         }
     }
 
@@ -441,6 +462,10 @@ impl DaemonState {
                 }
             }
             LayerToUiMsg::ToastNotification(text) => {
+                if let Some(dash) = &mut self.dashboard {
+                    dash.store.status_message = Some(text.clone());
+                }
+                self.overlay_dirty.mark_dirty();
                 self.push_toast(text);
             }
             LayerToUiMsg::Shutdown => return Ok(false),
