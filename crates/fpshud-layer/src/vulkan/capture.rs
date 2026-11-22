@@ -6,8 +6,10 @@ use fpshud_screenshot::PixelFormat;
 #[must_use]
 pub const fn map_vk_format_to_pixel_format(raw_vk_format: i32) -> Option<PixelFormat> {
     match raw_vk_format {
-        37 | 43 => Some(PixelFormat::Rgba8), // R8G8B8A8_UNORM / SRGB
-        44 | 50 => Some(PixelFormat::Bgra8), // B8G8R8A8_UNORM / SRGB
+        37 | 43 | 51 | 57 => Some(PixelFormat::Rgba8), // R8G8B8A8 / A8B8G8R8_PACK32 UNORM / SRGB
+        44 | 50 => Some(PixelFormat::Bgra8),           // B8G8R8A8 UNORM / SRGB
+        58 => Some(PixelFormat::A2R10G10B10),          // A2R10G10B10_UNORM_PACK32 (10-bit Wayland)
+        64 => Some(PixelFormat::A2B10G10R10),          // A2B10G10R10_UNORM_PACK32 (10-bit Wayland)
         _ => None,
     }
 }

@@ -14,6 +14,8 @@ static SHOT_SEQ: AtomicU64 = AtomicU64::new(0);
 pub enum PixelFormat {
     Rgba8,
     Bgra8,
+    A2R10G10B10,
+    A2B10G10R10,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,34 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
                     dst_px[3] = src_px[3];
                 }
             }
+            PixelFormat::A2R10G10B10 => {
+                for (src_px, dst_px) in src_slice
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst_slice.as_chunks_mut::<4>().0.iter_mut())
+                {
+                    let v = u32::from_le_bytes(*src_px);
+                    dst_px[0] = (((v >> 20) & 0x3FF) >> 2) as u8;
+                    dst_px[1] = (((v >> 10) & 0x3FF) >> 2) as u8;
+                    dst_px[2] = ((v & 0x3FF) >> 2) as u8;
+                    dst_px[3] = 255;
+                }
+            }
+            PixelFormat::A2B10G10R10 => {
+                for (src_px, dst_px) in src_slice
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst_slice.as_chunks_mut::<4>().0.iter_mut())
+                {
+                    let v = u32::from_le_bytes(*src_px);
+                    dst_px[0] = ((v & 0x3FF) >> 2) as u8;
+                    dst_px[1] = (((v >> 10) & 0x3FF) >> 2) as u8;
+                    dst_px[2] = (((v >> 20) & 0x3FF) >> 2) as u8;
+                    dst_px[3] = 255;
+                }
+            }
         }
     }
 
@@ -138,7 +168,18 @@ impl ScreenshotWorker {
             .spawn(move || {
                 while let Ok(frame) = rx.recv() {
                     let target = generate_screenshot_path(&dir, "FPSHUD");
-                    let _ = write_png_to_path(&target, &frame);
+                    if write_png_to_path(&target, &frame).is_ok() {
+                        let label = target
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("Screenshot saved");
+                        let _ = std::process::Command::new("notify-send")
+                            .args(["-a", "FPSHUD", "-t", "2500", "FPSHUD Screenshot Saved", label])
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                    }
                 }
             })
             .ok();
