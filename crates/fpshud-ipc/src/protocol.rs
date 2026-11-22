@@ -58,6 +58,7 @@ pub enum UiToLayerMsg {
     ScreenshotRequest { with_hud: bool },
     OpenSaveFolder,
     KeybindCaptureState { capturing: bool, target: KeybindTarget },
+    ExternalOverlayActive(bool),
 }
 
 fn invalid_data(msg: impl Into<String>) -> io::Error {

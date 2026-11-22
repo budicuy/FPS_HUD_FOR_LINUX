@@ -405,3 +405,109 @@ fn software_cursor_defaults_off_and_toggles_via_ipc_sync() {
     });
     assert!(!disabled_sw);
 }
+
+#[test]
+fn render_mode_splits_hud_only_and_dashboard_only_without_duplication() {
+    use fpshud_input::UiInputEvent;
+    use fpshud_ui::UiRenderMode;
+
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot {
+        fps: 90.0,
+        frametime_ms: 11.1,
+        ..TelemetrySnapshot::default()
+    };
+
+    // 1. HudOnly mode must suppress dashboard hitboxes (even when gui_open == true)
+    let mut hud_rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, {
+        let cfg = cfg.clone();
+        let snap = snap.clone();
+        move |_, _| FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    hud_rt.update_app(|cx| FpshudRootView::set_render_mode(cx, UiRenderMode::HudOnly));
+    let mut rgba_hud = Vec::new();
+    let (hw, hh) = hud_rt.render_scene_to_rgba(&mut rgba_hud).unwrap();
+    assert_eq!((hw, hh), (1280, 720));
+    assert_eq!(rgba_hud.len(), 1280 * 720 * 4);
+    assert!(rgba_hud.as_chunks::<4>().0.iter().any(|px| px[3] > 0), "HudOnly must still paint the live HUD");
+    // Dashboard bounds must remain zeroed because dashboard was skipped in HudOnly mode
+    let hud_dash_w = hud_rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                f32::from(
+                    root_any
+                        .downcast::<FpshudRootView>()
+                        .unwrap()
+                        .read(cx)
+                        .dashboard_bounds_snapshot()
+                        .size
+                        .width,
+                )
+            })
+            .unwrap()
+    });
+    assert!(hud_dash_w < 1.0, "HudOnly must not lay out dashboard, got width={hud_dash_w}");
+
+    // 2. DashboardOnly mode must paint & handle clicks on the Settings dashboard without HUD/cursor
+    let mut dash_rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, move |_, _| {
+        FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    dash_rt.update_app(|cx| FpshudRootView::set_render_mode(cx, UiRenderMode::DashboardOnly));
+    let mut rgba_dash = Vec::new();
+    let (dw, dh) = dash_rt.render_scene_to_rgba(&mut rgba_dash).unwrap();
+    assert_eq!((dw, dh), (1280, 720));
+    // Top-left corner (where default TL HUD sits at (14, 14)) must be fully transparent in DashboardOnly mode
+    let tl_idx = (18 * 1280 + 18) * 4;
+    assert_eq!(rgba_dash[tl_idx + 3], 0, "DashboardOnly must not paint HUD at top-left");
+
+    // Clicking Minimal preset button must still work in DashboardOnly mode
+    let mut got_minimal = false;
+    'scan: for y in (20..360).step_by(12) {
+        for x in (100..650).step_by(18) {
+            dash_rt.dispatch_input(&[
+                UiInputEvent::MouseMove { x: x as f32, y: y as f32 },
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ]);
+            let _ = dash_rt.render_scene_to_rgba(&mut rgba_dash).unwrap();
+            let msgs = dash_rt.update_app(FpshudRootView::take_outgoing);
+            if msgs.iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if c.preset == PresetType::Minimal)) {
+                got_minimal = true;
+                break 'scan;
+            }
+        }
+    }
+    assert!(got_minimal, "DashboardOnly mode must remain fully interactive");
+
+    // 3. Clearing keybind capture externally (e.g. ESC in external Wayland overlay) works cleanly
+    dash_rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                let root = root_any.downcast::<FpshudRootView>().unwrap();
+                root.update(cx, |v, _| {
+                    v.request_keybind_capture_for_test(KeybindTarget::ToggleGui);
+                });
+            })
+            .unwrap();
+        FpshudRootView::clear_keybind_capture(cx);
+    });
+    let _ = dash_rt.render_scene_to_rgba(&mut rgba_dash).unwrap();
+    let capture_after = dash_rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                root_any
+                    .downcast::<FpshudRootView>()
+                    .unwrap()
+                    .read(cx)
+                    .active_keybind_capture_snapshot()
+            })
+            .unwrap()
+    });
+    assert_eq!(capture_after, KeybindTarget::None);
+}

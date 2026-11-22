@@ -61,6 +61,7 @@ pub struct InputManager {
     capture_target: KeybindTarget,
     capture_mod_mask: u32,
     capture_mod_evdev: u32,
+    external_overlay_active: bool,
 }
 
 impl Default for InputManager {
@@ -88,6 +89,7 @@ impl InputManager {
             capture_target: KeybindTarget::None,
             capture_mod_mask: 0,
             capture_mod_evdev: 0,
+            external_overlay_active: false,
         }
     }
 
@@ -109,6 +111,7 @@ impl InputManager {
             capture_target: KeybindTarget::None,
             capture_mod_mask: 0,
             capture_mod_evdev: 0,
+            external_overlay_active: false,
         }
     }
 
@@ -206,10 +209,45 @@ impl InputManager {
 
     #[must_use]
     pub fn should_use_x11_grab(&self, gui_open: bool) -> bool {
-        if !gui_open {
+        if !gui_open || self.external_overlay_active {
             return false;
         }
         self.x11_swapchain_active || (!self.wayland_swapchain_active && !self.wayland_display_hint)
+    }
+
+    /// Marks whether `fpshud-ui` owns an isolated compositor overlay surface (e.g. `zwlr_layer_shell_v1`).
+    /// While active, all in-process X11/evdev/subsurface grabs are released so compositor focus stays clean.
+    pub fn set_external_overlay_active(&mut self, active: bool) {
+        self.external_overlay_active = active;
+        if active {
+            self.pending_ungrab = false;
+            self.last_emitted_cursor = None;
+            self.mouse_buttons = [false; 3];
+            if let Some(x11) = &self.x11 {
+                x11.set_grab(false);
+            }
+            if let Some(evdev) = &mut self.evdev {
+                evdev.set_grab(false);
+            }
+            if let Some(wl) = &mut self.wayland {
+                wl.sync_input_shield(false, 1, 1);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_external_overlay_active(&self) -> bool {
+        self.external_overlay_active
+    }
+
+    /// Marks already-held keys (such as `wl_keyboard::enter` keys) as pressed without firing hotkeys.
+    pub fn seed_keys_down(&mut self, codes: &[u32]) {
+        for &code in codes {
+            let idx = code as usize;
+            if idx < self.keys_down.len() {
+                self.keys_down[idx] = true;
+            }
+        }
     }
 
     pub fn start_keybind_capture(&mut self, target: KeybindTarget) {
@@ -359,6 +397,9 @@ impl InputManager {
 
     #[must_use]
     pub fn should_grab_evdev(&self, cfg: &HudConfig) -> bool {
+        if self.external_overlay_active {
+            return false;
+        }
         (cfg.gui_open || self.pending_ungrab) && !self.should_use_x11_grab(true)
     }
 
@@ -366,7 +407,7 @@ impl InputManager {
     /// on Wayland and standard X11 grabs, the native OS cursor stays visible without double cursor.
     #[must_use]
     pub fn should_draw_software_cursor(&self, cfg: &HudConfig) -> bool {
-        if !cfg.gui_open {
+        if !cfg.gui_open || self.external_overlay_active {
             return false;
         }
         let evdev_grabbed = self.evdev.as_ref().is_some_and(EvdevBackend::is_grabbed);
@@ -378,6 +419,16 @@ impl InputManager {
     }
 
     pub fn sync_grab_state(&mut self, cfg: &HudConfig) {
+        if self.external_overlay_active {
+            self.pending_ungrab = false;
+            if let Some(x11) = &self.x11 {
+                x11.set_grab(false);
+            }
+            if let Some(evdev) = &mut self.evdev {
+                evdev.set_grab(false);
+            }
+            return;
+        }
         let any_mouse_down = self.mouse_buttons.iter().any(|&b| b);
         self.pending_ungrab = !cfg.gui_open && any_mouse_down;
 
@@ -425,6 +476,43 @@ impl InputManager {
         let mut ui_events = Vec::new();
         let max_w = width.max(1.0);
         let max_h = height.max(1.0);
+
+        if self.external_overlay_active {
+            // Drain backend queues while external Wayland overlay owns compositor focus so no stale
+            // events replay into the game or HUD when the overlay closes.
+            if let Some(evdev) = &mut self.evdev {
+                for ev in evdev.poll_events() {
+                    if let EvdevEvent::Key { code, down: false } = ev
+                        && (code as usize) < self.keys_down.len()
+                    {
+                        self.keys_down[code as usize] = false;
+                    }
+                }
+            }
+            if let Some(wl) = &mut self.wayland {
+                for ev in wl.poll_events() {
+                    if let WaylandEvent::Key { code, down: false } = ev
+                        && (code as usize) < self.keys_down.len()
+                    {
+                        self.keys_down[code as usize] = false;
+                    }
+                }
+                wl.sync_input_shield(false, max_w as u32, max_h as u32);
+            }
+            if let Some(x11) = &self.x11 {
+                for ev in x11.drain_events() {
+                    if let X11Event::Key { code, down: false } = ev
+                        && (code as usize) < self.keys_down.len()
+                    {
+                        self.keys_down[code as usize] = false;
+                    }
+                }
+            }
+            self.mouse_buttons = [false; 3];
+            self.last_emitted_cursor = None;
+            self.sync_grab_state(cfg);
+            return (actions, ui_events, false);
+        }
 
         if let Some(evdev) = &mut self.evdev {
             for ev in evdev.poll_events() {

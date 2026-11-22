@@ -230,3 +230,58 @@ fn runtime_chunks_ui_input_events_above_256_without_dropping() {
     }
     assert_eq!(chunk_sizes, vec![256, 44]);
 }
+
+#[test]
+fn external_overlay_ipc_disables_grabs_and_debounces_f12_reopen() {
+    let mut rt = fpshud::runtime::LayerRuntime::new_for_test();
+    rt.notify_surface_swapchain(fpshud_input::SurfaceBackendType::X11, 0x1234);
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("ext_overlay.sock");
+    let server = fpshud_ipc::IpcServer::bind(&sock).unwrap();
+    let mut client = fpshud_ipc::IpcClient::connect(&sock).unwrap();
+    client.set_nonblocking(true).unwrap();
+    let conn = server.accept_verified().unwrap();
+    conn.set_nonblocking(true).unwrap();
+    rt.attach_ipc_for_test(conn);
+
+    // Open GUI via F12
+    assert!(rt.test_key_event_triggers_config_sync_once(88 /* KEY_F12 */));
+    assert!(rt.config.gui_open);
+    assert!(rt.input.should_use_x11_grab(true));
+
+    // UI daemon activates external Wayland overlay -> Layer must disable in-process grabs
+    let on_msg = fpshud_ipc::UiToLayerMsg::ExternalOverlayActive(true)
+        .encode()
+        .unwrap();
+    client.send_msg(&on_msg, &[]).unwrap();
+    rt.pump_frame(1280, 720, "VULKAN");
+    assert!(rt.input.is_external_overlay_active());
+    assert!(!rt.input.should_use_x11_grab(true));
+    assert!(!rt.input.should_grab_evdev(&rt.config));
+
+    // UI daemon closes GUI & releases external overlay -> Layer closes GUI and arms debounce
+    let mut closed_cfg = rt.config.clone();
+    closed_cfg.gui_open = false;
+    let off_msg = fpshud_ipc::UiToLayerMsg::ExternalOverlayActive(false)
+        .encode()
+        .unwrap();
+    let cfg_msg = fpshud_ipc::UiToLayerMsg::ConfigUpdated(closed_cfg)
+        .encode()
+        .unwrap();
+    client.send_msg(&off_msg, &[]).unwrap();
+    client.send_msg(&cfg_msg, &[]).unwrap();
+    rt.pump_frame(1280, 720, "VULKAN");
+    assert!(!rt.input.is_external_overlay_active());
+    assert!(!rt.config.gui_open);
+    assert!(rt.is_gui_reopen_debounced());
+
+    // Phantom F12-still-held edge right after focus return must be suppressed by debounce!
+    assert!(!rt.test_key_event_triggers_config_sync_once(88));
+    assert!(!rt.config.gui_open);
+
+    // After debounce expires, intentional F12 re-opens GUI cleanly
+    rt.clear_gui_reopen_debounce_for_test();
+    assert!(!rt.is_gui_reopen_debounced());
+    assert!(rt.test_key_event_triggers_config_sync_once(88));
+    assert!(rt.config.gui_open);
+}

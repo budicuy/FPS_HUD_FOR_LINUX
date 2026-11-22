@@ -74,10 +74,25 @@ pub fn map_preview_point_to_norm(
     (nx, ny)
 }
 
+/// Selects which visual layers `FpshudRootView` paints inside a GPUI offscreen viewport.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UiRenderMode {
+    /// Renders HUD, launch toast, Settings dashboard, and fallback software cursor (X11/headless).
+    #[default]
+    Full,
+    /// Renders only the in-game HUD and launch toast (while Settings dashboard runs in its own Wayland overlay).
+    HudOnly,
+    /// Renders only the interactive Settings dashboard inside the isolated Wayland overlay surface.
+    DashboardOnly,
+}
+
 pub struct FpshudRootView {
     pub(crate) store: UiStore,
     pub(crate) last_applied_seq: u64,
     pub(crate) last_cursor_seq: u64,
+    pub(crate) last_render_mode_seq: u64,
+    pub(crate) last_clear_capture_seq: u64,
+    pub(crate) render_mode: UiRenderMode,
     pub(crate) draw_software_cursor: bool,
     pub(crate) started_at: std::time::Instant,
     pub(crate) preview_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -96,6 +111,9 @@ impl FpshudRootView {
             store,
             last_applied_seq: 0,
             last_cursor_seq: 0,
+            last_render_mode_seq: 0,
+            last_clear_capture_seq: 0,
+            render_mode: UiRenderMode::Full,
             draw_software_cursor: false,
             started_at: std::time::Instant::now(),
             preview_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -111,6 +129,15 @@ impl FpshudRootView {
     #[must_use]
     pub fn software_cursor_enabled(&self) -> bool {
         self.draw_software_cursor
+    }
+
+    #[must_use]
+    pub fn active_keybind_capture_snapshot(&self) -> KeybindTarget {
+        self.store.active_keybind_capture
+    }
+
+    pub fn request_keybind_capture_for_test(&mut self, target: KeybindTarget) {
+        self.store.request_keybind_capture(target);
     }
 
     #[must_use]

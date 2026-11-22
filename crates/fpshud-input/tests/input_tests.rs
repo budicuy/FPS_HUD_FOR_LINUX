@@ -384,3 +384,39 @@ fn x11_fp1616_translation_and_xinput2_button_mapping() {
     assert_eq!(x11_detail_to_button_idx(3), Some(1));
     assert_eq!(x11_detail_to_button_idx(2), Some(2));
 }
+
+#[test]
+fn external_overlay_suppresses_in_process_grabs_and_seeds_held_keys() {
+    let mut mgr = InputManager::new_headless();
+    let mut cfg = HudConfig {
+        gui_open: true,
+        ..HudConfig::default()
+    };
+
+    mgr.notify_x11_swapchain(0x1111);
+    assert!(mgr.should_use_x11_grab(true));
+    mgr.set_external_overlay_active(true);
+    assert!(mgr.is_external_overlay_active());
+    assert!(!mgr.should_use_x11_grab(true));
+    assert!(!mgr.should_draw_software_cursor(&cfg));
+
+    mgr.notify_wayland_swapchain();
+    assert!(!mgr.should_grab_evdev(&cfg));
+
+    // While external overlay owns compositor focus, poll_frame must not forward stale cursor moves
+    mgr.set_cursor_pos(300.0, 200.0);
+    let (actions, ui_evs, grabbed) = mgr.poll_frame(&mut cfg, 1280.0, 720.0);
+    assert!(actions.is_empty());
+    assert!(ui_evs.is_empty());
+    assert!(!grabbed);
+
+    // Seeding held keys (e.g. wl_keyboard::enter carrying F12 while still pressed) prevents bounce
+    mgr.set_external_overlay_active(false);
+    mgr.seed_keys_down(&[88]);
+    assert!(mgr.handle_key_event(88, true, &mut cfg).is_empty());
+    assert!(mgr.handle_key_event(88, false, &mut cfg).is_empty());
+    assert_eq!(
+        mgr.handle_key_event(88, true, &mut cfg),
+        vec![InputAction::ToggleGui]
+    );
+}

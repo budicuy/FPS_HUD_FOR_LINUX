@@ -71,6 +71,8 @@ fn protocol_all_variants_and_corrupt_rejection() {
             capturing: true,
             target: KeybindTarget::ToggleGui,
         },
+        UiToLayerMsg::ExternalOverlayActive(true),
+        UiToLayerMsg::ExternalOverlayActive(false),
     ];
     for msg in &u2l_cases {
         let bytes = msg.encode().expect("encode UiToLayerMsg");

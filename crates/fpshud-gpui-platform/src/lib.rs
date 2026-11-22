@@ -306,4 +306,25 @@ impl OffscreenGpuiRuntime {
         let st = self.window_state.lock();
         st.target.write_to_shm(writer)
     }
+
+    /// Renders the current GPUI scene and copies premultiplied RGBA8888 pixels directly into `out`.
+    pub fn render_scene_to_rgba(&mut self, out: &mut Vec<u8>) -> anyhow::Result<(u32, u32)> {
+        self.platform.drain_tasks();
+        let cb = self.window_state.lock().request_frame_cb.take();
+        if let Some(mut cb) = cb {
+            cb(RequestFrameOptions::default());
+            self.window_state.lock().request_frame_cb = Some(cb);
+        }
+        self.platform.drain_tasks();
+        let st = self.window_state.lock();
+        let rgba = st.target.last_rgba();
+        let expected = (self.width as usize) * (self.height as usize) * 4;
+        out.clear();
+        if rgba.len() == expected {
+            out.extend_from_slice(rgba);
+        } else {
+            out.resize(expected, 0);
+        }
+        Ok((self.width, self.height))
+    }
 }

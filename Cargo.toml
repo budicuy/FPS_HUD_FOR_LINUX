@@ -38,6 +38,9 @@ postcard = { version = "1.1", features = ["use-std"] }
 rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "thread", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
+wayland-client = { version = "0.31", default-features = false }
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 wayland-sys = { version = "0.31", default-features = false, features = ["client", "dlopen"] }
 x11rb = { version = "0.14", features = ["xinput"] }
 

@@ -5,7 +5,7 @@ pub mod hud;
 pub mod state;
 pub mod toast;
 
-pub use dashboard::FpshudRootView;
+pub use dashboard::{FpshudRootView, UiRenderMode};
 pub use state::{SensorFilter, UiStore};
 
 use fpshud_core::HudConfig;
@@ -38,6 +38,19 @@ struct UiSoftwareCursorGlobal {
 
 impl Global for UiSoftwareCursorGlobal {}
 
+struct UiRenderModeGlobal {
+    seq: u64,
+    mode: UiRenderMode,
+}
+
+impl Global for UiRenderModeGlobal {}
+
+struct UiClearCaptureGlobal {
+    seq: u64,
+}
+
+impl Global for UiClearCaptureGlobal {}
+
 pub(crate) fn push_outgoing_global(cx: &mut App, mut msgs: Vec<UiToLayerMsg>) {
     let mut existing = cx
         .try_global::<UiOutgoingQueueGlobal>()
@@ -67,6 +80,27 @@ impl FpshudRootView {
             seq: next_seq,
             enabled,
         });
+        cx.refresh_windows();
+    }
+
+    /// Selects whether this runtime renders `Full`, `HudOnly`, or `DashboardOnly`.
+    pub fn set_render_mode(cx: &mut App, mode: UiRenderMode) {
+        let next_seq = cx
+            .try_global::<UiRenderModeGlobal>()
+            .map_or(1, |g| g.seq + 1);
+        cx.set_global(UiRenderModeGlobal {
+            seq: next_seq,
+            mode,
+        });
+        cx.refresh_windows();
+    }
+
+    /// Clears active keybind capture prompt (e.g. when cancelled via ESC in the external overlay).
+    pub fn clear_keybind_capture(cx: &mut App) {
+        let next_seq = cx
+            .try_global::<UiClearCaptureGlobal>()
+            .map_or(1, |g| g.seq + 1);
+        cx.set_global(UiClearCaptureGlobal { seq: next_seq });
         cx.refresh_windows();
     }
 
@@ -104,9 +138,24 @@ impl Render for FpshudRootView {
             self.draw_software_cursor = sw.enabled;
             self.last_cursor_seq = sw.seq;
         }
-        if !self.store.config.gui_open {
+        if let Some(rm) = cx.try_global::<UiRenderModeGlobal>()
+            && rm.seq > self.last_render_mode_seq
+        {
+            self.render_mode = rm.mode;
+            self.last_render_mode_seq = rm.seq;
+        }
+        if let Some(cc) = cx.try_global::<UiClearCaptureGlobal>()
+            && cc.seq > self.last_clear_capture_seq
+        {
+            self.store.active_keybind_capture = fpshud_input::KeybindTarget::None;
+            self.last_clear_capture_seq = cc.seq;
+        }
+        if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
             self.dragging_gui = false;
             self.dragging_preview = false;
+            if self.render_mode == UiRenderMode::HudOnly {
+                self.dashboard_bounds.set(gpui::Bounds::default());
+            }
         }
         self.store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
         let pending = self.store.take_outgoing();
@@ -156,7 +205,10 @@ impl Render for FpshudRootView {
                 }),
             );
 
-        if let Some(hud_el) = hud::render_hud(&self.store, viewport_w, viewport_h) {
+        let show_hud = self.render_mode != UiRenderMode::DashboardOnly;
+        let show_dashboard = self.render_mode != UiRenderMode::HudOnly;
+
+        if show_hud && let Some(hud_el) = hud::render_hud(&self.store, viewport_w, viewport_h) {
             root = root.child(
                 div()
                     .absolute()
@@ -166,7 +218,7 @@ impl Render for FpshudRootView {
             );
         }
 
-        if let Some(toast_el) = toast::render_launch_toast(&self.store) {
+        if show_hud && let Some(toast_el) = toast::render_launch_toast(&self.store) {
             root = root.child(
                 div()
                     .absolute()
@@ -176,7 +228,7 @@ impl Render for FpshudRootView {
             );
         }
 
-        if let Some(dash_el) = self.render_dashboard(viewport_w, cx) {
+        if show_dashboard && let Some(dash_el) = self.render_dashboard(viewport_w, cx) {
             let (dash_x, dash_y) = self.resolved_dashboard_position(viewport_w, viewport_h);
             root = root.child(
                 div()
@@ -187,7 +239,10 @@ impl Render for FpshudRootView {
             );
         }
 
-        if self.store.config.gui_open && self.draw_software_cursor {
+        if self.render_mode == UiRenderMode::Full
+            && self.store.config.gui_open
+            && self.draw_software_cursor
+        {
             let cur = window.mouse_position();
             let cursor_x = f32::from(cur.x).clamp(0.0, (viewport_w - 6.0).max(0.0));
             let cursor_y = f32::from(cur.y).clamp(0.0, (viewport_h - 6.0).max(0.0));

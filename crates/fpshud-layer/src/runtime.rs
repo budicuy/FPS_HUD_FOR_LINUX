@@ -118,8 +118,11 @@ pub struct LayerRuntime {
     last_software_cursor: bool,
     last_telemetry_push: Instant,
     next_input_poll: Instant,
+    gui_reopen_debounce_until: Option<Instant>,
     socket_path: Option<PathBuf>,
 }
+
+const GUI_REOPEN_DEBOUNCE: Duration = Duration::from_millis(350);
 
 static GLOBAL_RUNTIME: OnceLock<Mutex<LayerRuntime>> = OnceLock::new();
 
@@ -152,6 +155,7 @@ impl LayerRuntime {
                 last_software_cursor: false,
                 last_telemetry_push: Instant::now() - Duration::from_secs(1),
                 next_input_poll: Instant::now(),
+                gui_reopen_debounce_until: None,
                 socket_path: None,
             })
         })
@@ -180,7 +184,32 @@ impl LayerRuntime {
             last_software_cursor: false,
             last_telemetry_push: Instant::now(),
             next_input_poll: Instant::now(),
+            gui_reopen_debounce_until: None,
             socket_path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_gui_reopen_debounced(&self) -> bool {
+        self.gui_reopen_debounce_until
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    pub fn clear_gui_reopen_debounce_for_test(&mut self) {
+        self.gui_reopen_debounce_until = None;
+    }
+
+    fn arm_gui_reopen_debounce(&mut self) {
+        self.gui_reopen_debounce_until = Some(Instant::now() + GUI_REOPEN_DEBOUNCE);
+    }
+
+    fn suppress_debounced_gui_reopen(&mut self, prev_gui_open: bool, actions: &[InputAction]) {
+        if !prev_gui_open
+            && self.config.gui_open
+            && actions.contains(&InputAction::ToggleGui)
+            && self.is_gui_reopen_debounced()
+        {
+            self.config.gui_open = false;
         }
     }
 
@@ -264,6 +293,7 @@ impl LayerRuntime {
         if conn.send_msg(&bytes, &[]).is_err() {
             self.ipc_conn = None;
             self.init_sent = false;
+            self.input.set_external_overlay_active(false);
             return false;
         }
         true
@@ -303,6 +333,7 @@ impl LayerRuntime {
                 Ok((0, _)) => {
                     self.ipc_conn = None;
                     self.init_sent = false;
+                    self.input.set_external_overlay_active(false);
                     break;
                 }
                 Ok((n, fds)) => {
@@ -319,6 +350,7 @@ impl LayerRuntime {
                 Err(_) => {
                     self.ipc_conn = None;
                     self.init_sent = false;
+                    self.input.set_external_overlay_active(false);
                     break;
                 }
             }
@@ -334,6 +366,9 @@ impl LayerRuntime {
                 }
             }
             UiToLayerMsg::ConfigUpdated(cfg) => {
+                if self.config.gui_open && !cfg.gui_open {
+                    self.arm_gui_reopen_debounce();
+                }
                 self.config = cfg;
                 let _ = save_config_to_disk(&self.config);
             }
@@ -364,6 +399,12 @@ impl LayerRuntime {
                     self.input.start_keybind_capture(target);
                 } else {
                     self.input.cancel_keybind_capture();
+                }
+            }
+            UiToLayerMsg::ExternalOverlayActive(active) => {
+                self.input.set_external_overlay_active(active);
+                if !active {
+                    self.arm_gui_reopen_debounce();
                 }
             }
         }
@@ -422,6 +463,7 @@ impl LayerRuntime {
             let prev_config = self.config.clone();
             let (actions, ui_events, _grabbed) =
                 self.input.poll_frame(&mut self.config, w as f32, h as f32);
+            self.suppress_debounced_gui_reopen(prev_config.gui_open, &actions);
             self.handle_side_effect_actions(&actions);
             if self.config != prev_config {
                 let _ = self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
@@ -468,6 +510,7 @@ impl LayerRuntime {
         let prev = self.config.clone();
         let actions = self.input.handle_key_event(key_code, true, &mut self.config);
         let _ = self.input.handle_key_event(key_code, false, &mut self.config);
+        self.suppress_debounced_gui_reopen(prev.gui_open, &actions);
         self.handle_side_effect_actions(&actions);
         if self.config != prev {
             return self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
