@@ -251,9 +251,23 @@ fn gl_overlay_texture_unit_preserves_non_zero_active_unit() {
 
 #[test]
 fn opengl_renderer_detects_context_change_to_avoid_stale_handles() {
-    use fpshud::opengl::blit::should_reset_gl_renderer;
+    use fpshud::opengl::blit::{GlContextCache, should_reset_gl_renderer};
 
     assert!(!should_reset_gl_renderer(0x1000, 0x1000));
     assert!(should_reset_gl_renderer(0x1000, 0x2000));
     assert!(!should_reset_gl_renderer(0, 0));
+
+    // Multi-context alternating swaps must retain independent entries without evicting each other
+    let mut cache = GlContextCache::<u32>::new(4);
+    *cache.entry_or_default(0x1000) = 11;
+    *cache.entry_or_default(0x2000) = 22;
+    assert_eq!(*cache.entry_or_default(0x1000), 11);
+    assert_eq!(*cache.entry_or_default(0x2000), 22);
+    assert_eq!(cache.len(), 2);
+
+    // Bounded capacity prevents unbounded growth if a game repeatedly recreates contexts
+    for ctx in 1..=6 {
+        *cache.entry_or_default(0x3000 + ctx) = ctx as u32;
+    }
+    assert!(cache.len() <= 4);
 }

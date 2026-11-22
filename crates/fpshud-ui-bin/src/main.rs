@@ -629,15 +629,23 @@ impl DaemonState {
                 (&mut self.overlay_portal, &mut self.overlay_runtime)
         {
             let (rw, rh) = ort.render_scene_to_rgba(&mut self.overlay_rgba_scratch)?;
-            if !portal.present_rgba(rw, rh, &self.overlay_rgba_scratch)? {
-                self.overlay_dirty.mark_dirty();
-            }
-            had_activity = true;
+            let presented = portal.present_rgba(rw, rh, &self.overlay_rgba_scratch)?;
             let outgoing = ort.update_app(FpshudRootView::take_outgoing);
             self.forward_overlay_outgoing(conn, outgoing)?;
+            if self.handle_overlay_present_outcome(presented) {
+                had_activity = true;
+            }
         }
 
         Ok(had_activity)
+    }
+
+    fn handle_overlay_present_outcome(&mut self, presented: bool) -> bool {
+        if !presented {
+            self.overlay_dirty.mark_dirty();
+            return false;
+        }
+        true
     }
 
     fn check_toast_expiry(&mut self) {
@@ -1002,5 +1010,14 @@ mod tests {
         assert_eq!(pick_free_buffer_slot(&[true, false, false]), Some(1));
         assert_eq!(pick_free_buffer_slot(&[true, true, false]), Some(2));
         assert_eq!(pick_free_buffer_slot(&[true, true, true]), None);
+    }
+
+    #[test]
+    fn overlay_present_backpressure_rearms_dirty_without_busy_spin() {
+        let mut st = crate::DaemonState::new();
+        assert!(!st.handle_overlay_present_outcome(false));
+        assert!(st.overlay_dirty.take_should_render());
+        assert!(st.handle_overlay_present_outcome(true));
+        assert!(!st.overlay_dirty.take_should_render());
     }
 }

@@ -2,6 +2,7 @@ use crate::runtime::LayerRuntime;
 use fpshud_screenshot::{PixelFormat, RawFrameCapture};
 use glow::HasContext;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
 use std::num::NonZeroU32;
 use std::sync::{Mutex, OnceLock};
@@ -252,8 +253,42 @@ unsafe fn query_current_gl_context(
     (unsafe { get_ctx() }) as usize
 }
 
+/// Bounded per-context cache so alternating live OpenGL contexts retain their own handles
+/// without leaking or recompiling shaders on every context switch.
+pub struct GlContextCache<T> {
+    map: HashMap<usize, T>,
+    max_entries: usize,
+}
+
+impl<T: Default> GlContextCache<T> {
+    #[must_use]
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn entry_or_default(&mut self, ctx_id: usize) -> &mut T {
+        if !self.map.contains_key(&ctx_id) && self.map.len() >= self.max_entries {
+            self.map.clear();
+        }
+        self.map.entry(ctx_id).or_default()
+    }
+}
+
+#[derive(Default)]
 struct GlOverlayRenderer {
-    context_id: usize,
     program: Option<glow::Program>,
     vao: Option<glow::VertexArray>,
     texture: Option<glow::Texture>,
@@ -264,7 +299,7 @@ struct GlOverlayRenderer {
     initialized: bool,
 }
 
-static GL_RENDERER: OnceLock<Mutex<GlOverlayRenderer>> = OnceLock::new();
+static GL_RENDERERS: OnceLock<Mutex<GlContextCache<GlOverlayRenderer>>> = OnceLock::new();
 
 thread_local! {
     static THREAD_GL_CTX: RefCell<Option<(&'static str, glow::Context)>> = const { RefCell::new(None) };
@@ -549,35 +584,11 @@ pub(crate) unsafe fn on_swap_buffers(
             let prev_cull = GlStateOps::is_enabled(gl, glow::CULL_FACE);
 
             let cur_ctx = unsafe { query_current_gl_context(api_name, proc_lookup) };
-            let renderer = GL_RENDERER.get_or_init(|| {
-                Mutex::new(GlOverlayRenderer {
-                    context_id: cur_ctx,
-                    program: None,
-                    vao: None,
-                    texture: None,
-                    sampler_loc: None,
-                    tex_w: 0,
-                    tex_h: 0,
-                    uploaded_generation: 0,
-                    initialized: false,
-                })
-            });
+            let renderers = GL_RENDERERS.get_or_init(|| Mutex::new(GlContextCache::new(8)));
 
             with_overlay_texture_unit(gl, || {
-                if let Ok(mut gr) = renderer.lock() {
-                    if should_reset_gl_renderer(gr.context_id, cur_ctx) {
-                        gr.program = None;
-                        gr.vao = None;
-                        gr.texture = None;
-                        gr.sampler_loc = None;
-                        gr.tex_w = 0;
-                        gr.tex_h = 0;
-                        gr.uploaded_generation = 0;
-                        gr.initialized = false;
-                    }
-                    if cur_ctx != 0 {
-                        gr.context_id = cur_ctx;
-                    }
+                if let Ok(mut cache) = renderers.lock() {
+                    let gr = cache.entry_or_default(cur_ctx);
                     if gr.ensure_initialized(gl) {
                     GlStateOps::bind_framebuffer(gl, 0);
                     gl.bind_unpack_buffer(0);
