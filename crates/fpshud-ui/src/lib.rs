@@ -1,3 +1,4 @@
+pub mod cpu_canvas;
 pub mod cpu_hud;
 pub mod dashboard;
 pub mod hud;
