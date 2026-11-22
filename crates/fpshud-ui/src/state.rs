@@ -707,6 +707,11 @@ impl UiStore {
         self.emit_config_updated();
     }
 
+    pub fn set_screenshot_quality(&mut self, quality: fpshud_core::ScreenshotQuality) {
+        self.config.screenshot_quality = quality;
+        self.emit_config_updated();
+    }
+
     pub fn save_configuration(&mut self) {
         let msg = if save_config_to_disk(&self.config) {
             "Configuration saved.".to_string()

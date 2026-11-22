@@ -166,6 +166,45 @@ impl MetricType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ScreenshotQuality {
+    ExtraHigh = 0,
+    #[default]
+    High = 1,
+    Medium = 2,
+    Low = 3,
+    ExtraLow = 4,
+}
+
+impl ScreenshotQuality {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::ExtraHigh,
+            2 => Self::Medium,
+            3 => Self::Low,
+            4 => Self::ExtraLow,
+            _ => Self::High,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::ExtraHigh => "Extra High",
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
+            Self::ExtraLow => "Extra Low",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresetType {
     Minimal = 0,
@@ -398,6 +437,7 @@ pub struct HudConfig {
 
     // Clean Game vs With HUD screenshot capture
     pub screenshot_with_hud: bool,
+    pub screenshot_quality: ScreenshotQuality,
     pub save_folder: String,
 
     // Typography & Scale
@@ -447,6 +487,7 @@ impl Default for HudConfig {
             bind_benchmark: Keybind::new(0, 67),
             bind_screenshot: Keybind::new(0, 68),
             screenshot_with_hud: false,
+            screenshot_quality: ScreenshotQuality::High,
             save_folder: String::new(),
             gui_scale: 1.0,
             font_size_px: 20.0,
@@ -817,6 +858,10 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
                 cfg.screenshot_with_hud = parse_i32_or(val, 0) != 0;
                 parsed_any = true;
             }
+            "screenshot_quality" => {
+                cfg.screenshot_quality = ScreenshotQuality::from_i32(parse_i32_or(val, 1));
+                parsed_any = true;
+            }
             "save_folder" => {
                 cfg.save_folder = sanitize_ini_str(val);
                 parsed_any = true;
@@ -913,6 +958,7 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
          bind_benchmark={},{}\n\
          bind_screenshot={},{}\n\
          screenshot_with_hud={}\n\
+         screenshot_quality={}\n\
          save_folder={}\n\
          metrics={}\n",
         cfg.preset.as_str(),
@@ -957,6 +1003,7 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
         cfg.bind_screenshot.mod_key,
         cfg.bind_screenshot.main_key,
         i32::from(cfg.screenshot_with_hud),
+        cfg.screenshot_quality.as_i32(),
         sanitize_ini_str(&cfg.save_folder),
         metrics_csv.join(","),
     );

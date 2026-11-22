@@ -14,7 +14,7 @@ use crate::state::{
 };
 use fpshud_core::{
     ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, LayoutPosition, MetricType,
-    PresetType,
+    PresetType, ScreenshotQuality,
 };
 use fpshud_input::{KeybindTarget, UiInputEvent};
 use fpshud_ipc::UiToLayerMsg;
@@ -38,10 +38,11 @@ pub enum DropdownId {
     BgStyle = 6,
     BgOpacity = 7,
     BorderOpacity = 8,
+    ScreenshotQuality = 9,
 }
 
 impl DropdownId {
-    pub const COUNT: usize = 9;
+    pub const COUNT: usize = 10;
 
     #[must_use]
     pub const fn index(self) -> usize {
@@ -226,6 +227,7 @@ enum HitAction {
     TriggerOpenSaveFolder,
     TriggerPickScreenshotFolder,
     SetScreenshotMode(bool),
+    SelectScreenshotQuality(ScreenshotQuality),
     ResetSettings,
     CaptureKeybind(KeybindTarget),
 }
@@ -609,6 +611,10 @@ impl CpuDashboard {
             HitAction::TriggerOpenSaveFolder => self.store.trigger_open_save_folder(),
             HitAction::TriggerPickScreenshotFolder => self.store.trigger_pick_screenshot_folder(),
             HitAction::SetScreenshotMode(with_hud) => self.store.set_screenshot_mode(with_hud),
+            HitAction::SelectScreenshotQuality(q) => {
+                self.store.set_screenshot_quality(q);
+                self.open_dropdown = None;
+            }
             HitAction::ResetSettings => {
                 self.open_dropdown = None;
                 self.store.reset_settings();
@@ -1580,6 +1586,16 @@ impl CpuDashboard {
         );
         y += 28.0;
 
+        self.paint_dropdown_row(
+            canvas,
+            rasterizer,
+            Rect::new(ix, y, iw, 21.0),
+            "Quality",
+            self.store.config.screenshot_quality.display_name(),
+            DropdownId::ScreenshotQuality,
+        );
+        y += 26.0;
+
         self.paint_button(
             canvas,
             rasterizer,
@@ -1785,6 +1801,26 @@ impl CpuDashboard {
                         )
                     })
                     .collect(),
+            ),
+            DropdownId::ScreenshotQuality => (
+                156.0,
+                1,
+                [
+                    ScreenshotQuality::ExtraHigh,
+                    ScreenshotQuality::High,
+                    ScreenshotQuality::Medium,
+                    ScreenshotQuality::Low,
+                    ScreenshotQuality::ExtraLow,
+                ]
+                .into_iter()
+                .map(|q| {
+                    (
+                        q.display_name().to_string(),
+                        cfg.screenshot_quality == q,
+                        HitAction::SelectScreenshotQuality(q),
+                    )
+                })
+                .collect(),
             ),
         };
 

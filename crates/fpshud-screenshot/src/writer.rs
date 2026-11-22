@@ -1,3 +1,4 @@
+use fpshud_core::ScreenshotQuality;
 use fpshud_core::paths::{get_default_screenshot_dir, sanitize_filename_prefix};
 use rustix::fs::{Mode, OFlags, open as rustix_open};
 use std::fs::{self, File};
@@ -46,6 +47,15 @@ pub fn generate_screenshot_path(dir: &Path, prefix: &str) -> PathBuf {
 
 /// Converts BGRA/flipped rows into tightly packed RGBA8 and writes PNG with `O_NOFOLLOW`.
 pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()> {
+    write_png_with_quality(path, frame, ScreenshotQuality::High)
+}
+
+/// Writes a normalized 100% native-resolution PNG to `path` using the requested quality tier.
+pub fn write_png_with_quality(
+    path: &Path,
+    frame: &RawFrameCapture,
+    quality: ScreenshotQuality,
+) -> io::Result<()> {
     if frame.width == 0 || frame.height == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -129,6 +139,33 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
         }
     }
 
+    let pixel_count = (frame.width as usize).saturating_mul(frame.height as usize);
+    let mut rgb = Vec::with_capacity(pixel_count.saturating_mul(3));
+
+    for px in normalized.as_chunks::<4>().0 {
+        let (r, g, b) = match quality {
+            ScreenshotQuality::ExtraHigh | ScreenshotQuality::High => (px[0], px[1], px[2]),
+            ScreenshotQuality::Medium => (
+                (px[0] & 0xFC) | (px[0] >> 6),
+                (px[1] & 0xFC) | (px[1] >> 6),
+                (px[2] & 0xFC) | (px[2] >> 6),
+            ),
+            ScreenshotQuality::Low => (
+                (px[0] & 0xF8) | (px[0] >> 5),
+                (px[1] & 0xF8) | (px[1] >> 5),
+                (px[2] & 0xF8) | (px[2] >> 5),
+            ),
+            ScreenshotQuality::ExtraLow => (
+                (px[0] & 0xF0) | (px[0] >> 4),
+                (px[1] & 0xF0) | (px[1] >> 4),
+                (px[2] & 0xF0) | (px[2] >> 4),
+            ),
+        };
+        rgb.push(r);
+        rgb.push(g);
+        rgb.push(b);
+    }
+
     let fd = rustix_open(
         path,
         OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -139,11 +176,14 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
 
     let writer = BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, frame.width, frame.height);
-    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
+    if quality == ScreenshotQuality::ExtraHigh {
+        encoder.set_compression(png::Compression::NoCompression);
+    }
     let mut png_writer = encoder.write_header().map_err(io::Error::other)?;
     png_writer
-        .write_image_data(&normalized)
+        .write_image_data(&rgb)
         .map_err(io::Error::other)?;
     png_writer.finish().map_err(io::Error::other)?;
     Ok(())
@@ -151,7 +191,7 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
 
 /// Bounded asynchronous background encoder keeping the game render thread lock-free.
 pub struct ScreenshotWorker {
-    tx: Option<SyncSender<(RawFrameCapture, Option<PathBuf>)>>,
+    tx: Option<SyncSender<(RawFrameCapture, Option<PathBuf>, ScreenshotQuality)>>,
     saved_rx: Mutex<Receiver<String>>,
     handle: Option<JoinHandle<()>>,
 }
@@ -159,7 +199,7 @@ pub struct ScreenshotWorker {
 impl ScreenshotWorker {
     #[must_use]
     pub fn new(save_dir: PathBuf) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<(RawFrameCapture, Option<PathBuf>)>(2);
+        let (tx, rx) = mpsc::sync_channel::<(RawFrameCapture, Option<PathBuf>, ScreenshotQuality)>(2);
         let (saved_tx, saved_rx) = mpsc::channel::<String>();
         let default_dir = if save_dir.as_os_str().is_empty() {
             get_default_screenshot_dir()
@@ -169,12 +209,12 @@ impl ScreenshotWorker {
         let handle = thread::Builder::new()
             .name("fpshud_shot".to_string())
             .spawn(move || {
-                while let Ok((frame, override_dir)) = rx.recv() {
+                while let Ok((frame, override_dir, quality)) = rx.recv() {
                     let dir = override_dir
                         .filter(|p| !p.as_os_str().is_empty())
                         .unwrap_or_else(|| default_dir.clone());
                     let target = generate_screenshot_path(&dir, "FPSHUD");
-                    if write_png_to_path(&target, &frame).is_ok() {
+                    if write_png_with_quality(&target, &frame, quality).is_ok() {
                         let label = target
                             .file_name()
                             .and_then(|s| s.to_str())
@@ -194,12 +234,17 @@ impl ScreenshotWorker {
     }
 
     pub fn submit(&self, frame: RawFrameCapture) {
-        self.submit_to(frame, None);
+        self.submit_to(frame, None, ScreenshotQuality::High);
     }
 
-    pub fn submit_to(&self, frame: RawFrameCapture, save_dir: Option<PathBuf>) {
+    pub fn submit_to(
+        &self,
+        frame: RawFrameCapture,
+        save_dir: Option<PathBuf>,
+        quality: ScreenshotQuality,
+    ) {
         if let Some(tx) = &self.tx {
-            let _ = tx.try_send((frame, save_dir));
+            let _ = tx.try_send((frame, save_dir, quality));
         }
     }
 

@@ -363,6 +363,7 @@ impl LayerRuntime {
                 pixels,
             },
             Some(self.config.resolved_screenshot_dir()),
+            self.config.screenshot_quality,
         );
     }
 

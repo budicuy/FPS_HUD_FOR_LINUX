@@ -1,4 +1,8 @@
-use fpshud_screenshot::{generate_screenshot_path, write_png_to_path, PixelFormat, RawFrameCapture, ScreenshotWorker};
+use fpshud_core::ScreenshotQuality;
+use fpshud_screenshot::{
+    PixelFormat, RawFrameCapture, ScreenshotWorker, generate_screenshot_path, write_png_to_path,
+    write_png_with_quality,
+};
 use std::io::BufReader;
 use std::os::unix::fs::symlink;
 
@@ -22,8 +26,8 @@ fn pure_rust_png_encodes_bgra_and_flips_y() {
     let mut reader = decoder.read_info().unwrap();
     let mut buf = vec![0; reader.output_buffer_size().unwrap()];
     reader.next_frame(&mut buf).unwrap();
-    assert_eq!(&buf[0..4], &[255, 0, 0, 255]);
-    assert_eq!(&buf[8..12], &[0, 0, 255, 255]);
+    assert_eq!(&buf[0..3], &[255, 0, 0]);
+    assert_eq!(&buf[6..9], &[0, 0, 255]);
 }
 
 #[test]
@@ -44,7 +48,7 @@ fn rgba_passthrough_odd_height_error_guard_and_worker_async_capture() {
     let mut r0 = dec0.read_info().unwrap();
     let mut px0 = vec![0; r0.output_buffer_size().unwrap()];
     r0.next_frame(&mut px0).unwrap();
-    assert_eq!(px0, vec![11, 22, 33, 255, 44, 55, 66, 255]);
+    assert_eq!(px0, vec![11, 22, 33, 44, 55, 66]);
 
     // 2. Rgba8 + flip_y=true pada odd height=3
     let rgba_out = dir.path().join("rgba_flip.png");
@@ -60,8 +64,8 @@ fn rgba_passthrough_odd_height_error_guard_and_worker_async_capture() {
     let mut r = dec.read_info().unwrap();
     let mut px = vec![0; r.output_buffer_size().unwrap()];
     r.next_frame(&mut px).unwrap();
-    assert_eq!(&px[0..4], &[70, 80, 90, 255]);
-    assert_eq!(&px[4..8], &[40, 50, 60, 255]);
+    assert_eq!(&px[0..3], &[70, 80, 90]);
+    assert_eq!(&px[3..6], &[40, 50, 60]);
 
     // 3. Panjang buffer salah & target symlink ditolak tanpa panic
     let bad_len = RawFrameCapture {
@@ -95,4 +99,52 @@ fn rgba_passthrough_odd_height_error_guard_and_worker_async_capture() {
         .filter(|e| e.as_ref().unwrap().path().extension() == Some("png".as_ref()))
         .count();
     assert!(png_count >= 1);
+}
+
+#[test]
+fn five_quality_tiers_produce_valid_pngs_with_uncompressed_extra_high() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (128_u32, 128_u32);
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    let mut seed: u32 = 0x1234_5678;
+    for y in 0..h {
+        for x in 0..w {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (seed >> 28) as u8;
+            let r = (((x / 4) * 17 + (y / 4) * 11) % 240) as u8 + noise;
+            let g = (((x / 4) * 9 + (y / 4) * 23) % 240) as u8 + noise;
+            let b = (((x / 4) * 13 + (y / 4) * 7) % 240) as u8 + noise;
+            pixels.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    let frame = RawFrameCapture {
+        width: w,
+        height: h,
+        format: PixelFormat::Rgba8,
+        flip_y: false,
+        pixels,
+    };
+
+    let mut sizes = Vec::new();
+    for (idx, q) in [
+        ScreenshotQuality::ExtraHigh,
+        ScreenshotQuality::High,
+        ScreenshotQuality::Medium,
+        ScreenshotQuality::Low,
+        ScreenshotQuality::ExtraLow,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = dir.path().join(format!("q_{idx}.png"));
+        write_png_with_quality(&out, &frame, q).unwrap();
+        let meta = std::fs::metadata(&out).unwrap();
+        sizes.push(meta.len());
+        let dec = png::Decoder::new(BufReader::new(std::fs::File::open(&out).unwrap()));
+        let info = dec.read_info().unwrap().info().clone();
+        assert_eq!((info.width, info.height), (w, h));
+    }
+
+    assert!(sizes[0] > sizes[1], "ExtraHigh ({}) > High ({})", sizes[0], sizes[1]);
+    assert!(sizes[4] < sizes[1], "ExtraLow ({}) < High ({})", sizes[4], sizes[1]);
 }
