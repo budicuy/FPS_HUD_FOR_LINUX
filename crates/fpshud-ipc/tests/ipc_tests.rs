@@ -54,6 +54,8 @@ fn protocol_all_variants_and_corrupt_rejection() {
         UiToLayerMsg::Ready,
         UiToLayerMsg::FrameReady(ShmSlotMeta {
             slot_index: 1,
+            dst_x: 0,
+            dst_y: 0,
             width: 1920,
             height: 1080,
             stride: 7680,
@@ -248,4 +250,50 @@ fn shm_seqlock_rejects_odd_in_progress_sequence_and_read_latest_into_reuses_buff
     raw_file.write_all_at(&3_u64.to_ne_bytes(), 48).unwrap();
     assert!(reader.read_latest().is_none());
     assert!(reader.read_latest_into(&mut dst).is_none());
+}
+
+#[test]
+fn protocol_frame_tick_active_gpu_benchmark_loads_and_positioned_shm_slot() {
+    use fpshud_ipc::protocol::FrameTickData;
+
+    let tick = FrameTickData {
+        fps: 120.0,
+        fps_avg: 118.5,
+        fps_1pct_low: 95.0,
+        fps_01pct_low: 88.0,
+        frametime_ms: 8.33,
+        frametime_history: vec![8.3, 8.4, 8.2],
+        render_api: "VULKAN".to_string(),
+        benchmark_active: true,
+        benchmark_elapsed_sec: 4.5,
+        last_benchmark: None,
+    };
+    let msg = LayerToUiMsg::FrameTick(Box::new(tick));
+    let enc = msg.encode().unwrap();
+    assert_eq!(LayerToUiMsg::decode(&enc).unwrap(), msg);
+
+    let gpu_msg = LayerToUiMsg::ActiveGpu {
+        vendor_id: 0x10de,
+        device_id: 0x21c4,
+    };
+    assert_eq!(
+        LayerToUiMsg::decode(&gpu_msg.encode().unwrap()).unwrap(),
+        gpu_msg
+    );
+
+    let loads = UiToLayerMsg::BenchmarkLoads {
+        cpu_load: 42.5,
+        gpu_load: 87.0,
+    };
+    assert_eq!(
+        UiToLayerMsg::decode(&loads.encode().unwrap()).unwrap(),
+        loads
+    );
+
+    let mut writer = ShmRingWriter::new(16, 16).unwrap();
+    let meta = writer.write_next_slot_at(24, 18, 4, 4, &[9_u8; 64]).unwrap();
+    assert_eq!(
+        (meta.dst_x, meta.dst_y, meta.width, meta.height),
+        (24, 18, 4, 4)
+    );
 }

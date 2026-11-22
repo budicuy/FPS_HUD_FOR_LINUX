@@ -1,4 +1,4 @@
-use fpshud_analytics::frametime::GRAPH_HISTORY_SIZE;
+use fpshud_analytics::{BenchmarkSummary, frametime::GRAPH_HISTORY_SIZE};
 use fpshud_core::HudConfig;
 use fpshud_input::{KeybindTarget, UiInputEvent};
 use fpshud_telemetry::{MAX_CPU_CORES, TelemetrySnapshot};
@@ -21,12 +21,29 @@ pub struct ShmSlotMeta {
     pub modifier: u64,
     pub generation: u64,
     pub slot_index: u32,
+    pub dst_x: i32,
+    pub dst_y: i32,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
     pub fourcc: u32,
     pub byte_len: u32,
     pub backend: FrameBackendKind,
+}
+
+/// Lightweight per-tick FPS/frametime summary sent from `libfpshud.so` to `fpshud-ui`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameTickData {
+    pub fps: f32,
+    pub fps_avg: f32,
+    pub fps_1pct_low: f32,
+    pub fps_01pct_low: f32,
+    pub frametime_ms: f32,
+    pub frametime_history: Vec<f32>,
+    pub render_api: String,
+    pub benchmark_active: bool,
+    pub benchmark_elapsed_sec: f32,
+    pub last_benchmark: Option<BenchmarkSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +55,11 @@ pub enum LayerToUiMsg {
         config: HudConfig,
     },
     TelemetryUpdate(Box<TelemetrySnapshot>),
+    FrameTick(Box<FrameTickData>),
+    ActiveGpu {
+        vendor_id: u32,
+        device_id: u32,
+    },
     ConfigSync(HudConfig),
     InputEvents(Vec<UiInputEvent>),
     Resize {
@@ -55,6 +77,7 @@ pub enum UiToLayerMsg {
     FrameReady(ShmSlotMeta),
     ConfigUpdated(HudConfig),
     BenchmarkToggle,
+    BenchmarkLoads { cpu_load: f32, gpu_load: f32 },
     ScreenshotRequest { with_hud: bool },
     OpenSaveFolder,
     KeybindCaptureState { capturing: bool, target: KeybindTarget },
@@ -114,6 +137,9 @@ fn validate_layer_msg(msg: &LayerToUiMsg) -> io::Result<()> {
             validate_config(config)
         }
         LayerToUiMsg::TelemetryUpdate(snap) => validate_snapshot(snap),
+        LayerToUiMsg::FrameTick(tick) if tick.frametime_history.len() > GRAPH_HISTORY_SIZE => {
+            Err(invalid_data("frame_tick frametime_history overflow"))
+        }
         LayerToUiMsg::InputEvents(events) if events.len() > MAX_INPUT_EVENTS => {
             Err(invalid_data("input event batch overflow"))
         }

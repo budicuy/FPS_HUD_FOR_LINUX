@@ -119,6 +119,17 @@ impl ShmRingWriter {
         height: u32,
         rgba: &[u8],
     ) -> io::Result<ShmSlotMeta> {
+        self.write_next_slot_at(0, 0, width, height, rgba)
+    }
+
+    pub fn write_next_slot_at(
+        &mut self,
+        dst_x: i32,
+        dst_y: i32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> io::Result<ShmSlotMeta> {
         let byte_len_u32 = u32::try_from(rgba.len()).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "frame payload exceeds u32::MAX")
         })?;
@@ -179,6 +190,8 @@ impl ShmRingWriter {
             modifier: 0,
             generation,
             slot_index: next_slot,
+            dst_x,
+            dst_y,
             width,
             height,
             stride: width.saturating_mul(4),
