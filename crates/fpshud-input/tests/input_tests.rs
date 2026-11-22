@@ -286,22 +286,7 @@ fn x11_button_mask_decodes_left_right_middle_correctly() {
 }
 
 #[test]
-fn wayland_backend_translates_pointer_events_and_centers_cursor_on_gui_open() {
-    use fpshud_input::wayland::{WaylandBackend, WaylandEvent, map_wl_button};
-
-    assert_eq!(map_wl_button(0x110), Some(0)); // BTN_LEFT
-    assert_eq!(map_wl_button(0x111), Some(1)); // BTN_RIGHT
-    assert_eq!(map_wl_button(0x112), Some(2)); // BTN_MIDDLE
-    assert_eq!(map_wl_button(0x120), None);
-
-    let mut wl = WaylandBackend::new_for_test();
-    wl.push_test_event(WaylandEvent::CursorPos { x: 320.5, y: 180.25 });
-    wl.push_test_event(WaylandEvent::MouseBtn { button: 0, down: true });
-    wl.push_test_event(WaylandEvent::MouseBtn { button: 0, down: false });
-    let drained = wl.poll_events();
-    assert_eq!(drained.len(), 3);
-
-    // Saat GUI terbuka pertama kali tanpa gerakan mouse, kursor harus otomatis ditengah layar
+fn gui_open_centers_cursor_and_wayland_hint_disables_x11_grab() {
     let mut mgr = InputManager::new_headless();
     let mut cfg = HudConfig {
         gui_open: true,
@@ -312,18 +297,14 @@ fn wayland_backend_translates_pointer_events_and_centers_cursor_on_gui_open() {
         e,
         UiInputEvent::MouseMove { x, y } if (*x - 640.0).abs() < 0.1 && (*y - 360.0).abs() < 0.1
     )));
-}
 
-#[test]
-fn wayland_runtime_resolves_system_wl_interfaces_without_incompatible_size() {
-    use fpshud_input::wayland::{probe_wayland_interfaces, wayland_client_library_present};
+    mgr.attach_wayland_display_hint(true);
+    assert_eq!(mgr.active_backend(), SurfaceBackendType::Wayland);
+    assert!(!mgr.should_use_x11_grab(true));
+    assert!(!mgr.should_draw_software_cursor(&cfg));
 
-    if wayland_client_library_present() {
-        assert!(
-            probe_wayland_interfaces(),
-            "libwayland-client.so exists on system but wl_interface resolution failed (check libloading symbol size)"
-        );
-    }
+    mgr.reset_surface_hints();
+    assert_eq!(mgr.active_backend(), SurfaceBackendType::Unknown);
 }
 
 #[test]
@@ -344,33 +325,6 @@ fn software_cursor_disabled_on_wayland_and_when_os_cursor_visible() {
         !mgr.should_draw_software_cursor(&open_wayland_cfg),
         "Wayland compositor draws the native OS cursor; software cursor must stay disabled to prevent double cursor"
     );
-}
-
-#[test]
-fn wayland_input_shield_isolates_pointer_and_tears_down_cleanly() {
-    use fpshud_input::wayland::WaylandBackend;
-    use std::ffi::c_void;
-
-    let mut wl = WaylandBackend::new_for_test();
-    assert!(!wl.is_shield_active());
-    // Headless null-display guard must never crash or mark shield active
-    wl.sync_input_shield(true, 1280, 720);
-    assert!(!wl.is_shield_active());
-
-    // InputManager tracking for parent wl_surface and cleanup on surface destroy
-    let mut mgr = InputManager::new_headless();
-    let fake_dpy = std::ptr::dangling_mut::<c_void>();
-    let fake_surf = std::ptr::dangling_mut::<c_void>();
-    mgr.attach_wayland_display_with_surface(fake_dpy, fake_surf);
-    mgr.clear_wayland_surface_if_matches(fake_surf);
-
-    // Live compositor verification when running in a Wayland session
-    if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && let Some((dpy, parent_surf, display_err)) =
-            fpshud_input::wayland::test_roundtrip_subsurface_shield(640, 480)
-    {
-        assert!(dpy && parent_surf && display_err == 0);
-    }
 }
 
 #[test]

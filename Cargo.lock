@@ -905,11 +905,9 @@ version = "0.1.0"
 dependencies = [
  "evdev",
  "fpshud-core",
- "libloading",
  "rustix 1.1.6",
  "serde",
  "tempfile",
- "wayland-sys",
  "x11rb",
 ]
 

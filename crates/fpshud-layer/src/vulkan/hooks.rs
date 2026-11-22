@@ -181,7 +181,6 @@ pub(crate) unsafe extern "system" fn hook_destroy_instance(
         hit
     });
     if let Ok(mut rt) = LayerRuntime::global().lock() {
-        rt.input.detach_wayland_display(std::ptr::null_mut());
         rt.input.attach_wayland_display_hint(false);
         rt.input.reset_surface_hints();
     }
@@ -343,11 +342,6 @@ pub(crate) unsafe extern "system" fn hook_create_wayland_surface_khr(
                 .insert(surf.as_raw(), (SurfaceBackendType::Wayland, wl_surf_raw));
         }
         if let Ok(mut rt) = LayerRuntime::global().lock() {
-            if !p_create_info.is_null() {
-                let wl_dpy = unsafe { (*p_create_info).display.cast::<c_void>() };
-                let wl_surf = unsafe { (*p_create_info).surface.cast::<c_void>() };
-                rt.input.attach_wayland_display_with_surface(wl_dpy, wl_surf);
-            }
             rt.input.attach_wayland_display_hint(true);
         }
     }
@@ -378,17 +372,11 @@ pub(crate) unsafe extern "system" fn hook_destroy_surface_khr(
                     rt.input.clear_x11_target_window_if_matches(win_id as u32);
                 }
             }
-            Some((SurfaceBackendType::Wayland, wl_surf_raw)) => {
-                if let Ok(mut rt) = LayerRuntime::global().lock() {
-                    if wl_surf_raw != 0 {
-                        rt.input
-                            .clear_wayland_surface_if_matches(wl_surf_raw as usize as *mut c_void);
-                    }
-                    if !any_wl_remaining {
-                        // Detach before the app disconnects wl_display (e.g. vkcube calls
-                        // wl_display_disconnect between vkDestroySurfaceKHR and vkDestroyInstance).
-                        rt.input.detach_wayland_display(std::ptr::null_mut());
-                    }
+            Some((SurfaceBackendType::Wayland, _)) => {
+                if !any_wl_remaining
+                    && let Ok(mut rt) = LayerRuntime::global().lock()
+                {
+                    rt.input.attach_wayland_display_hint(false);
                 }
             }
             _ => {}

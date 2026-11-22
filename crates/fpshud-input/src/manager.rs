@@ -3,11 +3,9 @@ use crate::keycodes::{
     BTN_MISC, KEY_ESC, KEY_F9, KEY_F11, KEY_F12, active_modifier_mask, is_bench_toggle_key,
     is_gui_toggle_key, is_hud_toggle_key, is_modifier_key, matches_keybind, modifier_bit_for_key,
 };
-use crate::wayland::{WaylandBackend, WaylandEvent};
 use crate::x11::{X11Backend, X11Event};
 use fpshud_core::{HudConfig, Keybind};
 use serde::{Deserialize, Serialize};
-use std::ffi::c_void;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SurfaceBackendType {
@@ -48,7 +46,6 @@ pub enum UiInputEvent {
 pub struct InputManager {
     x11: Option<X11Backend>,
     evdev: Option<EvdevBackend>,
-    wayland: Option<WaylandBackend>,
     wayland_display_hint: bool,
     x11_swapchain_active: bool,
     wayland_swapchain_active: bool,
@@ -76,7 +73,6 @@ impl InputManager {
         Self {
             x11: Some(X11Backend::connect()),
             evdev: Some(EvdevBackend::default()),
-            wayland: Some(WaylandBackend::new()),
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -98,7 +94,6 @@ impl InputManager {
         Self {
             x11: None,
             evdev: None,
-            wayland: None,
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -117,43 +112,6 @@ impl InputManager {
 
     pub fn attach_wayland_display_hint(&mut self, present: bool) {
         self.wayland_display_hint = present;
-    }
-
-    pub fn attach_wayland_display(&mut self, display: *mut c_void) {
-        self.attach_wayland_display_with_surface(display, std::ptr::null_mut());
-    }
-
-    pub fn attach_wayland_display_with_surface(
-        &mut self,
-        display: *mut c_void,
-        surface: *mut c_void,
-    ) {
-        if !display.is_null() {
-            self.wayland_display_hint = true;
-            if let Some(wl) = &mut self.wayland {
-                wl.attach_display(display);
-                if !surface.is_null() {
-                    wl.set_parent_surface(surface);
-                }
-            }
-        }
-    }
-
-    pub fn clear_wayland_surface_if_matches(&mut self, surface: *mut c_void) {
-        if !surface.is_null()
-            && let Some(wl) = &mut self.wayland
-        {
-            wl.clear_parent_surface_if_matches(surface);
-        }
-    }
-
-    pub fn detach_wayland_display(&mut self, display: *mut c_void) {
-        if let Some(wl) = &mut self.wayland {
-            wl.detach_display(display);
-            if !wl.has_display() {
-                self.wayland_display_hint = false;
-            }
-        }
     }
 
     pub fn notify_x11_swapchain(&mut self, window_id: u32) {
@@ -184,9 +142,6 @@ impl InputManager {
         self.x11_swapchain_active = false;
         self.wayland_swapchain_active = false;
         self.x11_target_window = None;
-        if let Some(wl) = &mut self.wayland {
-            wl.detach_display(std::ptr::null_mut());
-        }
     }
 
     #[must_use]
@@ -228,9 +183,6 @@ impl InputManager {
             }
             if let Some(evdev) = &mut self.evdev {
                 evdev.set_grab(false);
-            }
-            if let Some(wl) = &mut self.wayland {
-                wl.sync_input_shield(false, 1, 1);
             }
         }
     }
@@ -489,16 +441,6 @@ impl InputManager {
                     }
                 }
             }
-            if let Some(wl) = &mut self.wayland {
-                for ev in wl.poll_events() {
-                    if let WaylandEvent::Key { code, down: false } = ev
-                        && (code as usize) < self.keys_down.len()
-                    {
-                        self.keys_down[code as usize] = false;
-                    }
-                }
-                wl.sync_input_shield(false, max_w as u32, max_h as u32);
-            }
             if let Some(x11) = &self.x11 {
                 for ev in x11.drain_events() {
                     if let X11Event::Key { code, down: false } = ev
@@ -564,47 +506,6 @@ impl InputManager {
             }
         }
 
-        if let Some(wl) = &mut self.wayland {
-            for ev in wl.poll_events() {
-                match ev {
-                    WaylandEvent::Key { code, down } => {
-                        actions.extend(self.handle_key_event(code, down, cfg));
-                        if cfg.gui_open {
-                            let mod_mask = active_modifier_mask(&self.keys_down);
-                            ui_events.push(if down {
-                                UiInputEvent::KeyDown { code, mod_mask }
-                            } else {
-                                UiInputEvent::KeyUp { code, mod_mask }
-                            });
-                        }
-                    }
-                    WaylandEvent::CursorPos { x, y } => {
-                        self.cursor_pos = Some((x, y));
-                    }
-                    WaylandEvent::Scroll { delta_x, delta_y } => {
-                        if cfg.gui_open {
-                            self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
-                            ui_events.push(UiInputEvent::ScrollWheel { delta_x, delta_y });
-                        }
-                    }
-                    WaylandEvent::MouseBtn { button, down } => {
-                        let idx = usize::from(button);
-                        if idx < self.mouse_buttons.len() && self.mouse_buttons[idx] != down {
-                            self.mouse_buttons[idx] = down;
-                            if cfg.gui_open || !down {
-                                self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
-                                ui_events.push(if down {
-                                    UiInputEvent::MouseDown { button }
-                                } else {
-                                    UiInputEvent::MouseUp { button }
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         let x11_pointer_allowed = !self.wayland_swapchain_active || self.x11_swapchain_active;
         let x11_events = self.x11.as_ref().map(X11Backend::drain_events).unwrap_or_default();
         for ev in x11_events {
@@ -634,14 +535,7 @@ impl InputManager {
         self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
 
         self.sync_grab_state(cfg);
-        let want_wl_shield = cfg.gui_open
-            && !self.x11_swapchain_active
-            && (self.wayland_swapchain_active || self.wayland_display_hint);
-        if let Some(wl) = &mut self.wayland {
-            wl.sync_input_shield(want_wl_shield, max_w as u32, max_h as u32);
-        }
-        let grabbed = self.x11.as_ref().is_some_and(X11Backend::is_grabbed)
-            || self.wayland.as_ref().is_some_and(WaylandBackend::is_shield_active);
+        let grabbed = self.x11.as_ref().is_some_and(X11Backend::is_grabbed);
         (actions, ui_events, grabbed)
     }
 }
