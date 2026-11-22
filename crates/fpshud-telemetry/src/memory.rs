@@ -2,17 +2,28 @@ use crate::snapshot::TelemetrySnapshot;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Reads `/proc/meminfo`, `/proc/self/statm`, and Linux PSI `/proc/pressure/memory`.
+/// Reads `/proc/meminfo`, `/proc/<pid|self>/statm`, and Linux PSI `/proc/pressure/memory`.
 pub struct MemoryProvider {
     root: PathBuf,
+    statm_path: PathBuf,
     page_bytes: u64,
 }
 
 impl MemoryProvider {
     #[must_use]
     pub fn new(root: &Path) -> Self {
+        Self::new_for_pid(root, None)
+    }
+
+    #[must_use]
+    pub fn new_for_pid(root: &Path, target_pid: Option<u32>) -> Self {
+        let statm_path = match target_pid {
+            Some(pid) if pid > 0 => root.join(format!("proc/{pid}/statm")),
+            _ => root.join("proc/self/statm"),
+        };
         Self {
             root: root.to_path_buf(),
+            statm_path,
             page_bytes: (rustix::param::page_size() as u64).max(4096),
         }
     }
@@ -64,7 +75,7 @@ impl MemoryProvider {
     }
 
     fn poll_statm(&self, snap: &mut TelemetrySnapshot) {
-        let Ok(content) = fs::read_to_string(self.root.join("proc/self/statm")) else {
+        let Ok(content) = fs::read_to_string(&self.statm_path) else {
             return;
         };
         let mut cols = content.split_whitespace();

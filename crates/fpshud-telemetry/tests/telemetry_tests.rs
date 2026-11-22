@@ -195,3 +195,32 @@ fn nvml_d3cold_bandwidth_and_live_nvidia_probe() {
         assert!(snap.gpu_vram_total_gb > 0.5);
     }
 }
+
+#[test]
+fn selective_poll_mask_and_external_pid_statm() {
+    use fpshud_core::MetricType;
+    use fpshud_telemetry::{SensorPollMask, TelemetrySnapshot, memory::MemoryProvider};
+
+    let minimal = SensorPollMask::from_metrics(&[MetricType::Fps, MetricType::FrameTimes], false);
+    assert!(!minimal.cpu && !minimal.gpu && !minimal.ram && !minimal.system);
+
+    let gui_open = SensorPollMask::from_metrics(&[MetricType::Fps], true);
+    assert!(gui_open.cpu && gui_open.gpu && gui_open.ram && gui_open.system);
+
+    let gpu_only = SensorPollMask::from_metrics(&[MetricType::Fps, MetricType::GpuTemp], false);
+    assert!(!gpu_only.cpu && gpu_only.gpu && !gpu_only.ram && !gpu_only.system);
+
+    let dir = tempfile::tempdir().unwrap();
+    let proc_pid = dir.path().join("proc/4242");
+    fs::create_dir_all(&proc_pid).unwrap();
+    fs::write(proc_pid.join("statm"), "200000 131072 1000 0 0 0 0\n").unwrap();
+
+    let mut mem = MemoryProvider::new_for_pid(dir.path(), Some(4242));
+    let mut snap = TelemetrySnapshot::default();
+    mem.poll(&mut snap);
+    assert!(
+        snap.game_ram_gb > 0.45,
+        "expected ~0.5 GB RSS for pid 4242, got {}",
+        snap.game_ram_gb
+    );
+}

@@ -12,6 +12,7 @@ pub use snapshot::{CpuPowerSource, GpuBackendType, MAX_CPU_CORES, TelemetrySnaps
 
 use cpu::CpuProvider;
 use fpshud_analytics::{BenchmarkRecorder, FrametimeAnalyzer, frametime::GRAPH_HISTORY_SIZE};
+use fpshud_core::MetricType;
 use fpshud_core::paths::get_default_record_dir;
 use gpu_drm::GpuDrmProvider;
 use memory::MemoryProvider;
@@ -24,27 +25,107 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use system::SystemProvider;
 
+/// Selective category bitmask controlling which OS/vendor providers are polled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SensorPollMask {
+    pub cpu: bool,
+    pub gpu: bool,
+    pub ram: bool,
+    pub system: bool,
+}
+
+impl SensorPollMask {
+    #[must_use]
+    pub const fn all() -> Self {
+        Self {
+            cpu: true,
+            gpu: true,
+            ram: true,
+            system: true,
+        }
+    }
+
+    #[must_use]
+    pub fn from_metrics(metrics: &[MetricType], gui_open: bool) -> Self {
+        if gui_open {
+            return Self::all();
+        }
+        let mut mask = Self {
+            cpu: false,
+            gpu: false,
+            ram: false,
+            system: false,
+        };
+        for &m in metrics {
+            match m {
+                MetricType::Fps
+                | MetricType::FpsAvg
+                | MetricType::Fps1Low
+                | MetricType::Fps01Low
+                | MetricType::FrameTimes
+                | MetricType::EngineApi => {}
+                MetricType::GpuLoad
+                | MetricType::GpuClock
+                | MetricType::GpuVramClock
+                | MetricType::GpuVram
+                | MetricType::GpuBandwidth
+                | MetricType::GpuTemp
+                | MetricType::GpuFan
+                | MetricType::GpuPower
+                | MetricType::GpuModel => mask.gpu = true,
+                MetricType::CpuLoad
+                | MetricType::CpuAllCoreLoad
+                | MetricType::CpuClock
+                | MetricType::CpuAllCoreClock
+                | MetricType::CpuPower
+                | MetricType::CpuTemp
+                | MetricType::CpuModel => mask.cpu = true,
+                MetricType::Ram
+                | MetricType::GameRam
+                | MetricType::SwapRam
+                | MetricType::MemPressure => mask.ram = true,
+                MetricType::SystemClock
+                | MetricType::Battery
+                | MetricType::DiskIo
+                | MetricType::DiskTemp
+                | MetricType::NetSpeed => mask.system = true,
+            }
+        }
+        mask
+    }
+}
+
 struct Providers {
     #[cfg(feature = "vendor-gpu-apis")]
     root: PathBuf,
+    mask: SensorPollMask,
     cpu: CpuProvider,
     mem: MemoryProvider,
     gpu: GpuDrmProvider,
     #[cfg(feature = "vendor-gpu-apis")]
     nvml: Option<vendor::NvidiaNvmlProvider>,
+    #[cfg(feature = "vendor-gpu-apis")]
+    nvml_attempted: bool,
+    #[cfg(feature = "vendor-gpu-apis")]
+    preferred_gpu: (u32, u32),
     sys: SystemProvider,
 }
 
 impl Providers {
-    fn new(root: &Path) -> Self {
+    fn new(root: &Path, target_pid: Option<u32>) -> Self {
         Self {
             #[cfg(feature = "vendor-gpu-apis")]
             root: root.to_path_buf(),
+            mask: SensorPollMask::all(),
             cpu: CpuProvider::new(root),
-            mem: MemoryProvider::new(root),
+            mem: MemoryProvider::new_for_pid(root, target_pid),
             gpu: GpuDrmProvider::new(root),
             #[cfg(feature = "vendor-gpu-apis")]
-            nvml: vendor::NvidiaNvmlProvider::init_for_root(root, 0, 0),
+            nvml: None,
+            #[cfg(feature = "vendor-gpu-apis")]
+            nvml_attempted: false,
+            #[cfg(feature = "vendor-gpu-apis")]
+            preferred_gpu: (0, 0),
             sys: SystemProvider::new(root),
         }
     }
@@ -53,21 +134,38 @@ impl Providers {
         self.gpu.set_preferred_gpu(vendor_id, device_id);
         #[cfg(feature = "vendor-gpu-apis")]
         {
-            self.nvml = vendor::NvidiaNvmlProvider::init_for_root(&self.root, vendor_id, device_id);
+            self.preferred_gpu = (vendor_id, device_id);
+            self.nvml = None;
+            self.nvml_attempted = false;
         }
     }
 
     fn poll_into(&mut self, snap: &mut TelemetrySnapshot) {
-        self.cpu.poll(snap);
-        self.mem.poll(snap);
-        #[cfg(feature = "vendor-gpu-apis")]
-        let nvml_ok = self.nvml.as_mut().is_some_and(|n| n.poll(snap));
-        #[cfg(not(feature = "vendor-gpu-apis"))]
-        let nvml_ok = false;
-        if !nvml_ok {
-            self.gpu.poll(snap);
+        if self.mask.cpu {
+            self.cpu.poll(snap);
         }
-        self.sys.poll(snap);
+        if self.mask.ram {
+            self.mem.poll(snap);
+        }
+        if self.mask.gpu {
+            #[cfg(feature = "vendor-gpu-apis")]
+            let nvml_ok = {
+                if !self.nvml_attempted {
+                    self.nvml_attempted = true;
+                    let (vid, did) = self.preferred_gpu;
+                    self.nvml = vendor::NvidiaNvmlProvider::init_for_root(&self.root, vid, did);
+                }
+                self.nvml.as_mut().is_some_and(|n| n.poll(snap))
+            };
+            #[cfg(not(feature = "vendor-gpu-apis"))]
+            let nvml_ok = false;
+            if !nvml_ok {
+                self.gpu.poll(snap);
+            }
+        }
+        if self.mask.system {
+            self.sys.poll(snap);
+        }
     }
 }
 
@@ -94,16 +192,27 @@ impl Default for TelemetryCollector {
 impl TelemetryCollector {
     #[must_use]
     pub fn new() -> Self {
-        Self::build(PathBuf::from("/"), false)
+        Self::build(PathBuf::from("/"), None, false)
+    }
+
+    #[must_use]
+    pub fn new_for_pid(target_pid: Option<u32>) -> Self {
+        Self::build(PathBuf::from("/"), target_pid, false)
     }
 
     #[must_use]
     pub fn with_mock_root(root: PathBuf) -> Self {
-        Self::build(root, true)
+        Self::build(root, None, true)
     }
 
-    fn build(root: PathBuf, mock_mode: bool) -> Self {
-        let providers = Arc::new(Mutex::new(Providers::new(&root)));
+    pub fn set_poll_mask(&self, mask: SensorPollMask) {
+        if let Ok(mut p) = self.providers.lock() {
+            p.mask = mask;
+        }
+    }
+
+    fn build(root: PathBuf, target_pid: Option<u32>, mock_mode: bool) -> Self {
+        let providers = Arc::new(Mutex::new(Providers::new(&root, target_pid)));
         let snapshot = Arc::new(RwLock::new(TelemetrySnapshot::default()));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
