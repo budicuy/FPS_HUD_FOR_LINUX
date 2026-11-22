@@ -1,7 +1,6 @@
 use fpshud_core::{HudConfig, Keybind};
 use fpshud_input::{
     InputAction, InputManager, KeybindTarget, SurfaceBackendType, UiInputEvent,
-    evdev::EvdevBackend,
     x11::{X11Backend, diff_x11_keymap, should_retry_grab},
 };
 use std::time::Duration;
@@ -154,67 +153,10 @@ fn x11_keymap_diff_retry_interval_headless_and_evdev_fallback() {
     // Headless & non-privileged safety (zero panic)
     let x11 = X11Backend::connect_with_display(Some(""));
     assert!(!x11.is_connected());
-
-    let mut evdev = EvdevBackend::probe_directory(std::path::Path::new("/nonexistent_dev_input"));
-    assert_eq!(evdev.device_count(), 0);
-    assert!(evdev.poll_events().is_empty());
 }
 
 #[test]
-fn evdev_caps_filtering_and_stationary_cursor_dedup() {
-    use fpshud_input::evdev::{EvdevDeviceRole, EvdevEvent, classify_device_caps, translate_input_event};
-
-    // Keyboard: EV_KEY + KEY_A tanpa EV_REL / EV_ABS
-    let mut kb_ev = evdev::AttributeSet::<evdev::EventType>::new();
-    kb_ev.insert(evdev::EventType::KEY);
-    let mut kb_keys = evdev::AttributeSet::<evdev::KeyCode>::new();
-    kb_keys.insert(evdev::KeyCode::KEY_A);
-    assert_eq!(
-        classify_device_caps(&kb_ev, Some(&kb_keys), None),
-        EvdevDeviceRole::Keyboard
-    );
-
-    // Mouse: EV_REL (REL_X | REL_Y)
-    let mut mouse_ev = evdev::AttributeSet::<evdev::EventType>::new();
-    mouse_ev.insert(evdev::EventType::KEY);
-    mouse_ev.insert(evdev::EventType::RELATIVE);
-    let mut mouse_rel = evdev::AttributeSet::<evdev::RelativeAxisCode>::new();
-    mouse_rel.insert(evdev::RelativeAxisCode::REL_X);
-    mouse_rel.insert(evdev::RelativeAxisCode::REL_Y);
-    assert_eq!(
-        classify_device_caps(&mouse_ev, None, Some(&mouse_rel)),
-        EvdevDeviceRole::Mouse
-    );
-
-    // Gamepad/misc: EV_ABS tanpa tombol keyboard / mouse rel -> diabaikan
-    let mut pad_ev = evdev::AttributeSet::<evdev::EventType>::new();
-    pad_ev.insert(evdev::EventType::KEY);
-    pad_ev.insert(evdev::EventType::ABSOLUTE);
-    assert_eq!(classify_device_caps(&pad_ev, None, None), EvdevDeviceRole::Ignore);
-
-    // Translasi InputEvent: gerak mouse, wheel, klik mouse, hotkey, dan tolak tombol gamepad 0x120
-    assert_eq!(
-        translate_input_event(evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_X.0, 12)),
-        Some(EvdevEvent::RelMotion { dx: 12, dy: 0 })
-    );
-    assert_eq!(
-        translate_input_event(evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_WHEEL.0, -1)),
-        Some(EvdevEvent::Scroll { delta: -1 })
-    );
-    assert_eq!(
-        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, evdev::KeyCode::BTN_LEFT.0, 1)),
-        Some(EvdevEvent::MouseBtn { button: 0, down: true })
-    );
-    assert_eq!(
-        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, evdev::KeyCode::KEY_ESC.0, 1)),
-        Some(EvdevEvent::Key { code: 1, down: true })
-    );
-    assert_eq!(
-        translate_input_event(evdev::InputEvent::new(evdev::EventType::KEY.0, 0x120, 1)),
-        None
-    );
-
-    // Stationary cursor deduplication & X11 vs Wayland evdev grab arbitration
+fn stationary_cursor_dedup_prevents_redundant_mouse_moves() {
     let mut mgr = InputManager::new_headless();
     let mut cfg = HudConfig { gui_open: true, ..HudConfig::default() };
     mgr.set_cursor_pos(640.0, 360.0);
@@ -224,54 +166,6 @@ fn evdev_caps_filtering_and_stationary_cursor_dedup() {
     // Calling poll_frame again with unchanged cursor MUST NOT emit redundant MouseMove
     let (_, second_evs, _) = mgr.poll_frame(&mut cfg, 1920.0, 1080.0);
     assert!(second_evs.is_empty());
-
-    // Evdev grab disabled when X11 active, enabled on pure Wayland
-    mgr.notify_x11_swapchain(0x42);
-    assert!(!mgr.should_grab_evdev(&cfg));
-    mgr.notify_wayland_swapchain();
-    assert!(mgr.should_grab_evdev(&cfg));
-}
-
-#[test]
-fn evdev_drain_event_batches_reads_until_wouldblock_and_bounds_batches() {
-    use fpshud_input::evdev::{EvdevEvent, MAX_FETCH_BATCHES_PER_POLL, drain_event_batches};
-    use std::io;
-
-    let mut step = 0usize;
-    let drained = drain_event_batches(&mut || {
-        step += 1;
-        match step {
-            1 => Ok(vec![
-                evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_X.0, 5),
-            ]
-            .into_iter()),
-            2 => Ok(vec![
-                evdev::InputEvent::new(evdev::EventType::RELATIVE.0, evdev::RelativeAxisCode::REL_Y.0, -3),
-            ]
-            .into_iter()),
-            _ => Err(io::Error::from(io::ErrorKind::WouldBlock)),
-        }
-    });
-    assert_eq!(
-        drained,
-        vec![
-            EvdevEvent::RelMotion { dx: 5, dy: 0 },
-            EvdevEvent::RelMotion { dx: 0, dy: -3 },
-        ]
-    );
-
-    let mut calls = 0usize;
-    let bounded = drain_event_batches(&mut || {
-        calls += 1;
-        Ok(vec![evdev::InputEvent::new(
-            evdev::EventType::RELATIVE.0,
-            evdev::RelativeAxisCode::REL_X.0,
-            1,
-        )]
-        .into_iter())
-    });
-    assert_eq!(calls, MAX_FETCH_BATCHES_PER_POLL);
-    assert_eq!(bounded.len(), MAX_FETCH_BATCHES_PER_POLL);
 }
 
 #[test]
@@ -357,7 +251,6 @@ fn external_overlay_suppresses_in_process_grabs_and_seeds_held_keys() {
     assert!(!mgr.should_draw_software_cursor(&cfg));
 
     mgr.notify_wayland_swapchain();
-    assert!(!mgr.should_grab_evdev(&cfg));
 
     // While external overlay owns compositor focus, poll_frame must not forward stale cursor moves
     mgr.set_cursor_pos(300.0, 200.0);

@@ -1,6 +1,5 @@
-//! Pure-Rust input handling (`x11rb`), optional non-privileged `evdev`, & swapchain disambiguation.
+//! Pure-Rust input handling (`x11rb`) & swapchain surface disambiguation.
 
-pub mod evdev;
 pub mod keycodes;
 pub mod manager;
 pub mod x11;

@@ -257,7 +257,6 @@ fn external_overlay_ipc_disables_grabs_and_debounces_f12_reopen() {
     rt.pump_frame(1280, 720, "VULKAN");
     assert!(rt.input.is_external_overlay_active());
     assert!(!rt.input.should_use_x11_grab(true));
-    assert!(!rt.input.should_grab_evdev(&rt.config));
 
     // UI daemon closes GUI & releases external overlay -> Layer closes GUI and arms debounce
     let mut closed_cfg = rt.config.clone();

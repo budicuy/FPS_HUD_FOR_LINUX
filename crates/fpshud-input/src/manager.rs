@@ -1,4 +1,3 @@
-use crate::evdev::{EvdevBackend, EvdevEvent};
 use crate::keycodes::{
     BTN_MISC, KEY_ESC, KEY_F9, KEY_F11, KEY_F12, active_modifier_mask, is_bench_toggle_key,
     is_gui_toggle_key, is_hud_toggle_key, is_modifier_key, matches_keybind, modifier_bit_for_key,
@@ -42,10 +41,9 @@ pub enum UiInputEvent {
     KeyUp { code: u32, mod_mask: u32 },
 }
 
-/// Manages surface disambiguation, X11/Wayland/Evdev backends, 4 hotkeys, & interactive capture.
+/// Manages surface disambiguation, X11/Wayland input, 4 hotkeys, & interactive capture.
 pub struct InputManager {
     x11: Option<X11Backend>,
-    evdev: Option<EvdevBackend>,
     wayland_display_hint: bool,
     x11_swapchain_active: bool,
     wayland_swapchain_active: bool,
@@ -72,7 +70,6 @@ impl InputManager {
     pub fn new() -> Self {
         Self {
             x11: Some(X11Backend::connect()),
-            evdev: Some(EvdevBackend::default()),
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -93,7 +90,6 @@ impl InputManager {
     pub fn new_headless() -> Self {
         Self {
             x11: None,
-            evdev: None,
             wayland_display_hint: false,
             x11_swapchain_active: false,
             wayland_swapchain_active: false,
@@ -171,7 +167,7 @@ impl InputManager {
     }
 
     /// Marks whether `fpshud-ui` owns an isolated compositor overlay surface (e.g. `zwlr_layer_shell_v1`).
-    /// While active, all in-process X11/evdev/subsurface grabs are released so compositor focus stays clean.
+    /// While active, all in-process X11 grabs are released so compositor focus stays clean.
     pub fn set_external_overlay_active(&mut self, active: bool) {
         self.external_overlay_active = active;
         if active {
@@ -180,9 +176,6 @@ impl InputManager {
             self.mouse_buttons = [false; 3];
             if let Some(x11) = &self.x11 {
                 x11.set_grab(false);
-            }
-            if let Some(evdev) = &mut self.evdev {
-                evdev.set_grab(false);
             }
         }
     }
@@ -347,27 +340,16 @@ impl InputManager {
         events
     }
 
-    #[must_use]
-    pub fn should_grab_evdev(&self, cfg: &HudConfig) -> bool {
-        if self.external_overlay_active {
-            return false;
-        }
-        (cfg.gui_open || self.pending_ungrab) && !self.should_use_x11_grab(true)
-    }
-
-    /// Software cursor is drawn ONLY when `evdev` grabbed pointer devices or X11 hid the OS cursor;
+    /// Software cursor is drawn ONLY when X11 hid the OS cursor;
     /// on Wayland and standard X11 grabs, the native OS cursor stays visible without double cursor.
     #[must_use]
     pub fn should_draw_software_cursor(&self, cfg: &HudConfig) -> bool {
         if !cfg.gui_open || self.external_overlay_active {
             return false;
         }
-        let evdev_grabbed = self.evdev.as_ref().is_some_and(EvdevBackend::is_grabbed);
-        let x11_cursor_hidden = self
-            .x11
+        self.x11
             .as_ref()
-            .is_some_and(X11Backend::is_pointer_cursor_hidden);
-        evdev_grabbed || x11_cursor_hidden
+            .is_some_and(X11Backend::is_pointer_cursor_hidden)
     }
 
     pub fn sync_grab_state(&mut self, cfg: &HudConfig) {
@@ -375,9 +357,6 @@ impl InputManager {
             self.pending_ungrab = false;
             if let Some(x11) = &self.x11 {
                 x11.set_grab(false);
-            }
-            if let Some(evdev) = &mut self.evdev {
-                evdev.set_grab(false);
             }
             return;
         }
@@ -387,10 +366,6 @@ impl InputManager {
         let want_x11_grab = (cfg.gui_open || self.pending_ungrab) && self.should_use_x11_grab(true);
         if let Some(x11) = &self.x11 {
             x11.set_grab(want_x11_grab);
-        }
-        let want_evdev_grab = self.should_grab_evdev(cfg);
-        if let Some(evdev) = &mut self.evdev {
-            evdev.set_grab(want_evdev_grab);
         }
     }
 
@@ -432,15 +407,6 @@ impl InputManager {
         if self.external_overlay_active {
             // Drain backend queues while external Wayland overlay owns compositor focus so no stale
             // events replay into the game or HUD when the overlay closes.
-            if let Some(evdev) = &mut self.evdev {
-                for ev in evdev.poll_events() {
-                    if let EvdevEvent::Key { code, down: false } = ev
-                        && (code as usize) < self.keys_down.len()
-                    {
-                        self.keys_down[code as usize] = false;
-                    }
-                }
-            }
             if let Some(x11) = &self.x11 {
                 for ev in x11.drain_events() {
                     if let X11Event::Key { code, down: false } = ev
@@ -454,56 +420,6 @@ impl InputManager {
             self.last_emitted_cursor = None;
             self.sync_grab_state(cfg);
             return (actions, ui_events, false);
-        }
-
-        if let Some(evdev) = &mut self.evdev {
-            for ev in evdev.poll_events() {
-                match ev {
-                    EvdevEvent::Key { code, down } => {
-                        actions.extend(self.handle_key_event(code, down, cfg));
-                        if cfg.gui_open {
-                            let mod_mask = active_modifier_mask(&self.keys_down);
-                            ui_events.push(if down {
-                                UiInputEvent::KeyDown { code, mod_mask }
-                            } else {
-                                UiInputEvent::KeyUp { code, mod_mask }
-                            });
-                        }
-                    }
-                    EvdevEvent::RelMotion { dx, dy } => {
-                        if cfg.gui_open {
-                            let (px, py) = self.cursor_pos.unwrap_or((max_w * 0.5, max_h * 0.5));
-                            self.cursor_pos = Some((
-                                (px + dx as f32).clamp(0.0, max_w),
-                                (py + dy as f32).clamp(0.0, max_h),
-                            ));
-                        }
-                    }
-                    EvdevEvent::Scroll { delta } => {
-                        if cfg.gui_open {
-                            self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
-                            ui_events.push(UiInputEvent::ScrollWheel {
-                                delta_x: 0.0,
-                                delta_y: delta as f32,
-                            });
-                        }
-                    }
-                    EvdevEvent::MouseBtn { button, down } => {
-                        let idx = usize::from(button);
-                        if idx < self.mouse_buttons.len() && self.mouse_buttons[idx] != down {
-                            self.mouse_buttons[idx] = down;
-                            if cfg.gui_open || !down {
-                                self.flush_cursor_move(cfg, max_w, max_h, &mut ui_events);
-                                ui_events.push(if down {
-                                    UiInputEvent::MouseDown { button }
-                                } else {
-                                    UiInputEvent::MouseUp { button }
-                                });
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         let x11_pointer_allowed = !self.wayland_swapchain_active || self.x11_swapchain_active;
