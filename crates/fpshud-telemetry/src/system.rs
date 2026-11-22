@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Reads battery, NVMe temp, `/proc/diskstats` I/O, `/proc/net/dev` RX/TX, & local time.
+/// Caches static sysfs device paths (`power_supply`, `hwmon`) once on first poll.
 pub struct SystemProvider {
     root: PathBuf,
+    probed: bool,
+    battery_dir: Option<PathBuf>,
+    nvme_temp_path: Option<PathBuf>,
     prev_disk: Option<(u64, u64, Instant)>,
     prev_net: Option<(u64, u64, Instant)>,
 }
@@ -15,12 +19,25 @@ impl SystemProvider {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            probed: false,
+            battery_dir: None,
+            nvme_temp_path: None,
             prev_disk: None,
             prev_net: None,
         }
     }
 
+    fn ensure_probed(&mut self) {
+        if self.probed {
+            return;
+        }
+        self.probed = true;
+        self.battery_dir = discover_battery_dir(&self.root);
+        self.nvme_temp_path = discover_nvme_temp_path(&self.root);
+    }
+
     pub fn poll(&mut self, snap: &mut TelemetrySnapshot) {
+        self.ensure_probed();
         self.poll_battery(snap);
         self.poll_nvme_temp(snap);
         self.poll_disk_io(snap);
@@ -29,56 +46,35 @@ impl SystemProvider {
     }
 
     fn poll_battery(&self, snap: &mut TelemetrySnapshot) {
-        let dir = self.root.join("sys/class/power_supply");
-        let Ok(entries) = fs::read_dir(dir) else {
+        let Some(p) = &self.battery_dir else {
             return;
         };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("BAT") {
-                continue;
-            }
-            let p = entry.path();
-            if let Some(cap) = read_f32(&p.join("capacity")) {
-                snap.battery_available = true;
-                snap.battery_pct = cap.clamp(0.0, 100.0);
-                let status = fs::read_to_string(p.join("status"))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_ascii_lowercase();
-                snap.battery_charging = status == "charging" || status == "full";
-                if let Some(uw) = read_f32(&p.join("power_now")) {
-                    snap.battery_power_w = (uw / 1_000_000.0).max(0.0);
-                } else if let (Some(ua), Some(uv)) = (
-                    read_f32(&p.join("current_now")),
-                    read_f32(&p.join("voltage_now")),
-                ) {
-                    snap.battery_power_w = ((ua * uv) / 1e12).max(0.0);
-                }
-                return;
+        if let Some(cap) = read_f32(&p.join("capacity")) {
+            snap.battery_available = true;
+            snap.battery_pct = cap.clamp(0.0, 100.0);
+            let status = fs::read_to_string(p.join("status"))
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            snap.battery_charging = status == "charging" || status == "full";
+            if let Some(uw) = read_f32(&p.join("power_now")) {
+                snap.battery_power_w = (uw / 1_000_000.0).max(0.0);
+            } else if let (Some(ua), Some(uv)) = (
+                read_f32(&p.join("current_now")),
+                read_f32(&p.join("voltage_now")),
+            ) {
+                snap.battery_power_w = ((ua * uv) / 1e12).max(0.0);
             }
         }
     }
 
     fn poll_nvme_temp(&self, snap: &mut TelemetrySnapshot) {
-        let dir = self.root.join("sys/class/hwmon");
-        let Ok(entries) = fs::read_dir(dir) else {
+        let Some(p) = &self.nvme_temp_path else {
             return;
         };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = fs::read_to_string(p.join("name"))
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase();
-            if name != "nvme" && name != "drivetemp" {
-                continue;
-            }
-            if let Some(milli) = read_f32(&p.join("temp1_input")) {
-                snap.nvme_temp_available = true;
-                snap.nvme_temp_c = milli / 1000.0;
-                return;
-            }
+        if let Some(milli) = read_f32(p) {
+            snap.nvme_temp_available = true;
+            snap.nvme_temp_c = milli / 1000.0;
         }
     }
 
@@ -89,16 +85,21 @@ impl SystemProvider {
         let mut read_sectors = 0_u64;
         let mut write_sectors = 0_u64;
         for line in content.lines() {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() < 10 {
+            let mut cols = line.split_whitespace();
+            let Some(dev) = cols.nth(2) else {
                 continue;
-            }
-            let dev = cols[2];
+            };
             if dev.starts_with("loop") || dev.starts_with("ram") || dev.starts_with("zram") {
                 continue;
             }
-            read_sectors += cols[5].parse::<u64>().unwrap_or(0);
-            write_sectors += cols[9].parse::<u64>().unwrap_or(0);
+            let Some(r_str) = cols.nth(2) else {
+                continue;
+            };
+            let Some(w_str) = cols.nth(3) else {
+                continue;
+            };
+            read_sectors += r_str.parse::<u64>().unwrap_or(0);
+            write_sectors += w_str.parse::<u64>().unwrap_or(0);
         }
 
         let now = Instant::now();
@@ -129,12 +130,15 @@ impl SystemProvider {
             if iface.trim() == "lo" {
                 continue;
             }
-            let cols: Vec<&str> = rest.split_whitespace().collect();
-            if cols.len() < 9 {
+            let mut cols = rest.split_whitespace();
+            let Some(rx_str) = cols.next() else {
                 continue;
-            }
-            rx_bytes += cols[0].parse::<u64>().unwrap_or(0);
-            tx_bytes += cols[8].parse::<u64>().unwrap_or(0);
+            };
+            let Some(tx_str) = cols.nth(7) else {
+                continue;
+            };
+            rx_bytes += rx_str.parse::<u64>().unwrap_or(0);
+            tx_bytes += tx_str.parse::<u64>().unwrap_or(0);
         }
 
         let now = Instant::now();
@@ -149,6 +153,40 @@ impl SystemProvider {
         }
         self.prev_net = Some((rx_bytes, tx_bytes, now));
     }
+}
+
+fn discover_battery_dir(root: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(root.join("sys/class/power_supply")).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("BAT") {
+            continue;
+        }
+        let p = entry.path();
+        if read_f32(&p.join("capacity")).is_some() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn discover_nvme_temp_path(root: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(root.join("sys/class/hwmon")).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = fs::read_to_string(p.join("name"))
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if name != "nvme" && name != "drivetemp" {
+            continue;
+        }
+        let temp = p.join("temp1_input");
+        if read_f32(&temp).is_some() {
+            return Some(temp);
+        }
+    }
+    None
 }
 
 fn read_f32(path: &Path) -> Option<f32> {

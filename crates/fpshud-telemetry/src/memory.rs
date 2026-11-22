@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 /// Reads `/proc/meminfo`, `/proc/self/statm`, and Linux PSI `/proc/pressure/memory`.
 pub struct MemoryProvider {
     root: PathBuf,
+    page_bytes: u64,
 }
 
 impl MemoryProvider {
@@ -12,6 +13,7 @@ impl MemoryProvider {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            page_bytes: (rustix::param::page_size() as u64).max(4096),
         }
     }
 
@@ -70,8 +72,7 @@ impl MemoryProvider {
         if let Some(rss_pages_str) = cols.next()
             && let Ok(rss_pages) = rss_pages_str.parse::<u64>()
         {
-            let page_bytes = (rustix::param::page_size() as u64).max(4096);
-            let bytes = rss_pages.saturating_mul(page_bytes);
+            let bytes = rss_pages.saturating_mul(self.page_bytes);
             snap.game_ram_gb = (bytes as f32) / (1024.0 * 1024.0 * 1024.0);
         }
     }

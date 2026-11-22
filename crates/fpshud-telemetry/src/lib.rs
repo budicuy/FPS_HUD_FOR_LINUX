@@ -75,9 +75,9 @@ impl Providers {
 pub struct TelemetryCollector {
     snapshot: Arc<RwLock<TelemetrySnapshot>>,
     providers: Arc<Mutex<Providers>>,
-    frametime: Mutex<FrametimeAnalyzer>,
+    frametime: Mutex<(Option<Instant>, FrametimeAnalyzer)>,
     benchmark: Mutex<BenchmarkRecorder>,
-    last_frame_at: Mutex<Option<Instant>>,
+    benchmark_active: AtomicBool,
     bench_started_at: Mutex<Option<Instant>>,
     benchmark_dir: PathBuf,
     mock_mode: bool,
@@ -119,33 +119,23 @@ impl TelemetryCollector {
             let p_clone = Arc::clone(&providers);
             let s_clone = Arc::clone(&snapshot);
             let stop_clone = Arc::clone(&stop_flag);
+            let worker_snap = TelemetrySnapshot::default();
             thread::Builder::new()
                 .name("fpshud_telemetry".to_string())
                 .spawn(move || {
+                    let mut next = worker_snap;
                     while !stop_clone.load(Ordering::Relaxed) {
-                        let mut next = {
-                            s_clone
-                                .read()
-                                .map(|g| g.clone())
-                                .unwrap_or_default()
-                        };
                         if let Ok(mut p) = p_clone.lock() {
                             p.poll_into(&mut next);
                         }
                         if let Ok(mut guard) = s_clone.write() {
-                            next.fps = guard.fps;
-                            next.fps_avg = guard.fps_avg;
-                            next.fps_1pct_low = guard.fps_1pct_low;
-                            next.fps_01pct_low = guard.fps_01pct_low;
-                            next.frametime_ms = guard.frametime_ms;
-                            next.frametime_history = guard.frametime_history.clone();
-                            next.render_api = guard.render_api.clone();
+                            next.render_api.clone_from(&guard.render_api);
                             next.benchmark_active = guard.benchmark_active;
                             next.benchmark_elapsed_sec = guard.benchmark_elapsed_sec;
                             next.last_benchmark = guard.last_benchmark.clone();
-                            *guard = next;
+                            *guard = next.clone();
                         }
-                        thread::sleep(Duration::from_millis(250));
+                        thread::sleep(Duration::from_millis(500));
                     }
                 })
                 .ok()
@@ -154,9 +144,9 @@ impl TelemetryCollector {
         Self {
             snapshot,
             providers,
-            frametime: Mutex::new(FrametimeAnalyzer::new()),
+            frametime: Mutex::new((None, FrametimeAnalyzer::new())),
             benchmark: Mutex::new(BenchmarkRecorder::default()),
-            last_frame_at: Mutex::new(None),
+            benchmark_active: AtomicBool::new(false),
             bench_started_at: Mutex::new(None),
             benchmark_dir: if mock_mode {
                 root.join("bench")
@@ -170,6 +160,11 @@ impl TelemetryCollector {
     }
 
     pub fn set_render_api(&self, api: &str) {
+        if let Ok(guard) = self.snapshot.read()
+            && guard.render_api == api
+        {
+            return;
+        }
         if let Ok(mut s) = self.snapshot.write() {
             s.render_api = api.to_string();
         }
@@ -186,52 +181,33 @@ impl TelemetryCollector {
         }
     }
 
+    /// Ultra-lightweight per-frame hot path called from Vulkan/OpenGL Present.
+    /// Does zero sorting, zero heap allocation, and zero RwLock writes during normal gaming.
     pub fn on_frame(&self) {
         let now = Instant::now();
-        let dt_sec = if let Ok(mut last) = self.last_frame_at.lock() {
-            let dt = last.map_or(1.0 / 60.0, |prev| now.duration_since(prev).as_secs_f32());
+        let dt_sec = if let Ok(mut ft_guard) = self.frametime.lock() {
+            let (last, ft) = &mut *ft_guard;
+            let dt = last
+                .map_or(1.0 / 60.0, |prev| now.duration_since(prev).as_secs_f32())
+                .clamp(0.000_05, 0.25);
             *last = Some(now);
-            dt.clamp(0.000_05, 0.25)
-        } else {
-            1.0 / 60.0
-        };
-
-        let (metrics, hist) = if let Ok(mut ft) = self.frametime.lock() {
-            ft.record_frame(dt_sec);
-            let m = ft.compute_metrics();
-            let hist: Vec<f32> = ft
-                .history_slice()
-                .iter()
-                .copied()
-                .take(GRAPH_HISTORY_SIZE)
-                .collect();
-            (m, hist)
+            ft.record_frame(dt);
+            dt
         } else {
             return;
         };
 
-        let (cpu_load, gpu_load) = self
-            .snapshot
-            .read()
-            .map(|s| (s.cpu_load, s.gpu_load))
-            .unwrap_or((0.0, 0.0));
-
-        if let Ok(mut bench) = self.benchmark.lock()
+        if self.benchmark_active.load(Ordering::Relaxed)
+            && let Ok(mut bench) = self.benchmark.lock()
             && bench.is_active()
         {
-            bench.push_sample(metrics.fps, dt_sec * 1000.0, cpu_load, gpu_load);
-        }
-
-        if let Ok(mut s) = self.snapshot.write() {
-            s.fps = metrics.fps;
-            s.fps_avg = metrics.fps_avg;
-            s.fps_1pct_low = metrics.fps_1pct_low;
-            s.fps_01pct_low = metrics.fps_01pct_low;
-            s.frametime_ms = metrics.frametime_ms;
-            s.frametime_history = hist;
-            if let Ok(bs) = self.bench_started_at.lock() {
-                s.benchmark_elapsed_sec = bs.map_or(0.0, |t| t.elapsed().as_secs_f32());
-            }
+            let (cpu_load, gpu_load) = self
+                .snapshot
+                .read()
+                .map(|s| (s.cpu_load, s.gpu_load))
+                .unwrap_or((0.0, 0.0));
+            let fps_inst = if dt_sec > 0.0 { 1.0 / dt_sec } else { 0.0 };
+            bench.push_sample(fps_inst, dt_sec * 1000.0, cpu_load, gpu_load);
         }
     }
 
@@ -239,6 +215,7 @@ impl TelemetryCollector {
         let dir = &self.benchmark_dir;
         if let Ok(mut bench) = self.benchmark.lock() {
             if bench.is_active() {
+                self.benchmark_active.store(false, Ordering::Relaxed);
                 let summary = bench.stop();
                 if let Ok(mut bs) = self.bench_started_at.lock() {
                     *bs = None;
@@ -252,6 +229,7 @@ impl TelemetryCollector {
                 }
             } else {
                 bench.start(dir);
+                self.benchmark_active.store(true, Ordering::Relaxed);
                 if let Ok(mut bs) = self.bench_started_at.lock() {
                     *bs = Some(Instant::now());
                 }
@@ -264,10 +242,33 @@ impl TelemetryCollector {
 
     #[must_use]
     pub fn get_snapshot(&self) -> TelemetrySnapshot {
-        self.snapshot
+        let mut snap = self
+            .snapshot
             .read()
             .map(|g| g.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        if let Ok(ft_guard) = self.frametime.lock() {
+            let (_, ft) = &*ft_guard;
+            let metrics = ft.compute_metrics();
+            snap.fps = metrics.fps;
+            snap.fps_avg = metrics.fps_avg;
+            snap.fps_1pct_low = metrics.fps_1pct_low;
+            snap.fps_01pct_low = metrics.fps_01pct_low;
+            snap.frametime_ms = metrics.frametime_ms;
+            snap.frametime_history = ft
+                .history_slice()
+                .iter()
+                .copied()
+                .take(GRAPH_HISTORY_SIZE)
+                .collect();
+        }
+        if snap.benchmark_active
+            && let Ok(bs) = self.bench_started_at.lock()
+        {
+            snap.benchmark_elapsed_sec = bs.map_or(0.0, |t| t.elapsed().as_secs_f32());
+        }
+        snap
     }
 }
 

@@ -740,7 +740,7 @@ fn run_daemon(args: DaemonArgs) -> Result<()> {
         state.render_if_dirty(&mut conn)?;
 
         if !received_any && !overlay_active {
-            let sleep_ms = if state.overlay_portal.is_some() { 4 } else { 12 };
+            let sleep_ms = if state.overlay_portal.is_some() { 4 } else { 25 };
             std::thread::sleep(Duration::from_millis(sleep_ms));
         }
     }

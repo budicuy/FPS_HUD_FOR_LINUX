@@ -532,7 +532,9 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
             prev_keymap = reply.keys;
         }
 
-        if let Ok(ptr_cookie) = conn.query_pointer(root)
+        let actively_tracking_pointer = want_grab || active_grab.is_active();
+        if actively_tracking_pointer
+            && let Ok(ptr_cookie) = conn.query_pointer(root)
             && let Ok(ptr) = ptr_cookie.reply()
         {
             let (wx, wy) = translate_root_to_target(&conn, root, target, ptr.root_x, ptr.root_y);
@@ -551,7 +553,8 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
             queue.extend(batch);
         }
 
-        thread::sleep(Duration::from_millis(8));
+        let sleep_ms = if actively_tracking_pointer { 8 } else { 32 };
+        thread::sleep(Duration::from_millis(sleep_ms));
     }
 
     release_active_grab(&conn, &mut active_grab);

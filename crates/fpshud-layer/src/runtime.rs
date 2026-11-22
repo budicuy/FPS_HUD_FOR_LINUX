@@ -130,6 +130,8 @@ pub struct LayerRuntime {
     next_input_poll: Instant,
     gui_reopen_debounce_until: Option<Instant>,
     socket_path: Option<PathBuf>,
+    ipc_recv_buf: Vec<u8>,
+    last_render_api: String,
 }
 
 const GUI_REOPEN_DEBOUNCE: Duration = Duration::from_millis(350);
@@ -167,6 +169,8 @@ impl LayerRuntime {
                 next_input_poll: Instant::now(),
                 gui_reopen_debounce_until: None,
                 socket_path: None,
+                ipc_recv_buf: vec![0_u8; MAX_IPC_PAYLOAD + 64],
+                last_render_api: String::new(),
             })
         })
     }
@@ -196,6 +200,8 @@ impl LayerRuntime {
             next_input_poll: Instant::now(),
             gui_reopen_debounce_until: None,
             socket_path: None,
+            ipc_recv_buf: vec![0_u8; MAX_IPC_PAYLOAD + 64],
+            last_render_api: String::new(),
         }
     }
 
@@ -331,13 +337,15 @@ impl LayerRuntime {
     }
 
     fn drain_ui_messages(&mut self) {
-        let mut buf = vec![0_u8; MAX_IPC_PAYLOAD + 64];
+        if self.ipc_conn.is_none() {
+            return;
+        }
         loop {
             let recv_res = {
                 let Some(conn) = &mut self.ipc_conn else {
                     break;
                 };
-                conn.recv_msg(&mut buf)
+                conn.recv_msg(&mut self.ipc_recv_buf)
             };
             match recv_res {
                 Ok((0, _)) => {
@@ -352,7 +360,7 @@ impl LayerRuntime {
                             self.shm_reader = Some(reader);
                         }
                     }
-                    if let Ok(msg) = UiToLayerMsg::decode(&buf[..n]) {
+                    if let Ok(msg) = UiToLayerMsg::decode(&self.ipc_recv_buf[..n]) {
                         self.handle_ui_msg(msg);
                     }
                 }
@@ -426,7 +434,11 @@ impl LayerRuntime {
         }
         let w = width.max(1);
         let h = height.max(1);
-        self.telemetry.set_render_api(render_api);
+        if self.last_render_api != render_api {
+            self.last_render_api.clear();
+            self.last_render_api.push_str(render_api);
+            self.telemetry.set_render_api(render_api);
+        }
         self.telemetry.on_frame();
 
         self.ensure_ipc_started();
@@ -469,7 +481,8 @@ impl LayerRuntime {
 
         let now = Instant::now();
         if now >= self.next_input_poll {
-            self.next_input_poll = now + Duration::from_millis(8);
+            let poll_interval_ms = if self.config.gui_open { 8 } else { 32 };
+            self.next_input_poll = now + Duration::from_millis(poll_interval_ms);
             let prev_config = self.config.clone();
             let (actions, ui_events, _grabbed) =
                 self.input.poll_frame(&mut self.config, w as f32, h as f32);
@@ -492,8 +505,13 @@ impl LayerRuntime {
 
         self.drain_ui_messages();
 
+        let telemetry_interval = if self.config.hud_graph_enabled {
+            Duration::from_millis(333)
+        } else {
+            Duration::from_millis(500)
+        };
         if (self.config.hud_visible || self.config.gui_open)
-            && now.duration_since(self.last_telemetry_push) >= Duration::from_millis(100)
+            && now.duration_since(self.last_telemetry_push) >= telemetry_interval
         {
             self.last_telemetry_push = now;
             let snap = self.telemetry.get_snapshot();

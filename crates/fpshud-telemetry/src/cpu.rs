@@ -9,13 +9,25 @@ struct CpuJiffies {
     total: u64,
 }
 
-/// 100% sudo-free CPU provider: per-core load, clock, temp, hwmon power, & DVFS PL1/PL2 curve.
+enum HwmonPowerSource {
+    PowerFile(PathBuf),
+    VoltCurr { volt: PathBuf, curr: PathBuf },
+}
+
+/// 100% sudo-free CPU provider: caches static sysfs/hwmon/powercap paths once for minimal overhead.
 pub struct CpuProvider {
     root: PathBuf,
+    probed: bool,
     prev_total: Option<CpuJiffies>,
     prev_cores: Vec<CpuJiffies>,
     prev_rapl: Option<(u64, Instant)>,
     cached_model: Option<String>,
+    core_freq_paths: Vec<PathBuf>,
+    max_freqs_khz: Vec<u64>,
+    temp_path: Option<PathBuf>,
+    hwmon_power: Option<HwmonPowerSource>,
+    rapl_path: Option<PathBuf>,
+    powercap_limits: (Option<u64>, Option<u64>),
 }
 
 impl CpuProvider {
@@ -23,23 +35,60 @@ impl CpuProvider {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            probed: false,
             prev_total: None,
             prev_cores: Vec::new(),
             prev_rapl: None,
             cached_model: None,
+            core_freq_paths: Vec::new(),
+            max_freqs_khz: Vec::new(),
+            temp_path: None,
+            hwmon_power: None,
+            rapl_path: None,
+            powercap_limits: (None, None),
+        }
+    }
+
+    fn ensure_probed(&mut self, core_hint: usize) {
+        if self.probed {
+            return;
+        }
+        self.probed = true;
+        self.cached_model = read_cpu_model(&self.root);
+        self.temp_path = discover_cpu_temp_path(&self.root);
+        self.hwmon_power = discover_hwmon_power(&self.root);
+        let rapl = self.root.join("sys/class/powercap/intel-rapl:0/energy_uj");
+        if read_u64(&rapl).is_some() {
+            self.rapl_path = Some(rapl);
+        }
+        self.powercap_limits = read_powercap_limits(&self.root);
+
+        for idx in 0..MAX_CPU_CORES {
+            let base = self
+                .root
+                .join(format!("sys/devices/system/cpu/cpu{idx}/cpufreq"));
+            let cur_path = base.join("scaling_cur_freq");
+            let max_f = read_u64(&base.join("cpuinfo_max_freq"));
+            let has_cur = cur_path.exists();
+            if !has_cur && max_f.is_none() && idx >= core_hint {
+                break;
+            }
+            self.core_freq_paths.push(cur_path);
+            self.max_freqs_khz.push(max_f.unwrap_or(0));
         }
     }
 
     pub fn poll(&mut self, snap: &mut TelemetrySnapshot) {
-        if self.cached_model.is_none() {
-            self.cached_model = read_cpu_model(&self.root);
-        }
-        if let Some(model) = &self.cached_model {
+        let core_ratios = self.poll_proc_stat(snap);
+        self.ensure_probed(core_ratios.len());
+
+        if let Some(model) = &self.cached_model
+            && snap.cpu_model != *model
+        {
             snap.cpu_model = model.clone();
         }
 
-        let core_ratios = self.poll_proc_stat(snap);
-        let (core_freqs_khz, max_freqs_khz) = self.poll_frequencies(snap, core_ratios.len());
+        let core_freqs_khz = self.poll_frequencies(snap);
         self.poll_temperature(snap);
 
         // Tier 1: Direct world-readable hwmon power / VRM sensors
@@ -57,8 +106,7 @@ impl CpuProvider {
         }
 
         // Tier 2: Multi-Core DVFS + PL1/PL2 world-readable physics model
-        if let Some(watts) = self.estimate_dvfs_power(&core_ratios, &core_freqs_khz, &max_freqs_khz)
-        {
+        if let Some(watts) = self.estimate_dvfs_power(&core_ratios, &core_freqs_khz) {
             snap.cpu_power_w = watts;
             snap.cpu_power_source = CpuPowerSource::EstimatedDvfs;
         } else {
@@ -72,7 +120,7 @@ impl CpuProvider {
         };
 
         let mut total_load = snap.cpu_load;
-        let mut core_ratios = Vec::new();
+        let mut core_ratios = Vec::with_capacity(self.prev_cores.len().max(8));
         snap.cpu_core_loads.clear();
 
         for line in content.lines() {
@@ -110,6 +158,9 @@ impl CpuProvider {
                     snap.cpu_core_loads.resize(idx + 1, 0.0);
                 }
                 snap.cpu_core_loads[idx] = ratio * 100.0;
+            } else {
+                // In /proc/stat, all cpu* lines are contiguous at the top; stop once past them!
+                break;
             }
         }
 
@@ -117,27 +168,14 @@ impl CpuProvider {
         core_ratios
     }
 
-    fn poll_frequencies(
-        &self,
-        snap: &mut TelemetrySnapshot,
-        core_hint: usize,
-    ) -> (Vec<u64>, Vec<u64>) {
-        let count = core_hint.clamp(1, MAX_CPU_CORES);
-        let mut cur_khz = Vec::with_capacity(count);
-        let mut max_khz = Vec::with_capacity(count);
+    fn poll_frequencies(&self, snap: &mut TelemetrySnapshot) -> Vec<u64> {
+        let mut cur_khz = Vec::with_capacity(self.core_freq_paths.len());
         let mut sum_mhz = 0_u64;
         let mut valid = 0_u64;
         snap.cpu_core_clocks_mhz.clear();
 
-        for idx in 0..MAX_CPU_CORES {
-            let base = self
-                .root
-                .join(format!("sys/devices/system/cpu/cpu{idx}/cpufreq"));
-            let cur = read_u64(&base.join("scaling_cur_freq"));
-            let max_f = read_u64(&base.join("cpuinfo_max_freq"));
-            if cur.is_none() && max_f.is_none() && idx >= core_hint {
-                break;
-            }
+        for path in &self.core_freq_paths {
+            let cur = read_u64(path);
             let mhz = cur.map_or(0, |khz| (khz / 1000).min(u16::MAX as u64) as u16);
             if cur.is_some() {
                 sum_mhz += u64::from(mhz);
@@ -145,96 +183,44 @@ impl CpuProvider {
             }
             snap.cpu_core_clocks_mhz.push(mhz);
             cur_khz.push(cur.unwrap_or(0));
-            max_khz.push(max_f.unwrap_or(0));
         }
 
         if let Some(avg_mhz) = sum_mhz.checked_div(valid) {
             snap.cpu_clock_mhz = avg_mhz as u32;
         }
-        (cur_khz, max_khz)
+        cur_khz
     }
 
     fn poll_temperature(&self, snap: &mut TelemetrySnapshot) {
-        let hwmon_root = self.root.join("sys/class/hwmon");
-        let Ok(entries) = fs::read_dir(hwmon_root) else {
-            return;
-        };
-
-        let mut fallback: Option<f32> = None;
-        for entry in entries.flatten() {
-            let dir = entry.path();
-            let name = fs::read_to_string(dir.join("name"))
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase();
-            let is_preferred = matches!(
-                name.as_str(),
-                "k10temp" | "zenpower" | "coretemp" | "fam15h_power"
-            );
-            let is_fallback = matches!(name.as_str(), "acpitz" | "thinkpad");
-            if !is_preferred && !is_fallback {
-                continue;
+        if let Some(path) = &self.temp_path
+            && let Some(milli) = read_u64(path)
+        {
+            let deg = (milli as f32) / 1000.0;
+            if deg > 0.0 && deg < 130.0 {
+                snap.cpu_temp_c = deg;
             }
-            if let Some(milli) = read_u64(&dir.join("temp1_input")) {
-                let deg = (milli as f32) / 1000.0;
-                if deg > 0.0 && deg < 130.0 {
-                    if is_preferred {
-                        snap.cpu_temp_c = deg;
-                        return;
-                    }
-                    fallback = Some(deg);
-                }
-            }
-        }
-        if let Some(deg) = fallback {
-            snap.cpu_temp_c = deg;
         }
     }
 
     fn poll_hwmon_power(&self) -> Option<f32> {
-        let hwmon_root = self.root.join("sys/class/hwmon");
-        let entries = fs::read_dir(hwmon_root).ok()?;
-
-        for entry in entries.flatten() {
-            let dir = entry.path();
-            let name = fs::read_to_string(dir.join("name"))
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase();
-            if name == "amdgpu" || name == "nvme" || name.starts_with("bat") {
-                continue;
-            }
-            let is_cpu_power = matches!(
-                name.as_str(),
-                "zenergy" | "zenpower" | "amd_energy" | "k10temp" | "coretemp" | "fam15h_power"
-            );
-            if !is_cpu_power {
-                continue;
-            }
-            if let Some(uw) = read_u64(&dir.join("power1_average"))
-                .or_else(|| read_u64(&dir.join("power1_input")))
-            {
+        match self.hwmon_power.as_ref()? {
+            HwmonPowerSource::PowerFile(path) => {
+                let uw = read_u64(path)?;
                 let watts = (uw as f32) / 1_000_000.0;
-                if watts > 0.1 && watts < 500.0 {
-                    return Some(watts);
-                }
+                (watts > 0.1 && watts < 500.0).then_some(watts)
             }
-            if let (Some(mv), Some(ma)) = (
-                read_u64(&dir.join("in0_input")),
-                read_u64(&dir.join("curr1_input")),
-            ) {
+            HwmonPowerSource::VoltCurr { volt, curr } => {
+                let mv = read_u64(volt)?;
+                let ma = read_u64(curr)?;
                 let watts = ((mv as f64) * (ma as f64) / 1_000_000.0) as f32;
-                if watts > 0.1 && watts < 500.0 {
-                    return Some(watts);
-                }
+                (watts > 0.1 && watts < 500.0).then_some(watts)
             }
         }
-        None
     }
 
     fn poll_passive_rapl(&mut self) -> Option<f32> {
-        let rapl_path = self.root.join("sys/class/powercap/intel-rapl:0/energy_uj");
-        let energy = read_u64(&rapl_path)?;
+        let path = self.rapl_path.as_ref()?;
+        let energy = read_u64(path)?;
         let now = Instant::now();
         if let Some((prev_energy, prev_time)) = self.prev_rapl {
             let dt = now.duration_since(prev_time).as_secs_f64();
@@ -251,16 +237,11 @@ impl CpuProvider {
         None
     }
 
-    fn estimate_dvfs_power(
-        &self,
-        core_ratios: &[f32],
-        cur_khz: &[u64],
-        max_khz: &[u64],
-    ) -> Option<f32> {
+    fn estimate_dvfs_power(&self, core_ratios: &[f32], cur_khz: &[u64]) -> Option<f32> {
         if core_ratios.is_empty() {
             return None;
         }
-        let (pl1_uw, pl2_uw) = self.read_powercap_limits();
+        let (pl1_uw, pl2_uw) = self.powercap_limits;
         if cur_khz.iter().all(|&f| f == 0) && pl1_uw.is_none() && pl2_uw.is_none() {
             return None;
         }
@@ -278,7 +259,7 @@ impl CpuProvider {
         let mut dyn_sum = 0.0_f32;
         for (idx, &util) in core_ratios.iter().enumerate() {
             let f_cur = cur_khz.get(idx).copied().unwrap_or(0) as f32;
-            let f_max = max_khz.get(idx).copied().unwrap_or(0) as f32;
+            let f_max = self.max_freqs_khz.get(idx).copied().unwrap_or(0) as f32;
             let freq_factor = if f_cur > 0.0 && f_max > 0.0 {
                 let f_base = (f_max * 0.80).max(1.0);
                 (f_cur / f_base).clamp(0.25, 1.50).powf(2.3)
@@ -290,27 +271,95 @@ impl CpuProvider {
 
         Some((idle_w + dyn_sum).clamp(idle_w, pl2_w))
     }
+}
 
-    fn read_powercap_limits(&self) -> (Option<u64>, Option<u64>) {
-        let dir = self.root.join("sys/class/powercap");
-        let Ok(entries) = fs::read_dir(dir) else {
-            return (None, None);
-        };
+fn discover_cpu_temp_path(root: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(root.join("sys/class/hwmon")).ok()?;
+    let mut fallback: Option<PathBuf> = None;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let name = fs::read_to_string(dir.join("name"))
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let is_preferred = matches!(
+            name.as_str(),
+            "k10temp" | "zenpower" | "coretemp" | "fam15h_power"
+        );
+        let is_fallback = matches!(name.as_str(), "acpitz" | "thinkpad");
+        if !is_preferred && !is_fallback {
+            continue;
+        }
+        let temp = dir.join("temp1_input");
+        if let Some(milli) = read_u64(&temp) {
+            let deg = (milli as f32) / 1000.0;
+            if deg > 0.0 && deg < 130.0 {
+                if is_preferred {
+                    return Some(temp);
+                }
+                fallback = Some(temp);
+            }
+        }
+    }
+    fallback
+}
 
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("intel-rapl:") && !name.matches(':').nth(1).is_some() {
-                let pl1 = read_u64(&p.join("constraint_0_max_power_uw"))
-                    .or_else(|| read_u64(&p.join("constraint_0_power_limit_uw")));
-                let pl2 = read_u64(&p.join("constraint_1_power_limit_uw"));
-                if pl1.is_some() || pl2.is_some() {
-                    return (pl1, pl2);
+fn discover_hwmon_power(root: &Path) -> Option<HwmonPowerSource> {
+    let entries = fs::read_dir(root.join("sys/class/hwmon")).ok()?;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let name = fs::read_to_string(dir.join("name"))
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if name == "amdgpu" || name == "nvme" || name.starts_with("bat") {
+            continue;
+        }
+        let is_cpu_power = matches!(
+            name.as_str(),
+            "zenergy" | "zenpower" | "amd_energy" | "k10temp" | "coretemp" | "fam15h_power"
+        );
+        if !is_cpu_power {
+            continue;
+        }
+        for fname in ["power1_average", "power1_input"] {
+            let p = dir.join(fname);
+            if let Some(uw) = read_u64(&p) {
+                let watts = (uw as f32) / 1_000_000.0;
+                if watts > 0.1 && watts < 500.0 {
+                    return Some(HwmonPowerSource::PowerFile(p));
                 }
             }
         }
-        (None, None)
+        let volt = dir.join("in0_input");
+        let curr = dir.join("curr1_input");
+        if let (Some(mv), Some(ma)) = (read_u64(&volt), read_u64(&curr)) {
+            let watts = ((mv as f64) * (ma as f64) / 1_000_000.0) as f32;
+            if watts > 0.1 && watts < 500.0 {
+                return Some(HwmonPowerSource::VoltCurr { volt, curr });
+            }
+        }
     }
+    None
+}
+
+fn read_powercap_limits(root: &Path) -> (Option<u64>, Option<u64>) {
+    let Ok(entries) = fs::read_dir(root.join("sys/class/powercap")) else {
+        return (None, None);
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("intel-rapl:") && name.matches(':').nth(1).is_none() {
+            let pl1 = read_u64(&p.join("constraint_0_max_power_uw"))
+                .or_else(|| read_u64(&p.join("constraint_0_power_limit_uw")));
+            let pl2 = read_u64(&p.join("constraint_1_power_limit_uw"));
+            if pl1.is_some() || pl2.is_some() {
+                return (pl1, pl2);
+            }
+        }
+    }
+    (None, None)
 }
 
 fn parse_jiffies<'a>(mut cols: impl Iterator<Item = &'a str>) -> Option<CpuJiffies> {
