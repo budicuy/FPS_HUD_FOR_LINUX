@@ -30,6 +30,7 @@ struct TextSpan {
 
 #[derive(Clone)]
 struct MeasuredLine {
+    prefix: Option<TextSpan>,
     spans: Vec<TextSpan>,
     width: f32,
 }
@@ -242,25 +243,64 @@ impl CpuHudRenderer {
         let mut lines: Vec<MeasuredLine> = Vec::new();
         let mut right_lines: Vec<MeasuredLine> = Vec::new();
 
+        // Compute fixed category prefix column width for aligned Stack & Double layouts
+        let mut prefix_col_w = 0.0_f32;
+        if matches!(
+            store.config.arrangement,
+            ArrangementMode::Stack | ArrangementMode::Double
+        ) {
+            for (cat, _) in &groups {
+                let pw = rasterizer.measure_text(is_mono, font_size, category_label(*cat));
+                prefix_col_w = prefix_col_w.max(pw);
+            }
+            if prefix_col_w > 0.0 {
+                prefix_col_w += (10.0 * eff_scale).round();
+            }
+        }
+
         match store.config.arrangement {
             ArrangementMode::Stack => {
                 for (cat, ms) in &groups {
-                    let spans = build_group_spans(store, *cat, ms, alpha);
-                    let w = Self::measure_spans(rasterizer, is_mono, font_size, &spans);
-                    lines.push(MeasuredLine { spans, width: w });
+                    let prefix = Some(TextSpan {
+                        text: category_label(*cat).to_string(),
+                        color: category_color_rgba(*cat, &store.config, alpha),
+                    });
+                    let spans = build_group_spans_body(store, *cat, ms, alpha);
+                    let w = prefix_col_w + Self::measure_spans(rasterizer, is_mono, font_size, &spans);
+                    lines.push(MeasuredLine {
+                        prefix,
+                        spans,
+                        width: w,
+                    });
                 }
             }
             ArrangementMode::Double => {
                 let mid = groups.len().div_ceil(2);
                 for (cat, ms) in groups.iter().take(mid) {
-                    let spans = build_group_spans(store, *cat, ms, alpha);
-                    let w = Self::measure_spans(rasterizer, is_mono, font_size, &spans);
-                    lines.push(MeasuredLine { spans, width: w });
+                    let prefix = Some(TextSpan {
+                        text: category_label(*cat).to_string(),
+                        color: category_color_rgba(*cat, &store.config, alpha),
+                    });
+                    let spans = build_group_spans_body(store, *cat, ms, alpha);
+                    let w = prefix_col_w + Self::measure_spans(rasterizer, is_mono, font_size, &spans);
+                    lines.push(MeasuredLine {
+                        prefix,
+                        spans,
+                        width: w,
+                    });
                 }
                 for (cat, ms) in groups.iter().skip(mid) {
-                    let spans = build_group_spans(store, *cat, ms, alpha);
-                    let w = Self::measure_spans(rasterizer, is_mono, font_size, &spans);
-                    right_lines.push(MeasuredLine { spans, width: w });
+                    let prefix = Some(TextSpan {
+                        text: category_label(*cat).to_string(),
+                        color: category_color_rgba(*cat, &store.config, alpha),
+                    });
+                    let spans = build_group_spans_body(store, *cat, ms, alpha);
+                    let w = prefix_col_w + Self::measure_spans(rasterizer, is_mono, font_size, &spans);
+                    right_lines.push(MeasuredLine {
+                        prefix,
+                        spans,
+                        width: w,
+                    });
                 }
             }
             ArrangementMode::Linear => {
@@ -272,10 +312,11 @@ impl CpuHudRenderer {
                             color: rgba_u32(130, 145, 168, alpha),
                         });
                     }
-                    all_spans.extend(build_group_spans(store, *cat, ms, alpha));
+                    all_spans.extend(build_group_spans_inline(store, *cat, ms, alpha));
                 }
                 let w = Self::measure_spans(rasterizer, is_mono, font_size, &all_spans);
                 lines.push(MeasuredLine {
+                    prefix: None,
                     spans: all_spans,
                     width: w,
                 });
@@ -289,7 +330,11 @@ impl CpuHudRenderer {
                 color: rgba_u32(255, 95, 95, 255),
             }];
             let w = Self::measure_spans(rasterizer, is_mono, font_size, &spans);
-            lines.push(MeasuredLine { spans, width: w });
+            lines.push(MeasuredLine {
+                prefix: None,
+                spans,
+                width: w,
+            });
         }
 
         let col_gap = if right_lines.is_empty() {
@@ -331,6 +376,7 @@ impl CpuHudRenderer {
                 pad_x,
                 pad_y,
                 row_gap,
+                prefix_col_w,
                 left_w,
                 col_gap,
                 graph_h,
@@ -371,12 +417,26 @@ impl CpuHudRenderer {
         let baseline_off = layout.font_size * 0.98;
         for (idx, line) in layout.lines.iter().enumerate() {
             let by = oy + layout.pad_y + (idx as f32) * (layout.line_h + layout.row_gap) + baseline_off;
+            let body_x = if let Some(prefix) = &line.prefix {
+                canvas.draw_text(
+                    rasterizer,
+                    ox + layout.pad_x,
+                    by,
+                    layout.is_mono,
+                    layout.font_size,
+                    prefix.color,
+                    &prefix.text,
+                );
+                ox + layout.pad_x + layout.prefix_col_w
+            } else {
+                ox + layout.pad_x
+            };
             Self::draw_spans(
                 canvas,
                 rasterizer,
                 layout.is_mono,
                 layout.font_size,
-                ox + layout.pad_x,
+                body_x,
                 by,
                 &line.spans,
             );
@@ -384,12 +444,26 @@ impl CpuHudRenderer {
         let right_x = ox + layout.pad_x + layout.left_w + layout.col_gap;
         for (idx, line) in layout.right_lines.iter().enumerate() {
             let by = oy + layout.pad_y + (idx as f32) * (layout.line_h + layout.row_gap) + baseline_off;
+            let body_x = if let Some(prefix) = &line.prefix {
+                canvas.draw_text(
+                    rasterizer,
+                    right_x,
+                    by,
+                    layout.is_mono,
+                    layout.font_size,
+                    prefix.color,
+                    &prefix.text,
+                );
+                right_x + layout.prefix_col_w
+            } else {
+                right_x
+            };
             Self::draw_spans(
                 canvas,
                 rasterizer,
                 layout.is_mono,
                 layout.font_size,
-                right_x,
+                body_x,
                 by,
                 &line.spans,
             );
@@ -458,6 +532,7 @@ struct HudCardLayout {
     pad_x: f32,
     pad_y: f32,
     row_gap: f32,
+    prefix_col_w: f32,
     left_w: f32,
     col_gap: f32,
     graph_h: f32,
@@ -467,7 +542,7 @@ struct HudCardLayout {
     right_lines: Vec<MeasuredLine>,
 }
 
-fn build_group_spans(
+fn build_group_spans_body(
     store: &UiStore,
     cat: MetricCategory,
     metrics: &[MetricType],
@@ -482,14 +557,51 @@ fn build_group_spans(
     };
     let sep_col = rgba_u32(130, 145, 168, alpha);
 
-    let show_prefix = !matches!(cat, MetricCategory::Fps);
-    if show_prefix {
+    for (idx, &metric) in metrics.iter().enumerate() {
+        if idx > 0 {
+            spans.push(TextSpan {
+                text: " \u{00B7} ".to_string(),
+                color: sep_col,
+            });
+        }
+        let (_, val, val_col, _) = store.format_metric_row(metric);
+        // When the fixed "FPS" prefix column is already drawn, omit duplicate "FPS " before the FPS value
+        if !(cat == MetricCategory::Fps && metric == MetricType::Fps) {
+            let short = hud_metric_short_label(metric);
+            spans.push(TextSpan {
+                text: format!("{short} "),
+                color: label_col,
+            });
+        }
+        spans.push(TextSpan {
+            text: val,
+            color: val_col,
+        });
+    }
+    spans
+}
+
+fn build_group_spans_inline(
+    store: &UiStore,
+    cat: MetricCategory,
+    metrics: &[MetricType],
+    alpha: u8,
+) -> Vec<TextSpan> {
+    let mut spans = Vec::new();
+    let cat_col = category_color_rgba(cat, &store.config, alpha);
+    let label_col = if store.config.category_colors_enabled {
+        cat_col
+    } else {
+        color_to_rgba_u32(effective_text_color(&store.config), alpha)
+    };
+    let sep_col = rgba_u32(130, 145, 168, alpha);
+
+    if !matches!(cat, MetricCategory::Fps) {
         spans.push(TextSpan {
             text: format!("{}  ", category_label(cat)),
             color: cat_col,
         });
     }
-
     for (idx, &metric) in metrics.iter().enumerate() {
         if idx > 0 {
             spans.push(TextSpan {

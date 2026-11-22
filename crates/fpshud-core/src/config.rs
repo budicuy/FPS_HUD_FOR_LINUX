@@ -509,7 +509,7 @@ pub fn apply_preset_standard(cfg: &mut HudConfig) {
 pub fn apply_preset_advance(cfg: &mut HudConfig) {
     cfg.preset = PresetType::Advance;
     cfg.metrics = MetricType::ALL.to_vec();
-    cfg.position = LayoutPosition::TopCenter;
+    cfg.position = LayoutPosition::TopLeft;
     cfg.arrangement = ArrangementMode::Stack;
     cfg.background_style = BackgroundStyle::Translucent;
     cfg.bg_alpha = 0.42;
