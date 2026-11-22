@@ -11,14 +11,11 @@ use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
 
 pub const OPEN_SANS_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/OpenSans-Bold.ttf");
-pub const LIBERATION_SANS_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/LiberationSans-Bold.ttf");
-pub const LIBERATION_SERIF_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/LiberationSerif-Bold.ttf");
-pub const LIBERATION_MONO_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/LiberationMono-Bold.ttf");
-pub const DEJAVU_SANS_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/DejaVuSans-Bold.ttf");
+pub const FIRA_CODE_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/FiraCode-Bold.ttf");
+pub const QUICKSAND_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/Quicksand-Bold.ttf");
+pub const POPPINS_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/Poppins-Bold.ttf");
+pub const JETBRAINS_MONO_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/JetBrainsMono-Bold.ttf");
 
 /// Validates that all 5 embedded TTF font blobs carry recognized SFNT / OpenType headers.
 #[must_use]
@@ -33,10 +30,10 @@ pub fn validate_embedded_font_headers() -> bool {
         )
     };
     valid_sfnt(OPEN_SANS_BOLD_TTF)
-        && valid_sfnt(LIBERATION_SANS_BOLD_TTF)
-        && valid_sfnt(LIBERATION_SERIF_BOLD_TTF)
-        && valid_sfnt(LIBERATION_MONO_BOLD_TTF)
-        && valid_sfnt(DEJAVU_SANS_BOLD_TTF)
+        && valid_sfnt(FIRA_CODE_BOLD_TTF)
+        && valid_sfnt(QUICKSAND_BOLD_TTF)
+        && valid_sfnt(POPPINS_BOLD_TTF)
+        && valid_sfnt(JETBRAINS_MONO_BOLD_TTF)
 }
 
 /// Axis-aligned rectangle in logical UI coordinates.
@@ -133,10 +130,10 @@ impl TextRasterizer {
     #[must_use]
     fn font_bytes_by_id(id: u8) -> &'static [u8] {
         match id {
-            1 => LIBERATION_SANS_BOLD_TTF,
-            2 => LIBERATION_SERIF_BOLD_TTF,
-            3 => LIBERATION_MONO_BOLD_TTF,
-            4 => DEJAVU_SANS_BOLD_TTF,
+            1 => FIRA_CODE_BOLD_TTF,
+            2 => QUICKSAND_BOLD_TTF,
+            3 => POPPINS_BOLD_TTF,
+            4 => JETBRAINS_MONO_BOLD_TTF,
             _ => OPEN_SANS_BOLD_TTF,
         }
     }
@@ -191,7 +188,7 @@ impl TextRasterizer {
     /// Returns `(ascent, descent, line_height)` in logical pixels for the given font size.
     #[must_use]
     pub fn line_metrics(&self, is_mono: bool, size_px: f32) -> (f32, f32, f32) {
-        let id = if is_mono { 3 } else { 0 };
+        let id = if is_mono { 4 } else { 0 };
         if let Some(font) = FontRef::from_index(Self::font_bytes_by_id(id), 0) {
             let m = font.metrics(&[]).scale(size_px.clamp(6.0, 96.0));
             let ascent = m.ascent.max(size_px * 0.72);
