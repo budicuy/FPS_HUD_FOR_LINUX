@@ -44,6 +44,46 @@ pub fn get_default_record_dir() -> PathBuf {
     PathBuf::from("/tmp").join("FPSHUD")
 }
 
+/// Returns the default directory for screenshots (`<XDG_PICTURES_DIR>/FPSHUD`, e.g. `~/Gambar/FPSHUD` or `~/Pictures/FPSHUD`).
+#[must_use]
+pub fn get_default_screenshot_dir() -> PathBuf {
+    if let Ok(xdg_pic) = env::var("XDG_PICTURES_DIR")
+        && !xdg_pic.is_empty()
+    {
+        return PathBuf::from(xdg_pic).join("FPSHUD");
+    }
+    if let Ok(home) = env::var("HOME")
+        && !home.is_empty()
+    {
+        let home_path = PathBuf::from(&home);
+        let user_dirs_path = env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_path.join(".config"))
+            .join("user-dirs.dirs");
+        if let Ok(content) = fs::read_to_string(user_dirs_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("XDG_PICTURES_DIR=") {
+                    let unquoted = rest.trim().trim_matches('"');
+                    if let Some(rel) = unquoted.strip_prefix("$HOME/") {
+                        return home_path.join(rel).join("FPSHUD");
+                    }
+                    if !unquoted.is_empty() && unquoted.starts_with('/') {
+                        return PathBuf::from(unquoted).join("FPSHUD");
+                    }
+                }
+            }
+        }
+        if home_path.join("Gambar").exists() {
+            return home_path.join("Gambar").join("FPSHUD");
+        }
+        return home_path.join("Pictures").join("FPSHUD");
+    }
+    PathBuf::from("/tmp").join("FPSHUD")
+}
+
 /// Ensures a private `0700` runtime directory owned by the current UID for IPC sockets.
 pub fn get_secure_runtime_dir() -> io::Result<PathBuf> {
     let my_uid = getuid().as_raw();

@@ -566,6 +566,19 @@ pub fn init_config_from_env(val: Option<&str>) -> HudConfig {
     cfg
 }
 
+impl HudConfig {
+    /// Returns the resolved screenshot output directory (`save_folder` if set, otherwise `<XDG_PICTURES_DIR>/FPSHUD`).
+    #[must_use]
+    pub fn resolved_screenshot_dir(&self) -> std::path::PathBuf {
+        let trimmed = self.save_folder.trim();
+        if trimmed.is_empty() {
+            crate::paths::get_default_screenshot_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    }
+}
+
 pub fn save_config_to_disk(cfg: &HudConfig) -> bool {
     let path = get_config_file_path();
     save_ini_file(&path, cfg)

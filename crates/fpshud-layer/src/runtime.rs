@@ -174,6 +174,7 @@ impl LayerRuntime {
             if std::env::var("DISABLE_FPS_HUD").as_deref() == Ok("1") {
                 config.enabled = false;
             }
+            let screenshot_dir = config.resolved_screenshot_dir();
             let save_dir = if config.save_folder.trim().is_empty() {
                 get_default_record_dir()
             } else {
@@ -182,7 +183,7 @@ impl LayerRuntime {
             Mutex::new(Self {
                 config,
                 input: InputManager::new(),
-                screenshot_worker: ScreenshotWorker::new(save_dir.clone()),
+                screenshot_worker: ScreenshotWorker::new(screenshot_dir),
                 overlay_sync: OverlayFrameSync::default(),
                 frametime: FrametimeAnalyzer::new(),
                 last_frame_at: None,
@@ -350,13 +351,16 @@ impl LayerRuntime {
         pixels: Vec<u8>,
         flip_y: bool,
     ) {
-        self.screenshot_worker.submit(RawFrameCapture {
-            width,
-            height,
-            format,
-            flip_y,
-            pixels,
-        });
+        self.screenshot_worker.submit_to(
+            RawFrameCapture {
+                width,
+                height,
+                format,
+                flip_y,
+                pixels,
+            },
+            Some(self.config.resolved_screenshot_dir()),
+        );
     }
 
     fn send_to_ui(&mut self, msg: &LayerToUiMsg) -> bool {
@@ -464,11 +468,7 @@ impl LayerRuntime {
                 self.pending_screenshot = Some(with_hud);
             }
             UiToLayerMsg::OpenSaveFolder => {
-                let dir = if self.config.save_folder.trim().is_empty() {
-                    get_default_record_dir()
-                } else {
-                    PathBuf::from(&self.config.save_folder)
-                };
+                let dir = self.config.resolved_screenshot_dir();
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = std::process::Command::new("xdg-open")
                     .arg(&dir)
@@ -561,6 +561,12 @@ impl LayerRuntime {
             self.init_sent = false;
             self.active_gpu_sent = false;
             self.last_software_cursor = false;
+        }
+
+        for saved_name in self.screenshot_worker.drain_saved_notifications() {
+            self.send_to_ui(&LayerToUiMsg::ToastNotification(format!(
+                "Screenshot saved: {saved_name}"
+            )));
         }
 
         self.overlay_sync.reset_for_resize(w, h);

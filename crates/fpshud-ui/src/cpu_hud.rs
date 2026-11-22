@@ -9,7 +9,6 @@ use crate::state::{
     MetricCategory, UiStore, category_color_rgba, category_label, color_to_rgba_u32,
     effective_text_color, group_metrics_ordered, hud_metric_short_label, rgba_u32,
 };
-use crate::toast::ToastState;
 use fpshud_core::{ArrangementMode, BackgroundStyle, FontFamily, LayoutPosition, MetricType};
 
 /// Premultiplied RGBA8888 bounding-box frame ready for positioned swapchain blitting.
@@ -122,47 +121,85 @@ impl CpuHudRenderer {
         let vp_w = viewport_w.max(1);
         let vp_h = viewport_h.max(1);
         let eff_scale = scale.clamp(0.5, 3.0);
-        let show_toast = !store.config.gui_open && ToastState::should_show(store.elapsed_sec);
+        let toast_text = if !store.config.gui_open {
+            store.current_toast_text()
+        } else {
+            None
+        };
 
         if !store.config.hud_visible {
-            if !show_toast {
-                return None;
-            }
-            return Some(self.render_toast_only(rasterizer, store, vp_w, vp_h, eff_scale));
+            let text = toast_text?;
+            return Some(self.render_toast_only(rasterizer, &text, vp_w, vp_h, eff_scale));
         }
 
         let (box_w, box_h, layout) = self.measure_hud_card(rasterizer, store, eff_scale);
-        let box_w_px = (box_w.ceil() as u32).clamp(1, vp_w);
-        let box_h_px = (box_h.ceil() as u32).clamp(1, vp_h);
+        let card_w_px = (box_w.ceil() as u32).clamp(1, vp_w);
+        let card_h_px = (box_h.ceil() as u32).clamp(1, vp_h);
+
+        let toast_metrics = toast_text.as_ref().map(|text| {
+            let font_size = (13.0 * eff_scale).clamp(10.0, 28.0);
+            let pad_x = (12.0 * eff_scale).round();
+            let pad_y = (6.0 * eff_scale).round();
+            let text_w = rasterizer.measure_text(false, font_size, text);
+            let tw = ((text_w + pad_x * 2.0).ceil() as u32).clamp(1, vp_w);
+            let th = (((font_size * 1.35) + pad_y * 2.0).ceil() as u32).clamp(1, vp_h);
+            let gap = (6.0 * eff_scale).round() as u32;
+            (text.as_str(), font_size, pad_x, tw, th, gap)
+        });
+
+        let total_w_px = toast_metrics
+            .map_or(card_w_px, |(_, _, _, tw, _, _)| card_w_px.max(tw))
+            .clamp(1, vp_w);
+        let total_h_px = toast_metrics
+            .map_or(card_h_px, |(_, _, _, _, th, gap)| card_h_px.saturating_add(gap).saturating_add(th))
+            .clamp(1, vp_h);
+
         let (dst_x, dst_y) = resolve_hud_origin(
             store.config.position,
             store.config.custom_pos_x,
             store.config.custom_pos_y,
             vp_w,
             vp_h,
-            box_w_px,
-            box_h_px,
+            total_w_px,
+            total_h_px,
             eff_scale,
         );
 
-        let mut rgba = vec![0_u8; (box_w_px as usize) * (box_h_px as usize) * 4];
-        let mut canvas = CpuCanvas::new(&mut rgba, box_w_px, box_h_px, 1.0);
+        let mut rgba = vec![0_u8; (total_w_px as usize) * (total_h_px as usize) * 4];
+        let mut canvas = CpuCanvas::new(&mut rgba, total_w_px, total_h_px, 1.0);
         self.paint_hud_card(
             &mut canvas,
             rasterizer,
             store,
             0.0,
             0.0,
-            box_w_px as f32,
-            box_h_px as f32,
+            card_w_px as f32,
+            card_h_px as f32,
             &layout,
         );
+
+        if let Some((text, font_size, pad_x, tw, th, gap)) = toast_metrics {
+            let ty = (card_h_px.saturating_add(gap)) as f32;
+            let radius = (6.0 * eff_scale).round();
+            let rect = Rect::new(0.0, ty, tw as f32, th as f32);
+            canvas.fill_rounded_rect(rect, radius, rgba_u32(16, 22, 30, 225));
+            canvas.stroke_rounded_rect(rect, radius, 1.0, rgba_u32(82, 168, 255, 180));
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(pad_x, ty, (tw as f32 - pad_x * 2.0).max(1.0), th as f32),
+                false,
+                font_size,
+                rgba_u32(232, 240, 250, 250),
+                text,
+                false,
+            );
+        }
 
         Some(CpuHudFrame {
             dst_x,
             dst_y,
-            width: box_w_px,
-            height: box_h_px,
+            width: total_w_px,
+            height: total_h_px,
             rgba,
         })
     }
@@ -205,8 +242,9 @@ impl CpuHudRenderer {
             );
         }
 
-        if !store.config.gui_open && ToastState::should_show(store.elapsed_sec) {
-            let text = ToastState::format_hint_text(&store.config);
+        if !store.config.gui_open
+            && let Some(text) = store.current_toast_text()
+        {
             let font_size = 13.0;
             let text_w = rasterizer.measure_text(false, font_size, &text);
             let box_w = (text_w + 24.0).min((logical_w - 32.0).max(40.0));
@@ -482,16 +520,15 @@ impl CpuHudRenderer {
     fn render_toast_only(
         &self,
         rasterizer: &mut TextRasterizer,
-        store: &UiStore,
+        text: &str,
         vp_w: u32,
         vp_h: u32,
         eff_scale: f32,
     ) -> CpuHudFrame {
-        let text = ToastState::format_hint_text(&store.config);
         let font_size = (13.0 * eff_scale).clamp(10.0, 28.0);
         let pad_x = (12.0 * eff_scale).round();
         let pad_y = (6.0 * eff_scale).round();
-        let text_w = rasterizer.measure_text(false, font_size, &text);
+        let text_w = rasterizer.measure_text(false, font_size, text);
         let box_w = ((text_w + pad_x * 2.0).ceil() as u32).clamp(1, vp_w);
         let box_h = (((font_size * 1.35) + pad_y * 2.0).ceil() as u32).clamp(1, vp_h);
         let margin = (16.0 * eff_scale).round() as i32;
@@ -510,7 +547,7 @@ impl CpuHudRenderer {
             false,
             font_size,
             rgba_u32(232, 240, 250, 245),
-            &text,
+            text,
             false,
         );
 

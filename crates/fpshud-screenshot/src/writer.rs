@@ -1,10 +1,11 @@
-use fpshud_core::paths::{get_default_record_dir, sanitize_filename_prefix};
+use fpshud_core::paths::{get_default_screenshot_dir, sanitize_filename_prefix};
 use rustix::fs::{Mode, OFlags, open as rustix_open};
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,11 +28,11 @@ pub struct RawFrameCapture {
     pub pixels: Vec<u8>,
 }
 
-/// Generates a traversal-safe `.png` destination path inside `dir` (falls back to `~/Videos/FPSHUD`).
+/// Generates a traversal-safe `.png` destination path inside `dir` (falls back to `<XDG_PICTURES_DIR>/FPSHUD`).
 #[must_use]
 pub fn generate_screenshot_path(dir: &Path, prefix: &str) -> PathBuf {
     let target_dir = if dir.as_os_str().is_empty() {
-        get_default_record_dir()
+        get_default_screenshot_dir()
     } else {
         dir.to_path_buf()
     };
@@ -150,35 +151,36 @@ pub fn write_png_to_path(path: &Path, frame: &RawFrameCapture) -> io::Result<()>
 
 /// Bounded asynchronous background encoder keeping the game render thread lock-free.
 pub struct ScreenshotWorker {
-    tx: Option<SyncSender<RawFrameCapture>>,
+    tx: Option<SyncSender<(RawFrameCapture, Option<PathBuf>)>>,
+    saved_rx: Mutex<Receiver<String>>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl ScreenshotWorker {
     #[must_use]
     pub fn new(save_dir: PathBuf) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<RawFrameCapture>(2);
-        let dir = if save_dir.as_os_str().is_empty() {
-            get_default_record_dir()
+        let (tx, rx) = mpsc::sync_channel::<(RawFrameCapture, Option<PathBuf>)>(2);
+        let (saved_tx, saved_rx) = mpsc::channel::<String>();
+        let default_dir = if save_dir.as_os_str().is_empty() {
+            get_default_screenshot_dir()
         } else {
             save_dir
         };
         let handle = thread::Builder::new()
             .name("fpshud_shot".to_string())
             .spawn(move || {
-                while let Ok(frame) = rx.recv() {
+                while let Ok((frame, override_dir)) = rx.recv() {
+                    let dir = override_dir
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or_else(|| default_dir.clone());
                     let target = generate_screenshot_path(&dir, "FPSHUD");
                     if write_png_to_path(&target, &frame).is_ok() {
                         let label = target
                             .file_name()
                             .and_then(|s| s.to_str())
-                            .unwrap_or("Screenshot saved");
-                        let _ = std::process::Command::new("notify-send")
-                            .args(["-a", "FPSHUD", "-t", "2500", "FPSHUD Screenshot Saved", label])
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
+                            .unwrap_or("screenshot.png")
+                            .to_string();
+                        let _ = saved_tx.send(label);
                     }
                 }
             })
@@ -186,14 +188,31 @@ impl ScreenshotWorker {
 
         Self {
             tx: Some(tx),
+            saved_rx: Mutex::new(saved_rx),
             handle,
         }
     }
 
     pub fn submit(&self, frame: RawFrameCapture) {
+        self.submit_to(frame, None);
+    }
+
+    pub fn submit_to(&self, frame: RawFrameCapture, save_dir: Option<PathBuf>) {
         if let Some(tx) = &self.tx {
-            let _ = tx.try_send(frame);
+            let _ = tx.try_send((frame, save_dir));
         }
+    }
+
+    /// Drains any completed screenshot filenames for in-HUD toast notifications.
+    #[must_use]
+    pub fn drain_saved_notifications(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(rx) = self.saved_rx.lock() {
+            while let Ok(name) = rx.try_recv() {
+                out.push(name);
+            }
+        }
+        out
     }
 }
 

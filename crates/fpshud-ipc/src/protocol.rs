@@ -68,6 +68,7 @@ pub enum LayerToUiMsg {
         scale: f32,
     },
     SoftwareCursor(bool),
+    ToastNotification(String),
     Shutdown,
 }
 

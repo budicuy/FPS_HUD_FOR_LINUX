@@ -223,6 +223,7 @@ enum HitAction {
     TriggerScreenshot,
     TriggerBenchmark,
     TriggerOpenSaveFolder,
+    TriggerPickScreenshotFolder,
     SetScreenshotMode(bool),
     ResetSettings,
     CaptureKeybind(KeybindTarget),
@@ -604,6 +605,7 @@ impl CpuDashboard {
             HitAction::TriggerScreenshot => self.store.trigger_screenshot(),
             HitAction::TriggerBenchmark => self.store.trigger_benchmark(),
             HitAction::TriggerOpenSaveFolder => self.store.trigger_open_save_folder(),
+            HitAction::TriggerPickScreenshotFolder => self.store.trigger_pick_screenshot_folder(),
             HitAction::SetScreenshotMode(with_hud) => self.store.set_screenshot_mode(with_hud),
             HitAction::ResetSettings => {
                 self.open_dropdown = None;
@@ -1493,20 +1495,54 @@ impl CpuDashboard {
         );
         y += 29.0;
 
+        let half_w = (iw - 4.0) * 0.5;
         self.paint_button(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 24.0),
-            "Open Save Folder",
+            Rect::new(ix, y, half_w, 24.0),
+            "Choose Folder",
             false,
             rgba_u32(42, 114, 212, 235),
+            true,
+            HitAction::TriggerPickScreenshotFolder,
             false,
+        );
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(ix + half_w + 4.0, y, half_w, 24.0),
+            "Open Folder",
+            false,
+            rgba_u32(42, 114, 212, 235),
+            true,
             HitAction::TriggerOpenSaveFolder,
             false,
         );
-        y += 29.0;
+        y += 26.0;
 
-        let half_w = (iw - 4.0) * 0.5;
+        let resolved_dir = self.store.config.resolved_screenshot_dir();
+        let display_dir = {
+            let full = resolved_dir.to_string_lossy();
+            if let Ok(home) = std::env::var("HOME")
+                && !home.is_empty()
+                && let Some(rest) = full.strip_prefix(&home)
+            {
+                format!("~{rest}")
+            } else {
+                full.into_owned()
+            }
+        };
+        canvas.draw_text_in_rect(
+            rasterizer,
+            Rect::new(ix + 2.0, y, (iw - 4.0).max(1.0), 14.0),
+            false,
+            10.5,
+            rgba_u32(150, 172, 198, 220),
+            &display_dir,
+            false,
+        );
+        y += 16.0;
+
         let clean = !self.store.config.screenshot_with_hud;
         self.paint_button(
             canvas,

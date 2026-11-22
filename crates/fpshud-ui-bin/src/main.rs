@@ -138,6 +138,9 @@ struct DaemonState {
     shm_fd_dirty: bool,
     scheduler: DirtyScheduler,
     toast_was_active: bool,
+    active_toast_text: Option<String>,
+    active_toast_until_sec: f32,
+    folder_picker_rx: Option<std::sync::mpsc::Receiver<String>>,
     started_at: Instant,
     pub surface_scale: f32,
     surface_width: u32,
@@ -174,6 +177,9 @@ impl DaemonState {
             shm_fd_dirty: true,
             scheduler: DirtyScheduler::new(false),
             toast_was_active: true,
+            active_toast_text: None,
+            active_toast_until_sec: 0.0,
+            folder_picker_rx: None,
             started_at: Instant::now(),
             surface_scale: 1.0,
             surface_width: 1280,
@@ -354,8 +360,7 @@ impl DaemonState {
             LayerToUiMsg::TelemetryUpdate(snap) => {
                 self.telemetry = *snap;
                 self.sync_dashboard();
-                let toast_active = !self.config.gui_open
-                    && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
+                let toast_active = self.is_toast_active();
                 let in_game_needs_draw = self.config.hud_visible
                     || toast_active
                     || (self.config.gui_open && self.overlay_portal.is_none());
@@ -372,8 +377,7 @@ impl DaemonState {
             LayerToUiMsg::FrameTick(tick) => {
                 self.merge_frame_tick(*tick);
                 self.sync_dashboard();
-                let toast_active = !self.config.gui_open
-                    && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
+                let toast_active = self.is_toast_active();
                 let in_game_needs_draw = self.config.hud_visible
                     || toast_active
                     || (self.config.gui_open && self.overlay_portal.is_none());
@@ -435,6 +439,9 @@ impl DaemonState {
                     dash.set_software_cursor(self.overlay_portal.is_none() && enabled);
                     self.scheduler.mark_dirty();
                 }
+            }
+            LayerToUiMsg::ToastNotification(text) => {
+                self.push_toast(text);
             }
             LayerToUiMsg::Shutdown => return Ok(false),
         }
@@ -681,13 +688,95 @@ impl DaemonState {
         true
     }
 
+    fn push_toast(&mut self, text: impl Into<String>) {
+        self.active_toast_text = Some(text.into());
+        self.active_toast_until_sec = self.started_at.elapsed().as_secs_f32()
+            + fpshud_ui::toast::NOTIFICATION_DURATION_SEC;
+        self.toast_was_active = true;
+        self.scheduler.mark_dirty();
+    }
+
+    fn is_toast_active(&self) -> bool {
+        if self.config.gui_open {
+            return false;
+        }
+        let elapsed = self.started_at.elapsed().as_secs_f32();
+        (self.active_toast_text.is_some() && elapsed < self.active_toast_until_sec)
+            || ToastState::should_show(elapsed)
+    }
+
     fn check_toast_expiry(&mut self) {
-        let now_active = !self.config.gui_open
-            && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
+        let now_active = self.is_toast_active();
         if self.toast_was_active && !now_active {
             self.toast_was_active = false;
+            self.active_toast_text = None;
             self.scheduler.mark_dirty();
         }
+    }
+
+    fn poll_folder_picker(&mut self, conn: &mut IpcConnection) -> Result<()> {
+        if let Some(dash) = &mut self.dashboard
+            && dash.store.take_pick_screenshot_folder()
+            && self.folder_picker_rx.is_none()
+        {
+            let initial_dir = self.config.resolved_screenshot_dir();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.folder_picker_rx = Some(rx);
+            std::thread::spawn(move || {
+                let initial_str = initial_dir.to_string_lossy().into_owned();
+                let picked = std::process::Command::new("zenity")
+                    .args([
+                        "--file-selection",
+                        "--directory",
+                        "--title=Select FPSHUD Screenshot Folder",
+                        &format!("--filename={initial_str}/"),
+                    ])
+                    .env_remove("LD_PRELOAD")
+                    .env("DISABLE_FPS_HUD", "1")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .or_else(|| {
+                        std::process::Command::new("kdialog")
+                            .args(["--getexistingdirectory", &initial_str])
+                            .env_remove("LD_PRELOAD")
+                            .env("DISABLE_FPS_HUD", "1")
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                    })
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(dir) = picked {
+                    let _ = tx.send(dir);
+                }
+            });
+        }
+
+        if let Some(rx) = &self.folder_picker_rx {
+            match rx.try_recv() {
+                Ok(dir) => {
+                    self.folder_picker_rx = None;
+                    self.config.save_folder = dir;
+                    fpshud_core::config::save_config_to_disk(&self.config);
+                    self.sync_dashboard();
+                    send_ui_msg(
+                        conn,
+                        &UiToLayerMsg::ConfigUpdated(self.config.clone()),
+                        None,
+                        false,
+                    )?;
+                    self.overlay_dirty.mark_dirty();
+                    self.push_toast("Screenshot folder updated");
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.folder_picker_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        Ok(())
     }
 
     fn ensure_shm_capacity(&mut self, width: u32, height: u32) -> Result<()> {
@@ -734,6 +823,8 @@ impl DaemonState {
             }
             let mut store = UiStore::new(self.config.clone(), self.telemetry.clone());
             store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
+            store.active_toast_text = self.active_toast_text.clone();
+            store.active_toast_until_sec = self.active_toast_until_sec;
             let Some(frame) = self.cpu_hud.render_with_rasterizer(
                 &mut self.rasterizer,
                 &store,
@@ -847,6 +938,7 @@ fn run_daemon(args: DaemonArgs) -> Result<()> {
 
         state.sync_external_overlay(&mut conn)?;
         let overlay_active = state.poll_and_render_external_overlay(&mut conn)?;
+        state.poll_folder_picker(&mut conn)?;
         state.check_toast_expiry();
         state.render_if_dirty(&mut conn)?;
 

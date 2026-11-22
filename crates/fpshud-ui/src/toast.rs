@@ -2,6 +2,7 @@ use fpshud_core::HudConfig;
 use fpshud_core::keybind::format_keybind;
 
 pub const TOAST_DURATION_SEC: f32 = 5.5;
+pub const NOTIFICATION_DURATION_SEC: f32 = 3.0;
 
 pub struct ToastState;
 

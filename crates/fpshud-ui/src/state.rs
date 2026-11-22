@@ -430,6 +430,9 @@ pub struct UiStore {
     pub active_keybind_capture: KeybindTarget,
     pub status_message: Option<String>,
     pub elapsed_sec: f32,
+    pub active_toast_text: Option<String>,
+    pub active_toast_until_sec: f32,
+    pub pending_pick_screenshot_folder: bool,
     outgoing: Vec<UiToLayerMsg>,
 }
 
@@ -443,8 +446,38 @@ impl UiStore {
             active_keybind_capture: KeybindTarget::None,
             status_message: None,
             elapsed_sec: 0.0,
+            active_toast_text: None,
+            active_toast_until_sec: 0.0,
+            pending_pick_screenshot_folder: false,
             outgoing: Vec::new(),
         }
+    }
+
+    pub fn push_toast(&mut self, text: impl Into<String>) {
+        self.active_toast_text = Some(text.into());
+        self.active_toast_until_sec =
+            self.elapsed_sec + crate::toast::NOTIFICATION_DURATION_SEC;
+    }
+
+    #[must_use]
+    pub fn current_toast_text(&self) -> Option<String> {
+        if let Some(ref text) = self.active_toast_text
+            && self.elapsed_sec < self.active_toast_until_sec
+        {
+            return Some(text.clone());
+        }
+        if crate::toast::ToastState::should_show(self.elapsed_sec) {
+            return Some(crate::toast::ToastState::format_hint_text(&self.config));
+        }
+        None
+    }
+
+    pub fn trigger_pick_screenshot_folder(&mut self) {
+        self.pending_pick_screenshot_folder = true;
+    }
+
+    pub fn take_pick_screenshot_folder(&mut self) -> bool {
+        std::mem::take(&mut self.pending_pick_screenshot_folder)
     }
 
     #[must_use]
