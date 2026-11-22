@@ -1,5 +1,3 @@
-//! Optional runtime vendor GPU telemetry via safe `nvml-wrapper` (`libnvidia-ml.so.1`), zero `DT_NEEDED`, zero `unsafe`.
-
 use crate::snapshot::{GpuBackendType, TelemetrySnapshot};
 use nvml_wrapper::Nvml;
 use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
