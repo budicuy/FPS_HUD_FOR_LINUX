@@ -451,7 +451,9 @@ impl LayerRuntime {
                 if self.config.gui_open && !cfg.gui_open {
                     self.arm_gui_reopen_debounce();
                 }
+                let keep_enabled = self.config.enabled;
                 self.config = cfg;
+                self.config.enabled = keep_enabled;
                 let _ = save_config_to_disk(&self.config);
             }
             UiToLayerMsg::BenchmarkToggle => self.toggle_benchmark(),

@@ -613,8 +613,10 @@ impl UiStore {
     }
 
     pub fn reset_settings(&mut self) {
+        let keep_enabled = self.config.enabled;
         let keep_open = self.config.gui_open;
         self.config = HudConfig::default();
+        self.config.enabled = keep_enabled;
         self.config.gui_open = keep_open;
         self.status_message = Some("Settings reset to defaults.".to_string());
         self.emit_config_updated();

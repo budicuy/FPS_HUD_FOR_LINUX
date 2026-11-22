@@ -59,6 +59,13 @@ fn ui_store_all_metrics_filters_thermal_drag_and_actions() {
 
     store.apply_preset(PresetType::Advance);
     assert_eq!(store.config.preset, PresetType::Advance);
+    store.config.enabled = true;
+    store.config.gui_open = true;
+    store.reset_settings();
+    assert!(
+        store.config.enabled && store.config.gui_open,
+        "reset_settings must preserve runtime enabled & gui_open flags"
+    );
     store.set_custom_pos(0.25, 0.75);
     assert_eq!(store.config.position, LayoutPosition::Custom);
     store.trigger_screenshot();
