@@ -11,13 +11,14 @@ use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
 
 pub const OPEN_SANS_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/OpenSans-Bold.ttf");
-pub const OPEN_SANS_CONDENSED_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/OpenSans-CondensedBold.ttf");
-pub const OPEN_SANS_EXTRA_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/OpenSans-ExtraBold.ttf");
-pub const VERA_MONO_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/VeraMono-Bold.ttf");
-pub const DEJAVU_MONO_BOLD_TTF: &[u8] =
-    include_bytes!("../../../assets/fonts/DejaVuSansMono-Bold.ttf");
+pub const LIBERATION_SANS_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/LiberationSans-Bold.ttf");
+pub const LIBERATION_SERIF_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/LiberationSerif-Bold.ttf");
+pub const LIBERATION_MONO_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/LiberationMono-Bold.ttf");
+pub const DEJAVU_SANS_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/DejaVuSans-Bold.ttf");
 
 /// Validates that all 5 embedded TTF font blobs carry recognized SFNT / OpenType headers.
 #[must_use]
@@ -32,10 +33,10 @@ pub fn validate_embedded_font_headers() -> bool {
         )
     };
     valid_sfnt(OPEN_SANS_BOLD_TTF)
-        && valid_sfnt(OPEN_SANS_CONDENSED_BOLD_TTF)
-        && valid_sfnt(OPEN_SANS_EXTRA_BOLD_TTF)
-        && valid_sfnt(VERA_MONO_BOLD_TTF)
-        && valid_sfnt(DEJAVU_MONO_BOLD_TTF)
+        && valid_sfnt(LIBERATION_SANS_BOLD_TTF)
+        && valid_sfnt(LIBERATION_SERIF_BOLD_TTF)
+        && valid_sfnt(LIBERATION_MONO_BOLD_TTF)
+        && valid_sfnt(DEJAVU_SANS_BOLD_TTF)
 }
 
 /// Axis-aligned rectangle in logical UI coordinates.
@@ -132,10 +133,10 @@ impl TextRasterizer {
     #[must_use]
     fn font_bytes_by_id(id: u8) -> &'static [u8] {
         match id {
-            1 => OPEN_SANS_CONDENSED_BOLD_TTF,
-            2 => OPEN_SANS_EXTRA_BOLD_TTF,
-            3 => VERA_MONO_BOLD_TTF,
-            4 => DEJAVU_MONO_BOLD_TTF,
+            1 => LIBERATION_SANS_BOLD_TTF,
+            2 => LIBERATION_SERIF_BOLD_TTF,
+            3 => LIBERATION_MONO_BOLD_TTF,
+            4 => DEJAVU_SANS_BOLD_TTF,
             _ => OPEN_SANS_BOLD_TTF,
         }
     }

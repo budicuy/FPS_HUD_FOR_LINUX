@@ -69,10 +69,10 @@ pub const SCALE_OPTIONS: &[f32] = &[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 pub const FONT_OPTIONS: &[(&str, FontFamily)] = &[
     ("Open Sans Bold", FontFamily::SansBold),
-    ("Open Sans Condensed", FontFamily::CondensedBold),
-    ("Open Sans ExtraBold", FontFamily::ExtraBold),
-    ("Vera Mono Bold", FontFamily::VeraMono),
-    ("DejaVu Mono Bold", FontFamily::MonoBold),
+    ("Liberation Sans", FontFamily::CondensedBold),
+    ("Liberation Serif", FontFamily::ExtraBold),
+    ("Liberation Mono", FontFamily::VeraMono),
+    ("DejaVu Sans", FontFamily::MonoBold),
 ];
 
 pub const FONT_SIZE_OPTIONS: &[u8] = &[12, 14, 16, 18, 20, 22, 24, 28, 32, 36];

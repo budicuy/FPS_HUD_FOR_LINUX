@@ -201,10 +201,10 @@ pub const fn bg_style_display_name(style: BackgroundStyle) -> &'static str {
 pub const fn font_dropdown_label(font: FontFamily) -> &'static str {
     match font {
         FontFamily::SansBold => "Open Sans Bold",
-        FontFamily::CondensedBold => "Open Sans Condensed",
-        FontFamily::ExtraBold => "Open Sans ExtraBold",
-        FontFamily::VeraMono => "Vera Mono Bold",
-        FontFamily::MonoBold | FontFamily::AdwaitaMono => "DejaVu Mono Bold",
+        FontFamily::CondensedBold => "Liberation Sans",
+        FontFamily::ExtraBold => "Liberation Serif",
+        FontFamily::VeraMono => "Liberation Mono",
+        FontFamily::MonoBold | FontFamily::AdwaitaMono => "DejaVu Sans",
     }
 }
 
@@ -406,10 +406,10 @@ pub fn resolve_metric_value_color(
 pub const fn font_family_name(font: FontFamily) -> &'static str {
     match font {
         FontFamily::SansBold => "Open Sans",
-        FontFamily::CondensedBold => "Open Sans Condensed",
-        FontFamily::ExtraBold => "Open Sans ExtraBold",
-        FontFamily::VeraMono => "Bitstream Vera Sans Mono",
-        FontFamily::MonoBold | FontFamily::AdwaitaMono => "DejaVu Sans Mono",
+        FontFamily::CondensedBold => "Liberation Sans",
+        FontFamily::ExtraBold => "Liberation Serif",
+        FontFamily::VeraMono => "Liberation Mono",
+        FontFamily::MonoBold | FontFamily::AdwaitaMono => "DejaVu Sans",
     }
 }
 
