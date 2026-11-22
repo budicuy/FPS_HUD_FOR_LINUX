@@ -248,3 +248,12 @@ fn gl_overlay_texture_unit_preserves_non_zero_active_unit() {
     assert_eq!(*ops.active_unit.borrow(), 0x84C3); // Restored GL_TEXTURE3
     assert_eq!(*ops.bound_tex.borrow(), [42, 0, 0, 99]); // Neither unit clobbered!
 }
+
+#[test]
+fn opengl_renderer_detects_context_change_to_avoid_stale_handles() {
+    use fpshud::opengl::blit::should_reset_gl_renderer;
+
+    assert!(!should_reset_gl_renderer(0x1000, 0x1000));
+    assert!(should_reset_gl_renderer(0x1000, 0x2000));
+    assert!(!should_reset_gl_renderer(0, 0));
+}

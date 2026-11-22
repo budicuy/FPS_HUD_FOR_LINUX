@@ -285,3 +285,13 @@ fn external_overlay_ipc_disables_grabs_and_debounces_f12_reopen() {
     assert!(rt.test_key_event_triggers_config_sync_once(88));
     assert!(rt.config.gui_open);
 }
+
+#[test]
+fn vulkan_hooks_clamp_group_count_and_guard_null_dispatch_key() {
+    use fpshud::vulkan::hooks::clamp_device_group_count;
+    use fpshud::vulkan::swapchain::dispatch_key_from_raw;
+
+    assert_eq!(clamp_device_group_count(2, 32), 2);
+    assert_eq!(clamp_device_group_count(99, 32), 32);
+    assert_eq!(unsafe { dispatch_key_from_raw(0) }, 0);
+}

@@ -229,7 +229,31 @@ pub fn with_overlay_texture_unit<F: FnOnce()>(ops: &dyn GlStateOps, draw: F) {
     ops.active_texture(prev_active_tex.max(glow::TEXTURE0 as i32) as u32);
 }
 
+/// Returns `true` when the active OpenGL context pointer changed, requiring handle re-creation.
+#[must_use]
+pub const fn should_reset_gl_renderer(cached_ctx: usize, current_ctx: usize) -> bool {
+    cached_ctx != 0 && current_ctx != 0 && cached_ctx != current_ctx
+}
+
+unsafe fn query_current_gl_context(
+    api_name: &str,
+    proc_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
+) -> usize {
+    let sym_name = if api_name.contains("EGL") {
+        c"eglGetCurrentContext"
+    } else {
+        c"glXGetCurrentContext"
+    };
+    let sym = unsafe { proc_lookup(sym_name.as_ptr()) };
+    if sym.is_null() {
+        return 0;
+    }
+    let get_ctx: unsafe extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(sym) };
+    (unsafe { get_ctx() }) as usize
+}
+
 struct GlOverlayRenderer {
+    context_id: usize,
     program: Option<glow::Program>,
     vao: Option<glow::VertexArray>,
     texture: Option<glow::Texture>,
@@ -524,8 +548,10 @@ pub(crate) unsafe fn on_swap_buffers(
             let prev_depth = GlStateOps::is_enabled(gl, glow::DEPTH_TEST);
             let prev_cull = GlStateOps::is_enabled(gl, glow::CULL_FACE);
 
+            let cur_ctx = unsafe { query_current_gl_context(api_name, proc_lookup) };
             let renderer = GL_RENDERER.get_or_init(|| {
                 Mutex::new(GlOverlayRenderer {
+                    context_id: cur_ctx,
                     program: None,
                     vao: None,
                     texture: None,
@@ -538,9 +564,21 @@ pub(crate) unsafe fn on_swap_buffers(
             });
 
             with_overlay_texture_unit(gl, || {
-                if let Ok(mut gr) = renderer.lock()
-                    && gr.ensure_initialized(gl)
-                {
+                if let Ok(mut gr) = renderer.lock() {
+                    if should_reset_gl_renderer(gr.context_id, cur_ctx) {
+                        gr.program = None;
+                        gr.vao = None;
+                        gr.texture = None;
+                        gr.sampler_loc = None;
+                        gr.tex_w = 0;
+                        gr.tex_h = 0;
+                        gr.uploaded_generation = 0;
+                        gr.initialized = false;
+                    }
+                    if cur_ctx != 0 {
+                        gr.context_id = cur_ctx;
+                    }
+                    if gr.ensure_initialized(gl) {
                     GlStateOps::bind_framebuffer(gl, 0);
                     gl.bind_unpack_buffer(0);
                     unsafe {
@@ -598,6 +636,7 @@ pub(crate) unsafe fn on_swap_buffers(
                         <glow::Context as HasContext>::bind_vertex_array(gl, gr.vao);
                         gl.uniform_1_i32(gr.sampler_loc.as_ref(), 0);
                         gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                    }
                     }
                 }
             });

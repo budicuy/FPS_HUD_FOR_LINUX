@@ -5,8 +5,13 @@ use fpshud_input::SurfaceBackendType;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Reads the Vulkan loader dispatch table key from the first word of a dispatchable handle.
+///
+/// # Safety
+/// `raw` must be `0` or a valid pointer to a live Vulkan dispatchable handle (`VkInstance`,
+/// `VkPhysicalDevice`, `VkDevice`, `VkQueue`, or `VkCommandBuffer`).
 #[must_use]
-pub fn dispatch_key_from_raw(raw: u64) -> usize {
+pub unsafe fn dispatch_key_from_raw(raw: u64) -> usize {
     if raw == 0 {
         return 0;
     }
@@ -242,7 +247,9 @@ impl SwapchainData {
             unsafe {
                 slot.capture.destroy(dev);
                 dev.destroy_semaphore(slot.semaphore, None);
-                dev.destroy_fence(slot.fence, None);
+                if slot.fence != vk::Fence::null() {
+                    dev.destroy_fence(slot.fence, None);
+                }
                 dev.destroy_command_pool(slot.command_pool, None);
                 dev.destroy_framebuffer(slot.framebuffer, None);
                 dev.destroy_image_view(slot.image_view, None);

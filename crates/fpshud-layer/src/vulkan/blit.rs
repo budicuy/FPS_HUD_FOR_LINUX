@@ -401,7 +401,13 @@ impl VulkanBlitPipeline {
             .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-        let sampler = unsafe { device.create_sampler(&sampler_info, None)? };
+        let sampler = match unsafe { device.create_sampler(&sampler_info, None) } {
+            Ok(s) => s,
+            Err(e) => {
+                unsafe { device.destroy_render_pass(render_pass, None) };
+                return Err(e);
+            }
+        };
 
         let binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -410,7 +416,17 @@ impl VulkanBlitPipeline {
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
         let bindings = [binding];
         let dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&dsl_info, None)? };
+        let descriptor_set_layout =
+            match unsafe { device.create_descriptor_set_layout(&dsl_info, None) } {
+                Ok(d) => d,
+                Err(e) => {
+                    unsafe {
+                        device.destroy_sampler(sampler, None);
+                        device.destroy_render_pass(render_pass, None);
+                    }
+                    return Err(e);
+                }
+            };
 
         let pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -419,28 +435,77 @@ impl VulkanBlitPipeline {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(count as u32)
             .pool_sizes(&pool_sizes);
-        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
+        let descriptor_pool = match unsafe { device.create_descriptor_pool(&pool_info, None) } {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe {
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_sampler(sampler, None);
+                    device.destroy_render_pass(render_pass, None);
+                }
+                return Err(e);
+            }
+        };
+
+        let cleanup_base = |dev: &ash::Device, pl: Option<vk::PipelineLayout>| unsafe {
+            if let Some(layout) = pl {
+                dev.destroy_pipeline_layout(layout, None);
+            }
+            dev.destroy_descriptor_pool(descriptor_pool, None);
+            dev.destroy_descriptor_set_layout(descriptor_set_layout, None);
+            dev.destroy_sampler(sampler, None);
+            dev.destroy_render_pass(render_pass, None);
+        };
 
         let set_layouts = vec![descriptor_set_layout; count];
         let alloc_ds = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
-        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_ds)? };
+        let descriptor_sets = match unsafe { device.allocate_descriptor_sets(&alloc_ds) } {
+            Ok(ds) => ds,
+            Err(e) => {
+                cleanup_base(device, None);
+                return Err(e);
+            }
+        };
 
         let pl_dsls = [descriptor_set_layout];
         let pl_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&pl_dsls);
-        let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_info, None)? };
-
-        let vert_words = bytes_to_u32_words(QUAD_VERT_SPV)
-            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
-        let frag_words = bytes_to_u32_words(QUAD_FRAG_SPV)
-            .ok_or(vk::Result::ERROR_INVALID_SHADER_NV)?;
-
-        let vert_mod = unsafe {
-            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vert_words), None)?
+        let pipeline_layout = match unsafe { device.create_pipeline_layout(&pl_info, None) } {
+            Ok(pl) => pl,
+            Err(e) => {
+                cleanup_base(device, None);
+                return Err(e);
+            }
         };
-        let frag_mod = unsafe {
-            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&frag_words), None)?
+
+        let Some(vert_words) = bytes_to_u32_words(QUAD_VERT_SPV) else {
+            cleanup_base(device, Some(pipeline_layout));
+            return Err(vk::Result::ERROR_INVALID_SHADER_NV);
+        };
+        let Some(frag_words) = bytes_to_u32_words(QUAD_FRAG_SPV) else {
+            cleanup_base(device, Some(pipeline_layout));
+            return Err(vk::Result::ERROR_INVALID_SHADER_NV);
+        };
+
+        let vert_mod = match unsafe {
+            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vert_words), None)
+        } {
+            Ok(m) => m,
+            Err(e) => {
+                cleanup_base(device, Some(pipeline_layout));
+                return Err(e);
+            }
+        };
+        let frag_mod = match unsafe {
+            device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&frag_words), None)
+        } {
+            Ok(m) => m,
+            Err(e) => {
+                unsafe { device.destroy_shader_module(vert_mod, None) };
+                cleanup_base(device, Some(pipeline_layout));
+                return Err(e);
+            }
         };
 
         let stages = [
@@ -505,7 +570,10 @@ impl VulkanBlitPipeline {
         }
         let pipeline = match pipelines {
             Ok(list) => list[0],
-            Err((_, err)) => return Err(err),
+            Err((_, err)) => {
+                cleanup_base(device, Some(pipeline_layout));
+                return Err(err);
+            }
         };
 
         let mut slots: Vec<OverlayGpuSlot> =

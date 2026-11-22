@@ -15,6 +15,13 @@ use std::sync::{Arc, Mutex};
 
 const MIN_SUPPORTED_INTERFACE_VERSION: u32 = 2;
 
+/// Clamps driver-reported `physical_device_count` to the fixed Vulkan group array length
+/// so an out-of-range value can never panic across an `extern "system"` FFI boundary.
+#[must_use]
+pub fn clamp_device_group_count(raw_count: u32, max_len: usize) -> usize {
+    (raw_count as usize).min(max_len)
+}
+
 unsafe fn pfn_to_ptr(f: vk::PFN_vkVoidFunction) -> *const c_void {
     match f {
         Some(func) => (func as *const ()).cast::<c_void>(),
@@ -159,7 +166,7 @@ pub(crate) unsafe extern "system" fn hook_create_instance(
 
     if let Ok(mut reg) = registry().lock() {
         reg.instances
-            .insert(dispatch_key_from_raw(instance_handle.as_raw()), data);
+            .insert(unsafe { dispatch_key_from_raw(instance_handle.as_raw()) }, data);
     }
     vk::Result::SUCCESS
 }
@@ -171,7 +178,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_instance(
     if instance == vk::Instance::null() {
         return;
     }
-    let key = dispatch_key_from_raw(instance.as_raw());
+    let key = unsafe { dispatch_key_from_raw(instance.as_raw()) };
     let removed = registry().lock().ok().and_then(|mut reg| {
         reg.surfaces.clear();
         let hit = reg.instances.remove(&key);
@@ -195,7 +202,7 @@ pub(crate) unsafe extern "system" fn hook_enumerate_physical_devices(
     p_count: *mut u32,
     p_devices: *mut vk::PhysicalDevice,
 ) -> vk::Result {
-    let key = dispatch_key_from_raw(instance.as_raw());
+    let key = unsafe { dispatch_key_from_raw(instance.as_raw()) };
     let Some(id) = find_instance_by_key(key) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
@@ -210,7 +217,7 @@ pub(crate) unsafe extern "system" fn hook_enumerate_physical_devices(
             for &pd in slice {
                 if pd != vk::PhysicalDevice::null() {
                     reg.instances
-                        .insert(dispatch_key_from_raw(pd.as_raw()), Arc::clone(&id));
+                        .insert(unsafe { dispatch_key_from_raw(pd.as_raw()) }, Arc::clone(&id));
                 }
             }
         }
@@ -223,7 +230,7 @@ pub(crate) unsafe extern "system" fn hook_enumerate_physical_device_groups(
     p_count: *mut u32,
     p_props: *mut vk::PhysicalDeviceGroupProperties<'_>,
 ) -> vk::Result {
-    let key = dispatch_key_from_raw(instance.as_raw());
+    let key = unsafe { dispatch_key_from_raw(instance.as_raw()) };
     let Some(id) = find_instance_by_key(key) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
@@ -243,10 +250,11 @@ pub(crate) unsafe extern "system" fn hook_enumerate_physical_device_groups(
         {
             let slice = unsafe { std::slice::from_raw_parts(p_props, count) };
             for grp in slice {
-                for &pd in &grp.physical_devices[..grp.physical_device_count as usize] {
+                let n = clamp_device_group_count(grp.physical_device_count, grp.physical_devices.len());
+                for &pd in &grp.physical_devices[..n] {
                     if pd != vk::PhysicalDevice::null() {
                         reg.instances
-                            .insert(dispatch_key_from_raw(pd.as_raw()), Arc::clone(&id));
+                            .insert(unsafe { dispatch_key_from_raw(pd.as_raw()) }, Arc::clone(&id));
                     }
                 }
             }
@@ -261,7 +269,7 @@ pub(crate) unsafe extern "system" fn hook_create_xlib_surface_khr(
     p_allocator: *const vk::AllocationCallbacks<'_>,
     p_surface: *mut vk::SurfaceKHR,
 ) -> vk::Result {
-    let Some(id) = find_instance_by_key(dispatch_key_from_raw(instance.as_raw())) else {
+    let Some(id) = find_instance_by_key(unsafe { dispatch_key_from_raw(instance.as_raw()) }) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
     let Some(fp) = id.create_xlib_surface_khr else {
@@ -291,7 +299,7 @@ pub(crate) unsafe extern "system" fn hook_create_xcb_surface_khr(
     p_allocator: *const vk::AllocationCallbacks<'_>,
     p_surface: *mut vk::SurfaceKHR,
 ) -> vk::Result {
-    let Some(id) = find_instance_by_key(dispatch_key_from_raw(instance.as_raw())) else {
+    let Some(id) = find_instance_by_key(unsafe { dispatch_key_from_raw(instance.as_raw()) }) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
     let Some(fp) = id.create_xcb_surface_khr else {
@@ -321,7 +329,7 @@ pub(crate) unsafe extern "system" fn hook_create_wayland_surface_khr(
     p_allocator: *const vk::AllocationCallbacks<'_>,
     p_surface: *mut vk::SurfaceKHR,
 ) -> vk::Result {
-    let Some(id) = find_instance_by_key(dispatch_key_from_raw(instance.as_raw())) else {
+    let Some(id) = find_instance_by_key(unsafe { dispatch_key_from_raw(instance.as_raw()) }) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
     let Some(fp) = id.create_wayland_surface_khr else {
@@ -382,7 +390,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_surface_khr(
             _ => {}
         }
     }
-    if let Some(id) = find_instance_by_key(dispatch_key_from_raw(instance.as_raw()))
+    if let Some(id) = find_instance_by_key(unsafe { dispatch_key_from_raw(instance.as_raw()) })
         && let Some(fp) = id.destroy_surface_khr
     {
         unsafe { fp(instance, surface, p_allocator) };
@@ -399,7 +407,7 @@ pub(crate) unsafe extern "system" fn hook_create_device(
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     }
 
-    let Some(id) = find_instance_by_key(dispatch_key_from_raw(physical_device.as_raw())) else {
+    let Some(id) = find_instance_by_key(unsafe { dispatch_key_from_raw(physical_device.as_raw()) }) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
 
@@ -507,10 +515,10 @@ pub(crate) unsafe extern "system" fn hook_create_device(
 
     if let Ok(mut reg) = registry().lock() {
         reg.devices
-            .insert(dispatch_key_from_raw(device_handle.as_raw()), Arc::clone(&dd));
+            .insert(unsafe { dispatch_key_from_raw(device_handle.as_raw()) }, Arc::clone(&dd));
         if graphics_queue != vk::Queue::null() {
             reg.devices
-                .insert(dispatch_key_from_raw(graphics_queue.as_raw()), dd);
+                .insert(unsafe { dispatch_key_from_raw(graphics_queue.as_raw()) }, dd);
         }
     }
     vk::Result::SUCCESS
@@ -523,7 +531,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_device(
     if device == vk::Device::null() {
         return;
     }
-    let key = dispatch_key_from_raw(device.as_raw());
+    let key = unsafe { dispatch_key_from_raw(device.as_raw()) };
     let (removed_dd, swapchains) = registry()
         .lock()
         .ok()
@@ -569,7 +577,7 @@ pub(crate) unsafe extern "system" fn hook_get_device_queue(
     queue_index: u32,
     p_queue: *mut vk::Queue,
 ) {
-    let Some(dd) = find_device_by_key(dispatch_key_from_raw(device.as_raw())) else {
+    let Some(dd) = find_device_by_key(unsafe { dispatch_key_from_raw(device.as_raw()) }) else {
         return;
     };
     unsafe { (dd.device.fp_v1_0().get_device_queue)(device, queue_family_index, queue_index, p_queue) };
@@ -581,7 +589,7 @@ pub(crate) unsafe extern "system" fn hook_get_device_queue(
             unsafe { copy_dispatch_key_raw(q.as_raw(), device.as_raw()) };
         }
         if let Ok(mut reg) = registry().lock() {
-            reg.devices.insert(dispatch_key_from_raw(q.as_raw()), dd);
+            reg.devices.insert(unsafe { dispatch_key_from_raw(q.as_raw()) }, dd);
         }
     }
 }
@@ -591,7 +599,7 @@ pub(crate) unsafe extern "system" fn hook_get_device_queue2(
     p_queue_info: *const vk::DeviceQueueInfo2<'_>,
     p_queue: *mut vk::Queue,
 ) {
-    let Some(dd) = find_device_by_key(dispatch_key_from_raw(device.as_raw())) else {
+    let Some(dd) = find_device_by_key(unsafe { dispatch_key_from_raw(device.as_raw()) }) else {
         return;
     };
     unsafe { (dd.device.fp_v1_1().get_device_queue2)(device, p_queue_info, p_queue) };
@@ -603,7 +611,7 @@ pub(crate) unsafe extern "system" fn hook_get_device_queue2(
             unsafe { copy_dispatch_key_raw(q.as_raw(), device.as_raw()) };
         }
         if let Ok(mut reg) = registry().lock() {
-            reg.devices.insert(dispatch_key_from_raw(q.as_raw()), dd);
+            reg.devices.insert(unsafe { dispatch_key_from_raw(q.as_raw()) }, dd);
         }
     }
 }
@@ -617,7 +625,7 @@ pub(crate) unsafe extern "system" fn hook_create_swapchain_khr(
     if p_create_info.is_null() || p_swapchain.is_null() {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     }
-    let Some(dd) = find_device_by_key(dispatch_key_from_raw(device.as_raw())) else {
+    let Some(dd) = find_device_by_key(unsafe { dispatch_key_from_raw(device.as_raw()) }) else {
         return vk::Result::ERROR_INITIALIZATION_FAILED;
     };
 
@@ -691,7 +699,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_swapchain_khr(
         .lock()
         .ok()
         .and_then(|mut reg| reg.swapchains.remove(&swapchain.as_raw()));
-    let dd = find_device_by_key(dispatch_key_from_raw(device.as_raw()));
+    let dd = find_device_by_key(unsafe { dispatch_key_from_raw(device.as_raw()) });
     if let Some(sc_arc) = removed
         && let Ok(mut sd) = sc_arc.lock()
     {
@@ -706,7 +714,7 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     queue: vk::Queue,
     p_present_info: *const vk::PresentInfoKHR<'_>,
 ) -> vk::Result {
-    let Some(dd) = find_device_by_key(dispatch_key_from_raw(queue.as_raw())).or_else(|| {
+    let Some(dd) = find_device_by_key(unsafe { dispatch_key_from_raw(queue.as_raw()) }).or_else(|| {
         if p_present_info.is_null() {
             return None;
         }
@@ -719,18 +727,24 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         let dev = sd.lock().ok()?.device_data.clone();
         if let Ok(mut reg) = registry().lock() {
             reg.devices
-                .insert(dispatch_key_from_raw(queue.as_raw()), Arc::clone(&dev));
+                .insert(unsafe { dispatch_key_from_raw(queue.as_raw()) }, Arc::clone(&dev));
         }
         Some(dev)
     }) else {
         return vk::Result::ERROR_DEVICE_LOST;
     };
 
-    if p_present_info.is_null() || unsafe { (*p_present_info).swapchain_count } == 0 {
+    if p_present_info.is_null() {
+        return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
+    }
+    let present_info = unsafe { &*p_present_info };
+    if present_info.swapchain_count == 0
+        || present_info.p_swapchains.is_null()
+        || present_info.p_image_indices.is_null()
+    {
         return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
     }
 
-    let present_info = unsafe { &*p_present_info };
     let sc0 = unsafe { *present_info.p_swapchains };
     let img_idx = unsafe { *present_info.p_image_indices } as usize;
 
@@ -780,11 +794,22 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     let has_overlay = hud_visible || gui_open;
 
     // Wait bounded on previous slot fence (2s) before reusing command buffer/staging
-    let fence = sd.frames[img_idx].fence;
+    let mut fence = sd.frames[img_idx].fence;
+    if fence == vk::Fence::null() {
+        let Ok(new_fence) = (unsafe {
+            dev.create_fence(
+                &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
+                None,
+            )
+        }) else {
+            return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
+        };
+        sd.frames[img_idx].fence = new_fence;
+        fence = new_fence;
+    }
     if unsafe { dev.wait_for_fences(&[fence], true, 2_000_000_000) }.is_err() {
         return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
     }
-    let _ = unsafe { dev.reset_fences(&[fence]) };
 
     let cmd = sd.frames[img_idx].command_buffer;
     let framebuffer = sd.frames[img_idx].framebuffer;
@@ -801,6 +826,10 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     let begin =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     if unsafe { dev.begin_command_buffer(cmd, &begin) }.is_err() {
+        return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
+    }
+    if unsafe { dev.reset_fences(&[fence]) }.is_err() {
+        let _ = unsafe { dev.end_command_buffer(cmd) };
         return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
     }
 
@@ -898,6 +927,7 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         if unsafe { dev.queue_submit(target_queue, &[empty], fence) }.is_err() {
             unsafe {
                 dev.destroy_fence(fence, None);
+                sd.frames[img_idx].fence = vk::Fence::null();
                 if let Ok(new_fence) =
                     dev.create_fence(&vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED), None)
                 {
@@ -929,7 +959,7 @@ pub(crate) unsafe fn lookup_device_proc(
             if device == vk::Device::null() {
                 return None;
             }
-            let dd = find_device_by_key(dispatch_key_from_raw(device.as_raw()))?;
+            let dd = find_device_by_key(unsafe { dispatch_key_from_raw(device.as_raw()) })?;
             return unsafe { (dd.next_gdpa)(device, p_name) };
         }
     };
@@ -972,7 +1002,7 @@ pub(crate) unsafe fn lookup_instance_proc(
             if instance == vk::Instance::null() {
                 return None;
             }
-            let id = find_instance_by_key(dispatch_key_from_raw(instance.as_raw()))?;
+            let id = find_instance_by_key(unsafe { dispatch_key_from_raw(instance.as_raw()) })?;
             return unsafe { (id.next_gipa)(instance, p_name) };
         }
     };
