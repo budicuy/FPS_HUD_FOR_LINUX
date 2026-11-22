@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 mod wayland_overlay;
 
 use anyhow::{Context, Result};
@@ -628,7 +629,9 @@ impl DaemonState {
                 (&mut self.overlay_portal, &mut self.overlay_runtime)
         {
             let (rw, rh) = ort.render_scene_to_rgba(&mut self.overlay_rgba_scratch)?;
-            portal.present_rgba(rw, rh, &self.overlay_rgba_scratch)?;
+            if !portal.present_rgba(rw, rh, &self.overlay_rgba_scratch)? {
+                self.overlay_dirty.mark_dirty();
+            }
             had_activity = true;
             let outgoing = ort.update_app(FpshudRootView::take_outgoing);
             self.forward_overlay_outgoing(conn, outgoing)?;
@@ -989,5 +992,15 @@ mod tests {
         let poll = portal.poll_events();
         assert!(!poll.closed);
         drop(portal);
+    }
+
+    #[test]
+    fn overlay_buffer_slot_picker_never_overwrites_when_all_slots_busy() {
+        use crate::wayland_overlay::pick_free_buffer_slot;
+
+        assert_eq!(pick_free_buffer_slot(&[false, false, false]), Some(0));
+        assert_eq!(pick_free_buffer_slot(&[true, false, false]), Some(1));
+        assert_eq!(pick_free_buffer_slot(&[true, true, false]), Some(2));
+        assert_eq!(pick_free_buffer_slot(&[true, true, true]), None);
     }
 }

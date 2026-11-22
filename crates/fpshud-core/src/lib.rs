@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Pure-Rust configuration, keybinds, presets, and secure XDG path helpers for FPSHUD.
 
 pub mod config;

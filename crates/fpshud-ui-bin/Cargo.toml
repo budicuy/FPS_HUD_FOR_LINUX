@@ -17,7 +17,6 @@ fpshud-input = { path = "../fpshud-input" }
 fpshud-ipc = { path = "../fpshud-ipc" }
 fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-ui = { path = "../fpshud-ui" }
-memmap2.workspace = true
 rustix.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true

@@ -8,11 +8,11 @@
 
 use anyhow::{Context, Result, anyhow};
 use fpshud_input::UiInputEvent;
-use memmap2::MmapMut;
 use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
+use std::fs::File;
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::FileTypeExt;
+use std::os::fd::AsFd;
+use std::os::unix::fs::{FileExt, FileTypeExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use wayland_client::backend::WaylandError;
@@ -84,9 +84,14 @@ enum OverlayRole {
     },
 }
 
+/// Picks the first non-busy `wl_shm` buffer slot, returning `None` if all slots are still held by the compositor.
+#[must_use]
+pub fn pick_free_buffer_slot(busy: &[bool]) -> Option<usize> {
+    busy.iter().position(|&b| !b)
+}
+
 struct ShmBufferSlot {
-    _fd: OwnedFd,
-    mmap: MmapMut,
+    file: File,
     pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
 }
@@ -115,7 +120,7 @@ struct OverlayState {
     closed: bool,
 
     buffer_generation: u64,
-    buffer_busy: [bool; 2],
+    buffer_busy: [bool; 3],
 
     ui_events: Vec<UiInputEvent>,
     key_events: Vec<OverlayKeyEvent>,
@@ -139,7 +144,7 @@ impl OverlayState {
             resized: None,
             closed: false,
             buffer_generation: 0,
-            buffer_busy: [false; 2],
+            buffer_busy: [false; 3],
             ui_events: Vec::new(),
             key_events: Vec::new(),
         }
@@ -549,7 +554,7 @@ pub struct WaylandOverlayPortal {
     role: OverlayRole,
     slots: Vec<ShmBufferSlot>,
     slots_size: (u32, u32),
-    last_slot: usize,
+    scratch_argb: Vec<u8>,
 }
 
 /// Discovers live `wayland-*` Unix socket paths in `dir`, excluding `.lock` and non-socket entries.
@@ -706,7 +711,7 @@ impl WaylandOverlayPortal {
             role,
             slots: Vec::new(),
             slots_size: (0, 0),
-            last_slot: 1,
+            scratch_argb: Vec::new(),
         })
     }
 
@@ -762,7 +767,7 @@ impl WaylandOverlayPortal {
     }
 
     fn ensure_slots(&mut self, width: u32, height: u32) -> Result<()> {
-        if self.slots_size == (width, height) && self.slots.len() == 2 {
+        if self.slots_size == (width, height) && self.slots.len() == 3 {
             return Ok(());
         }
         self.destroy_slots();
@@ -783,15 +788,15 @@ impl WaylandOverlayPortal {
             i32::try_from(byte_len).map_err(|_| anyhow!("overlay buffer exceeds i32"))?;
 
         self.state.buffer_generation = self.state.buffer_generation.wrapping_add(1);
-        self.state.buffer_busy = [false; 2];
+        self.state.buffer_busy = [false; 3];
         let generation = self.state.buffer_generation;
 
-        for slot_idx in 0..2 {
+        for slot_idx in 0..3 {
             let fd = memfd_create(c"fpshud-wl-overlay", MemfdFlags::CLOEXEC)
                 .context("memfd_create wayland overlay buffer")?;
             ftruncate(&fd, u64::from(byte_len)).context("ftruncate wayland overlay buffer")?;
-            let mmap = unsafe { MmapMut::map_mut(&fd) }.context("mmap wayland overlay buffer")?;
-            let pool = shm.create_pool(fd.as_fd(), byte_len_i32, &qh, ());
+            let file = File::from(fd);
+            let pool = shm.create_pool(file.as_fd(), byte_len_i32, &qh, ());
             let buffer = pool.create_buffer(
                 0,
                 width as i32,
@@ -804,43 +809,43 @@ impl WaylandOverlayPortal {
                     slot_idx,
                 },
             );
-            self.slots.push(ShmBufferSlot {
-                _fd: fd,
-                mmap,
-                pool,
-                buffer,
-            });
+            self.slots.push(ShmBufferSlot { file, pool, buffer });
         }
         self.slots_size = (width, height);
         Ok(())
     }
 
     /// Presents premultiplied RGBA8888 pixels to the isolated Wayland overlay surface.
-    pub fn present_rgba(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+    /// Returns `Ok(false)` when all 3 buffer slots are still held by the compositor (caller should retry).
+    pub fn present_rgba(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<bool> {
         if self.state.closed {
-            return Ok(());
+            return Ok(false);
         }
         let w = width.max(1);
         let h = height.max(1);
         self.ensure_slots(w, h)?;
 
-        let slot_idx = if !self.state.buffer_busy[0] {
-            0
-        } else if !self.state.buffer_busy[1] {
-            1
-        } else {
-            1 - self.last_slot
+        let Some(slot_idx) = pick_free_buffer_slot(&self.state.buffer_busy) else {
+            return Ok(false);
         };
-        let slot = &mut self.slots[slot_idx];
-        rgba_to_wl_argb8888(rgba, &mut slot.mmap);
+        let byte_len = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|px| px.checked_mul(4))
+            .ok_or_else(|| anyhow!("overlay byte_len overflow"))?;
+        self.scratch_argb.resize(byte_len, 0);
+        rgba_to_wl_argb8888(rgba, &mut self.scratch_argb);
+
+        let slot = &self.slots[slot_idx];
+        slot.file
+            .write_all_at(&self.scratch_argb, 0)
+            .context("write wayland overlay memfd")?;
         self.state.buffer_busy[slot_idx] = true;
-        self.last_slot = slot_idx;
 
         self.surface.attach(Some(&slot.buffer), 0, 0);
         self.surface.damage_buffer(0, 0, w as i32, h as i32);
         self.surface.commit();
         self.conn.flush().context("flush wayland overlay commit")?;
-        Ok(())
+        Ok(true)
     }
 }
 

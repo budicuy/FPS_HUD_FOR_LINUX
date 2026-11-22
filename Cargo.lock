@@ -989,7 +989,6 @@ dependencies = [
  "fpshud-ipc",
  "fpshud-telemetry",
  "fpshud-ui",
- "memmap2",
  "rustix 1.1.6",
  "tempfile",
  "wayland-client",
