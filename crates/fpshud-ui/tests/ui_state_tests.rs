@@ -233,7 +233,7 @@ fn dashboard_mouse_click_fires_action_and_emits_config() {
     // Click "Close" or preset again at 1280x720 with cursor drawn at center first -> must still hit header/sensor
     let mut got_advance = false;
     'scan_adv: for y in (30..200).step_by(10) {
-        for x in (340..620).step_by(14) {
+        for x in (200..620).step_by(14) {
             rt.dispatch_input(&[
                 UiInputEvent::MouseMove { x: x as f32, y: y as f32 },
                 UiInputEvent::MouseDown { button: 0 },
@@ -661,4 +661,153 @@ fn widgets_option_tables_and_popover_viewport_clamping() {
     );
     let (rx, ry) = clamp_popover_origin(right_anchor, 220.0, 140.0, 960.0, 640.0);
     assert!(rx + 220.0 <= 952.0 && ry >= 100.0);
+}
+
+#[test]
+fn settings_gaya_x_dropdowns_occlusion_toggles_groups_and_7inch_height() {
+    use fpshud_core::{FontFamily, LayoutPosition};
+    use fpshud_input::UiInputEvent;
+    use fpshud_ui::DropdownId;
+
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot {
+        fps: 59.0,
+        frametime_ms: 16.8,
+        gpu_load: 49.0,
+        cpu_load: 22.0,
+        ..TelemetrySnapshot::default()
+    };
+    let mut rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, move |_, _| {
+        FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut rgba = Vec::new();
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+
+    // 1. Verifikasi tinggi total <= 660 px di viewport handheld 1280x720 & preview_box besar >= 220x110
+    let (dash_b, prev_b, pos_anchor, bg_anchor) = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |root_any, _, cx| {
+                let v = root_any.downcast::<FpshudRootView>().unwrap().read(cx);
+                (
+                    v.dashboard_bounds_snapshot(),
+                    v.preview_bounds_snapshot(),
+                    v.dropdown_anchor_snapshot(DropdownId::Position),
+                    v.dropdown_anchor_snapshot(DropdownId::BgOpacity),
+                )
+            })
+            .unwrap()
+    });
+    assert!(
+        f32::from(dash_b.size.height) > 300.0 && f32::from(dash_b.size.height) <= 660.0,
+        "Gaya X dashboard must fit 7-inch 720p cleanly (<=660px), got {:?}",
+        dash_b.size
+    );
+    assert!(
+        f32::from(prev_b.size.width) >= 220.0 && f32::from(prev_b.size.height) >= 110.0,
+        "Handheld grabbing preview_box must be enlarged, got {:?}",
+        prev_b.size
+    );
+
+    // 2. Klik trigger dropdown Position -> membuka popup Position
+    let pos_cx = f32::from(pos_anchor.origin.x) + f32::from(pos_anchor.size.width) * 0.5;
+    let pos_cy = f32::from(pos_anchor.origin.y) + f32::from(pos_anchor.size.height) * 0.5;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: pos_cx, y: pos_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let (open_now, pop_b) = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |r, _, cx| {
+                let v = r.downcast::<FpshudRootView>().unwrap().read(cx);
+                (v.open_dropdown_snapshot(), v.active_popover_bounds_snapshot())
+            })
+            .unwrap()
+    });
+    assert_eq!(open_now, Some(DropdownId::Position));
+    assert!(f32::from(pop_b.size.height) > 100.0);
+
+    // Klik item ke-2 ("Top Center") memakai bounds popover aktual -> memilih TopCenter & menutup dropdown tanpa tembus
+    let item2_x = f32::from(pop_b.origin.x) + f32::from(pop_b.size.width) * 0.5;
+    let item2_y = f32::from(pop_b.origin.y) + f32::from(pop_b.size.height) * (1.5 / 7.0);
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: item2_x, y: item2_y },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let msgs_pos = rt.update_app(FpshudRootView::take_outgoing);
+    assert!(
+        msgs_pos.iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if c.position == LayoutPosition::TopCenter && c.arrangement == ArrangementMode::Stack)),
+        "selecting Top Center must update position without clicking through to Arrangement, got {msgs_pos:?}"
+    );
+    let closed_after = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()
+    });
+    assert_eq!(closed_after, None);
+
+    // 3. Klik trigger BgOpacity -> membuka grid 4x5 (5%..100%), klik sel pojok kanan bawah ("100%") -> bg_alpha == 1.0
+    let bg_cx = f32::from(bg_anchor.origin.x) + f32::from(bg_anchor.size.width) * 0.5;
+    let bg_cy = f32::from(bg_anchor.origin.y) + f32::from(bg_anchor.size.height) * 0.5;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: bg_cx, y: bg_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let bg_pop = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |r, _, cx| {
+                let v = r.downcast::<FpshudRootView>().unwrap().read(cx);
+                assert_eq!(v.open_dropdown_snapshot(), Some(DropdownId::BgOpacity));
+                v.active_popover_bounds_snapshot()
+            })
+            .unwrap()
+    });
+    assert!(
+        f32::from(bg_pop.origin.y) >= 8.0 && f32::from(bg_pop.origin.y) + f32::from(bg_pop.size.height) <= 712.0,
+        "BgOpacity 4x5 popover must stay fully clamped inside 720p viewport, got {bg_pop:?}"
+    );
+    let cell_100_x = f32::from(bg_pop.origin.x) + f32::from(bg_pop.size.width) * 0.88;
+    let cell_100_y = f32::from(bg_pop.origin.y) + f32::from(bg_pop.size.height) * 0.90;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: cell_100_x, y: cell_100_y },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let msgs_bg = rt.update_app(FpshudRootView::take_outgoing);
+    assert!(
+        msgs_bg.iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if (c.bg_alpha - 1.0).abs() < 1e-4 && c.thermal_warnings_enabled)),
+        "selecting 100% from BgOpacity grid must set bg_alpha=1.0 without toggling controls behind it, got {msgs_bg:?}"
+    );
+
+    // 4. Buka dropdown lagi lalu klik backdrop luar (2, 2) -> menutup dropdown bersih
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: bg_cx, y: bg_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: 2.0, y: 2.0 },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let after_backdrop = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()
+    });
+    assert_eq!(after_backdrop, None);
+    let _keep_import = FontFamily::VeraMono;
 }

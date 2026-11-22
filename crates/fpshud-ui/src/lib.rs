@@ -153,6 +153,7 @@ impl Render for FpshudRootView {
             self.last_clear_capture_seq = cc.seq;
         }
         if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
+            self.open_dropdown = None;
             self.dragging_gui = false;
             self.dragging_preview = false;
             if self.render_mode == UiRenderMode::HudOnly {
@@ -239,6 +240,14 @@ impl Render for FpshudRootView {
                     .top(px(dash_y))
                     .child(dash_el),
             );
+        }
+
+        if show_dashboard
+            && self.store.config.gui_open
+            && let Some(dropdown_overlay) =
+                self.render_active_dropdown_overlay(viewport_w, viewport_h, cx)
+        {
+            root = root.child(gpui::deferred(dropdown_overlay).priority(10));
         }
 
         if self.render_mode == UiRenderMode::Full
