@@ -20,6 +20,7 @@ use gpui::{
 
 struct UiSyncGlobal {
     seq: u64,
+    gui_closed_seq: u64,
     config: HudConfig,
     telemetry: TelemetrySnapshot,
 }
@@ -53,6 +54,12 @@ struct UiClearCaptureGlobal {
 
 impl Global for UiClearCaptureGlobal {}
 
+struct UiClearDropdownGlobal {
+    seq: u64,
+}
+
+impl Global for UiClearDropdownGlobal {}
+
 pub(crate) fn push_outgoing_global(cx: &mut App, mut msgs: Vec<UiToLayerMsg>) {
     let mut existing = cx
         .try_global::<UiOutgoingQueueGlobal>()
@@ -64,9 +71,17 @@ pub(crate) fn push_outgoing_global(cx: &mut App, mut msgs: Vec<UiToLayerMsg>) {
 impl FpshudRootView {
     /// Pushes updated configuration and telemetry snapshot into the GPUI app state & requests redraw.
     pub fn sync_all(cx: &mut App, config: HudConfig, telemetry: TelemetrySnapshot) {
-        let next_seq = cx.try_global::<UiSyncGlobal>().map_or(1, |g| g.seq + 1);
+        let (next_seq, prev_closed_seq) = cx
+            .try_global::<UiSyncGlobal>()
+            .map_or((1, 0), |g| (g.seq + 1, g.gui_closed_seq));
+        let gui_closed_seq = if !config.gui_open {
+            prev_closed_seq + 1
+        } else {
+            prev_closed_seq
+        };
         cx.set_global(UiSyncGlobal {
             seq: next_seq,
+            gui_closed_seq,
             config,
             telemetry,
         });
@@ -106,6 +121,15 @@ impl FpshudRootView {
         cx.refresh_windows();
     }
 
+    /// Closes any open dropdown popover (e.g. when reopening the cached external Wayland overlay).
+    pub fn clear_open_dropdown(cx: &mut App) {
+        let next_seq = cx
+            .try_global::<UiClearDropdownGlobal>()
+            .map_or(1, |g| g.seq + 1);
+        cx.set_global(UiClearDropdownGlobal { seq: next_seq });
+        cx.refresh_windows();
+    }
+
     /// Drains any outgoing IPC actions produced by interactive GPUI dashboard handlers.
     pub fn take_outgoing(cx: &mut App) -> Vec<UiToLayerMsg> {
         let msgs = cx
@@ -130,6 +154,10 @@ impl Render for FpshudRootView {
             if keys_changed {
                 self.store.active_keybind_capture = fpshud_input::KeybindTarget::None;
             }
+            if synced.gui_closed_seq > self.last_gui_closed_seq {
+                self.open_dropdown = None;
+                self.last_gui_closed_seq = synced.gui_closed_seq;
+            }
             self.store.config = synced.config.clone();
             self.store.telemetry = synced.telemetry.clone();
             self.last_applied_seq = synced.seq;
@@ -151,6 +179,12 @@ impl Render for FpshudRootView {
         {
             self.store.active_keybind_capture = fpshud_input::KeybindTarget::None;
             self.last_clear_capture_seq = cc.seq;
+        }
+        if let Some(cd) = cx.try_global::<UiClearDropdownGlobal>()
+            && cd.seq > self.last_clear_dropdown_seq
+        {
+            self.open_dropdown = None;
+            self.last_clear_dropdown_seq = cd.seq;
         }
         if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
             self.open_dropdown = None;

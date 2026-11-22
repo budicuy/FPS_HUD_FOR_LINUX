@@ -406,6 +406,7 @@ impl DaemonState {
                 FpshudRootView::set_render_mode(cx, UiRenderMode::DashboardOnly);
                 FpshudRootView::set_software_cursor(cx, false);
                 FpshudRootView::clear_keybind_capture(cx);
+                FpshudRootView::clear_open_dropdown(cx);
                 FpshudRootView::sync_all(cx, cfg, snap);
             });
         } else {

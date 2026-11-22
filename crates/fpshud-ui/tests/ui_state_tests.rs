@@ -811,3 +811,104 @@ fn settings_gaya_x_dropdowns_occlusion_toggles_groups_and_7inch_height() {
     assert_eq!(after_backdrop, None);
     let _keep_import = FontFamily::VeraMono;
 }
+
+#[test]
+fn open_dropdown_resets_across_close_reopen_without_intermediate_render_and_on_drag() {
+    use fpshud_input::UiInputEvent;
+    use fpshud_ui::DropdownId;
+
+    let mut cfg = HudConfig {
+        hud_visible: true,
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot::default();
+    let mut rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, {
+        let cfg = cfg.clone();
+        let snap = snap.clone();
+        move |_, _| FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut rgba = Vec::new();
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+
+    let (dash_b, pos_anchor) = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |r, _, cx| {
+                let v = r.downcast::<FpshudRootView>().unwrap().read(cx);
+                (
+                    v.dashboard_bounds_snapshot(),
+                    v.dropdown_anchor_snapshot(DropdownId::Position),
+                )
+            })
+            .unwrap()
+    });
+    let pos_cx = f32::from(pos_anchor.origin.x) + f32::from(pos_anchor.size.width) * 0.5;
+    let pos_cy = f32::from(pos_anchor.origin.y) + f32::from(pos_anchor.size.height) * 0.5;
+
+    // 1. Open Position dropdown
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: pos_cx, y: pos_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    assert_eq!(
+        rt.update_app(|cx| cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()),
+        Some(DropdownId::Position)
+    );
+
+    // 2. Close & reopen via sync_all WITHOUT an intermediate render -> stale dropdown MUST be cleared
+    cfg.gui_open = false;
+    rt.update_app(|cx| FpshudRootView::sync_all(cx, cfg.clone(), snap.clone()));
+    cfg.gui_open = true;
+    rt.update_app(|cx| FpshudRootView::sync_all(cx, cfg.clone(), snap.clone()));
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    assert_eq!(
+        rt.update_app(|cx| cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()),
+        None,
+        "stale open_dropdown must reset across gui_open false->true without intermediate render"
+    );
+
+    // 3. Reopen dropdown, then call explicit clear_open_dropdown (used by Wayland overlay reopen)
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: pos_cx, y: pos_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    rt.update_app(FpshudRootView::clear_open_dropdown);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    assert_eq!(
+        rt.update_app(|cx| cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()),
+        None
+    );
+
+    // 4. Open dropdown again, then start dragging title bar -> closes dropdown cleanly
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: pos_cx, y: pos_cy },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    let drag_x = f32::from(dash_b.origin.x) + f32::from(dash_b.size.width) * 0.5;
+    let drag_y = f32::from(dash_b.origin.y) + 16.0;
+    rt.dispatch_input(&[
+        UiInputEvent::MouseMove { x: drag_x, y: drag_y },
+        UiInputEvent::MouseDown { button: 0 },
+        UiInputEvent::MouseUp { button: 0 },
+    ]);
+    let _ = rt.render_scene_to_rgba(&mut rgba).unwrap();
+    assert_eq!(
+        rt.update_app(|cx| cx.windows()[0]
+            .update(cx, |r, _, cx| r.downcast::<FpshudRootView>().unwrap().read(cx).open_dropdown_snapshot())
+            .unwrap()),
+        None
+    );
+}
