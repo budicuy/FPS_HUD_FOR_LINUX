@@ -362,3 +362,31 @@ fn hover_change_marks_dirty_immediately_and_stays_idle_within_same_button() {
         1.0,
     ));
 }
+
+#[test]
+fn conditional_bg_opacity_and_border_suboptions_hide_when_inactive() {
+    use fpshud_core::BackgroundStyle;
+
+    let mut cfg = HudConfig {
+        gui_open: true,
+        background_style: BackgroundStyle::Translucent,
+        border_enabled: true,
+        ..HudConfig::default()
+    };
+    let mut dash = CpuDashboard::new(UiStore::new(cfg.clone(), TelemetrySnapshot::default()));
+    dash.set_render_mode(UiRenderMode::DashboardOnly);
+    let mut rast = TextRasterizer::new();
+    let mut rgba = Vec::new();
+    dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut rgba);
+    assert!(dash.dashboard_bounds().h <= 684.0);
+    assert!(dash.dropdown_anchor(DropdownId::BgOpacity).w > 40.0);
+    assert!(dash.dropdown_anchor(DropdownId::BorderOpacity).w > 40.0);
+
+    // Switch BG Style -> Solid & Border -> false: both sub-options must disappear cleanly
+    cfg.background_style = BackgroundStyle::Solid;
+    cfg.border_enabled = false;
+    dash.sync_all(cfg, TelemetrySnapshot::default());
+    dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut rgba);
+    assert_eq!(dash.dropdown_anchor(DropdownId::BgOpacity).w, 0.0);
+    assert_eq!(dash.dropdown_anchor(DropdownId::BorderOpacity).w, 0.0);
+}

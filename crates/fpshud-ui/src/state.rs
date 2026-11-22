@@ -560,6 +560,23 @@ impl UiStore {
         self.emit_config_updated();
     }
 
+    pub fn toggle_border(&mut self) {
+        self.config.border_enabled = !self.config.border_enabled;
+        self.emit_config_updated();
+    }
+
+    pub fn set_border_alpha_pct(&mut self, pct: u8) {
+        self.config.border_alpha = f32::from(pct.clamp(5, 100)) / 100.0;
+        self.config.border_enabled = true;
+        self.emit_config_updated();
+    }
+
+    pub fn set_border_color(&mut self, color: ColorRgba) {
+        self.config.border_color = color;
+        self.config.border_enabled = true;
+        self.emit_config_updated();
+    }
+
     pub fn set_text_color(&mut self, color: ColorRgba) {
         self.config.text_color = color;
         self.config.custom_text_color_enabled = true;

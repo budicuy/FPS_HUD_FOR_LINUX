@@ -432,10 +432,14 @@ impl CpuHudRenderer {
             BackgroundStyle::Solid => 242_u8,
         };
         let rect = Rect::new(ox, oy, box_w, box_h);
+        let radius = (6.0 * layout.eff_scale).round();
         if bg_a > 0 {
-            let radius = (6.0 * layout.eff_scale).round();
             canvas.fill_rounded_rect(rect, radius, rgba_u32(12, 16, 22, bg_a));
-            canvas.stroke_rounded_rect(rect, radius, 1.0, rgba_u32(72, 110, 155, bg_a.min(130)));
+        }
+        if store.config.border_enabled {
+            let border_a = (store.config.border_alpha.clamp(0.05, 1.0) * 255.0).round() as u8;
+            let bc = store.config.border_color;
+            canvas.stroke_rounded_rect(rect, radius, 1.0, rgba_u32(bc.r, bc.g, bc.b, border_a));
         }
 
         let baseline_off = layout.font_size * 0.98;

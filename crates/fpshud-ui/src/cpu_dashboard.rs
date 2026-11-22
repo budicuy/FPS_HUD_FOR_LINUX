@@ -37,10 +37,11 @@ pub enum DropdownId {
     TextOpacity = 5,
     BgStyle = 6,
     BgOpacity = 7,
+    BorderOpacity = 8,
 }
 
 impl DropdownId {
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 9;
 
     #[must_use]
     pub const fn index(self) -> usize {
@@ -89,6 +90,14 @@ pub const TEXT_COLOR_SWATCHES: [(&str, ColorRgba); 4] = [
     ("Mint Green", ColorRgba::new(150, 255, 165, 255)),
     ("Amber Gold", ColorRgba::new(255, 220, 120, 255)),
     ("White", ColorRgba::new(255, 255, 255, 255)),
+];
+
+pub const BORDER_COLOR_SWATCHES: [(&str, ColorRgba); 5] = [
+    ("Steel Blue", ColorRgba::new(72, 110, 155, 255)),
+    ("Ice Cyan", ColorRgba::new(95, 205, 255, 255)),
+    ("Mint", ColorRgba::new(90, 220, 130, 255)),
+    ("Amber", ColorRgba::new(255, 190, 40, 255)),
+    ("White", ColorRgba::new(235, 242, 252, 255)),
 ];
 
 #[must_use]
@@ -197,6 +206,9 @@ enum HitAction {
     SelectTextOpacity(u8),
     SelectBgStyle(BackgroundStyle),
     SelectBgOpacity(u8),
+    ToggleBorder,
+    SelectBorderOpacity(u8),
+    SetBorderColor(ColorRgba),
     ToggleCategoryColors,
     SetTextColor(ColorRgba),
     ToggleCustomTextColor,
@@ -564,6 +576,17 @@ impl CpuDashboard {
                 self.open_dropdown = None;
                 self.store.set_bg_alpha_pct(pct);
             }
+            HitAction::ToggleBorder => {
+                if self.open_dropdown == Some(DropdownId::BorderOpacity) {
+                    self.open_dropdown = None;
+                }
+                self.store.toggle_border();
+            }
+            HitAction::SelectBorderOpacity(pct) => {
+                self.open_dropdown = None;
+                self.store.set_border_alpha_pct(pct);
+            }
+            HitAction::SetBorderColor(c) => self.store.set_border_color(c),
             HitAction::ToggleCategoryColors => self.store.toggle_category_colors(),
             HitAction::SetTextColor(c) => self.store.set_text_color(c),
             HitAction::ToggleCustomTextColor => self.store.toggle_custom_text_color(),
@@ -718,8 +741,16 @@ impl CpuDashboard {
     }
 
     fn estimate_dashboard_height(&self) -> f32 {
-        // Title(26) + gap(6) + Header(30) + gap(6) + Col1 natural (~492) + pad(16) = 576 px (<= 684 px on 720p)
-        576.0
+        let mut h = 576.0_f32;
+        if self.store.config.background_style != BackgroundStyle::Translucent {
+            h -= 24.0;
+        }
+        // Border toggle row (+23) + optional Border Opacity (+24) & Border Color (+23)
+        h += 23.0;
+        if self.store.config.border_enabled {
+            h += 47.0;
+        }
+        h.max(576.0)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -950,8 +981,8 @@ impl CpuDashboard {
         self.base_hits.push((prev_rect, HitAction::DragPreview));
         y += PREVIEW_H + 5.0;
 
-        // 8 Dropdown trigger rows
-        let rows: [(&str, String, DropdownId); 8] = [
+        // Dropdown trigger rows (BG Opacity only shown when BG Style == Translucent)
+        let mut rows: Vec<(&str, String, DropdownId)> = vec![
             (
                 "Position",
                 position_display_name(self.store.config.position).to_string(),
@@ -987,56 +1018,74 @@ impl CpuDashboard {
                 bg_style_display_name(self.store.config.background_style).to_string(),
                 DropdownId::BgStyle,
             ),
-            (
+        ];
+        if self.store.config.background_style == BackgroundStyle::Translucent {
+            rows.push((
                 "BG Opacity",
                 format!("{:.0}%", self.store.config.bg_alpha * 100.0),
                 DropdownId::BgOpacity,
-            ),
-        ];
+            ));
+        } else {
+            self.dropdown_anchors[DropdownId::BgOpacity.index()] = Rect::default();
+        }
         for (label, value, id) in rows {
-            let row_rect = Rect::new(ix, y, iw, 22.0);
+            self.paint_dropdown_row(canvas, rasterizer, Rect::new(ix, y, iw, 22.0), label, &value, id);
+            y += 24.0;
+        }
+
+        // Border toggle + conditional Border Opacity & Border Color
+        self.paint_switch_row(
+            canvas,
+            rasterizer,
+            Rect::new(ix, y, iw, 21.0),
+            "Border",
+            self.store.config.border_enabled,
+            HitAction::ToggleBorder,
+        );
+        y += 23.0;
+        if self.store.config.border_enabled {
+            let b_op = format!("{:.0}%", self.store.config.border_alpha * 100.0);
+            self.paint_dropdown_row(
+                canvas,
+                rasterizer,
+                Rect::new(ix, y, iw, 22.0),
+                "Border Opacity",
+                &b_op,
+                DropdownId::BorderOpacity,
+            );
+            y += 24.0;
+
+            let bc_rect = Rect::new(ix, y, iw, 21.0);
             canvas.draw_text_in_rect(
                 rasterizer,
-                Rect::new(row_rect.x, row_rect.y, iw - 146.0, row_rect.h),
+                Rect::new(bc_rect.x, bc_rect.y, 96.0, bc_rect.h),
                 false,
                 11.0,
                 rgba_u32(168, 188, 214, 245),
-                label,
+                "Border Color",
                 false,
             );
-            let trigger = Rect::new(row_rect.right() - 142.0, row_rect.y, 142.0, 21.0);
-            self.dropdown_anchors[id.index()] = trigger;
-            let is_open = self.open_dropdown == Some(id);
-            let bg = if is_open {
-                rgba_u32(34, 48, 72, 240)
-            } else {
-                rgba_u32(26, 33, 46, 230)
-            };
-            let border = if is_open {
-                rgba_u32(110, 185, 255, 240)
-            } else {
-                rgba_u32(68, 86, 114, 195)
-            };
-            canvas.fill_rounded_rect(trigger, 4.0, bg);
-            canvas.stroke_rounded_rect(trigger, 4.0, 1.0, border);
-            canvas.draw_text_in_rect(
-                rasterizer,
-                Rect::new(trigger.x + 7.0, trigger.y, trigger.w - 24.0, trigger.h),
-                false,
-                11.0,
-                rgba_u32(236, 242, 252, 255),
-                &value,
-                false,
-            );
-            canvas.draw_chevron(
-                trigger.right() - 10.0,
-                trigger.y + trigger.h * 0.5,
-                is_open,
-                rgba_u32(148, 180, 224, 240),
-            );
-            self.base_hits
-                .push((trigger, HitAction::ToggleDropdown(id)));
-            y += 24.0;
+            let mut bx = bc_rect.right() - 18.0 * (BORDER_COLOR_SWATCHES.len() as f32) + 4.0;
+            for &(_, swatch) in &BORDER_COLOR_SWATCHES {
+                let sr = Rect::new(bx, bc_rect.y + 3.0, 14.0, 14.0);
+                canvas.fill_rounded_rect(sr, 3.0, rgba_u32(swatch.r, swatch.g, swatch.b, 255));
+                let selected = self.store.config.border_color == swatch;
+                canvas.stroke_rounded_rect(
+                    sr,
+                    3.0,
+                    if selected { 2.0 } else { 1.0 },
+                    if selected {
+                        rgba_u32(255, 255, 255, 255)
+                    } else {
+                        rgba_u32(72, 90, 118, 200)
+                    },
+                );
+                self.base_hits.push((sr, HitAction::SetBorderColor(swatch)));
+                bx += 18.0;
+            }
+            y += 23.0;
+        } else {
+            self.dropdown_anchors[DropdownId::BorderOpacity.index()] = Rect::default();
         }
 
         // Divider + 4 Toggle Switches
@@ -1121,6 +1170,58 @@ impl CpuDashboard {
             HitAction::ResetLayout,
             false,
         );
+    }
+
+    fn paint_dropdown_row(
+        &mut self,
+        canvas: &mut CpuCanvas<'_>,
+        rasterizer: &mut TextRasterizer,
+        row_rect: Rect,
+        label: &str,
+        value: &str,
+        id: DropdownId,
+    ) {
+        canvas.draw_text_in_rect(
+            rasterizer,
+            Rect::new(row_rect.x, row_rect.y, row_rect.w - 146.0, row_rect.h),
+            false,
+            11.0,
+            rgba_u32(168, 188, 214, 245),
+            label,
+            false,
+        );
+        let trigger = Rect::new(row_rect.right() - 142.0, row_rect.y, 142.0, 21.0);
+        self.dropdown_anchors[id.index()] = trigger;
+        let is_open = self.open_dropdown == Some(id);
+        let bg = if is_open {
+            rgba_u32(34, 48, 72, 240)
+        } else {
+            rgba_u32(26, 33, 46, 230)
+        };
+        let border = if is_open {
+            rgba_u32(110, 185, 255, 240)
+        } else {
+            rgba_u32(68, 86, 114, 195)
+        };
+        canvas.fill_rounded_rect(trigger, 4.0, bg);
+        canvas.stroke_rounded_rect(trigger, 4.0, 1.0, border);
+        canvas.draw_text_in_rect(
+            rasterizer,
+            Rect::new(trigger.x + 7.0, trigger.y, trigger.w - 24.0, trigger.h),
+            false,
+            11.0,
+            rgba_u32(236, 242, 252, 255),
+            value,
+            false,
+        );
+        canvas.draw_chevron(
+            trigger.right() - 10.0,
+            trigger.y + trigger.h * 0.5,
+            is_open,
+            rgba_u32(148, 180, 224, 240),
+        );
+        self.base_hits
+            .push((trigger, HitAction::ToggleDropdown(id)));
     }
 
     fn paint_switch_row(
@@ -1638,6 +1739,20 @@ impl CpuDashboard {
                             format!("{p}%"),
                             (cfg.bg_alpha * 100.0 - f32::from(p)).abs() < 2.6,
                             HitAction::SelectBgOpacity(p),
+                        )
+                    })
+                    .collect(),
+            ),
+            DropdownId::BorderOpacity => (
+                220.0,
+                4,
+                BG_OPACITY_PCTS
+                    .iter()
+                    .map(|&p| {
+                        (
+                            format!("{p}%"),
+                            (cfg.border_alpha * 100.0 - f32::from(p)).abs() < 2.6,
+                            HitAction::SelectBorderOpacity(p),
                         )
                     })
                     .collect(),

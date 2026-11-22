@@ -399,6 +399,9 @@ pub struct HudConfig {
     pub font_size_px: f32,
     pub text_opacity: f32,
     pub bg_alpha: f32,
+    pub border_enabled: bool,
+    pub border_alpha: f32,
+    pub border_color: ColorRgba,
 
     pub outline_enabled: bool,
     pub outline_thickness: f32,
@@ -443,6 +446,9 @@ impl Default for HudConfig {
             font_size_px: 20.0,
             text_opacity: 1.0,
             bg_alpha: 0.38,
+            border_enabled: true,
+            border_alpha: 0.50,
+            border_color: ColorRgba::new(72, 110, 155, 255),
             outline_enabled: true,
             outline_thickness: 1.4,
             shadow_enabled: true,
@@ -702,6 +708,20 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
                 cfg.bg_alpha = parse_finite_clamped(val, cfg.bg_alpha, 0.0, 1.0);
                 parsed_any = true;
             }
+            "border_enabled" => {
+                cfg.border_enabled = parse_i32_or(val, 1) != 0;
+                parsed_any = true;
+            }
+            "border_alpha" => {
+                cfg.border_alpha = parse_finite_clamped(val, cfg.border_alpha, 0.05, 1.0);
+                parsed_any = true;
+            }
+            "border_color" => {
+                if let Some(c) = parse_rgb(val) {
+                    cfg.border_color = c;
+                    parsed_any = true;
+                }
+            }
             "outline_enabled" => {
                 cfg.outline_enabled = parse_i32_or(val, 1) != 0;
                 parsed_any = true;
@@ -854,6 +874,9 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
          custom_text_color_enabled={}\n\
          text_opacity={:.3}\n\
          bg_alpha={:.3}\n\
+         border_enabled={}\n\
+         border_alpha={:.3}\n\
+         border_color={},{},{}\n\
          outline_enabled={}\n\
          outline_thickness={:.2}\n\
          shadow_enabled={}\n\
@@ -889,6 +912,11 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
         i32::from(cfg.custom_text_color_enabled),
         cfg.text_opacity,
         cfg.bg_alpha,
+        i32::from(cfg.border_enabled),
+        cfg.border_alpha,
+        cfg.border_color.r,
+        cfg.border_color.g,
+        cfg.border_color.b,
         i32::from(cfg.outline_enabled),
         cfg.outline_thickness,
         i32::from(cfg.shadow_enabled),
