@@ -1,6 +1,3 @@
-#![forbid(unsafe_code)]
-//! Pure-Rust GPUI-CE HUD overlay, launch toast, CPU bounding-box HUD, and interactive 3-column dashboard.
-
 pub mod cpu_hud;
 pub mod dashboard;
 pub mod hud;

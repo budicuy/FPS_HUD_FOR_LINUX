@@ -202,7 +202,6 @@ impl ShmRingWriter {
     }
 }
 
-/// Safe `memfd` seqlock consumer used inside `libfpshud.so` (zero `unsafe`).
 pub struct ShmRingReader {
     file: File,
     total_len: usize,
