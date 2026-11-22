@@ -47,14 +47,13 @@ jobs:
           LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)"
           VK_DRIVER_FILES="$LVP_ICD" cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo clippy -p gpui_ce_wgpu --lib -- -D warnings
 
       - name: Build Portable Release, Enforce ABI + GLIBC 2.35 Gates & Package
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           ./scripts/package_release.sh
 
-      - name: Verify Real Vulkan Hook & GPUI-CE HUD Rendering (Headless Lavapipe 120 frames)
+      - name: Verify Real Vulkan Hook & Pure-Rust CPU HUD Rendering (Headless Lavapipe 120 frames)
         run: |
           env -u WAYLAND_DISPLAY -u DISPLAY ./scripts/test_vulkan_headless.sh
 

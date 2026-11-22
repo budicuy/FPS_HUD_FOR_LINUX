@@ -7,7 +7,6 @@ members = [
     "crates/fpshud-screenshot",
     "crates/fpshud-input",
     "crates/fpshud-ipc",
-    "crates/fpshud-gpui-platform",
     "crates/fpshud-ui",
     "crates/fpshud-ui-bin",
     "crates/fpshud-layer",
@@ -25,11 +24,7 @@ ash = { version = "0.38", default-features = false }
 ash-layer = { version = "0.0.2", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 evdev = "0.13"
-futures = "0.3"
 glow = "0.17"
-gpui = { package = "gpui-ce", version = "0.3.0", default-features = false }
-gpui_ce_parley = { version = "0.3.0", default-features = false }
-gpui_ce_wgpu = "0.3.0"
 libc = "0.2"
 nvml-wrapper = "0.13"
 png = "0.18"
@@ -42,9 +37,6 @@ wayland-client = { version = "0.31", default-features = false }
 wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 x11rb = { version = "0.14", features = ["xinput"] }
-
-[patch.crates-io]
-gpui_ce_wgpu = { path = "crates/vendor/gpui_ce_wgpu" }
 
 [workspace.lints.clippy]
 all = "warn"

@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 fpshud-core = { path = "../fpshud-core" }
-fpshud-gpui-platform = { path = "../fpshud-gpui-platform" }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-ipc = { path = "../fpshud-ipc" }
 fpshud-telemetry = { path = "../fpshud-telemetry", features = ["vendor-gpu-apis"] }

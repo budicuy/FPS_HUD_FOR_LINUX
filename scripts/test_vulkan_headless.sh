@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/test_vulkan_headless.sh — Real Vulkan Swapchain Hook & GPUI-CE Overlay E2E Check
+# scripts/test_vulkan_headless.sh — Real Vulkan Swapchain Hook & Pure-Rust CPU UI E2E Check
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,5 +69,5 @@ else
 fi
 
 echo "=========================================================="
-echo "  [✓] Headless Vulkan 120-frame hook & GPUI-CE pass OK!"
+echo "  [✓] Headless Vulkan 120-frame hook & Pure-Rust CPU UI pass OK!"
 echo "=========================================================="
