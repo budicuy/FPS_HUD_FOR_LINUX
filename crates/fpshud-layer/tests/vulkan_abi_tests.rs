@@ -295,3 +295,61 @@ fn vulkan_hooks_clamp_group_count_and_guard_null_dispatch_key() {
     assert_eq!(clamp_device_group_count(99, 32), 32);
     assert_eq!(unsafe { dispatch_key_from_raw(0) }, 0);
 }
+
+#[test]
+fn vulkan_positioned_overlay_viewport_and_subrect_shm_sync() {
+    use ash::vk;
+    use fpshud::runtime::OverlayFrameSync;
+    use fpshud::vulkan::blit::compute_vk_overlay_viewport;
+    use fpshud_ipc::protocol::{FrameBackendKind, ShmSlotMeta};
+
+    let (vp, scissor) = compute_vk_overlay_viewport(
+        vk::Extent2D {
+            width: 1280,
+            height: 720,
+        },
+        16,
+        20,
+        320,
+        140,
+    );
+    assert_eq!(
+        (vp.x, vp.y, vp.width, vp.height),
+        (16.0, 20.0, 320.0, 140.0)
+    );
+    assert_eq!(
+        (
+            scissor.offset.x,
+            scissor.offset.y,
+            scissor.extent.width,
+            scissor.extent.height
+        ),
+        (16, 20, 320, 140)
+    );
+
+    let mut sync = OverlayFrameSync::default();
+    sync.reset_for_resize(1280, 720);
+    let meta = ShmSlotMeta {
+        modifier: 0,
+        generation: 1,
+        slot_index: 0,
+        dst_x: 16,
+        dst_y: 20,
+        width: 4,
+        height: 4,
+        stride: 16,
+        fourcc: 0x3432_5241,
+        byte_len: 64,
+        backend: FrameBackendKind::MemfdRgba,
+    };
+    assert!(sync.accept_metadata_only(&meta, &[255_u8; 64]));
+    assert_eq!(
+        (
+            sync.latest.dst_x,
+            sync.latest.dst_y,
+            sync.latest.width,
+            sync.latest.height
+        ),
+        (16, 20, 4, 4)
+    );
+}

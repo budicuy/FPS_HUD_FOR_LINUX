@@ -494,9 +494,8 @@ pub(crate) unsafe extern "system" fn hook_create_device(
         id.instance
             .get_physical_device_properties(physical_device)
     };
-    if let Ok(rt) = LayerRuntime::global().lock() {
-        rt.telemetry
-            .notify_active_gpu(phys_props.vendor_id, phys_props.device_id);
+    if let Ok(mut rt) = LayerRuntime::global().lock() {
+        rt.notify_active_gpu(phys_props.vendor_id, phys_props.device_id);
     }
 
     let dd = Arc::new(DeviceData {
@@ -856,13 +855,16 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     }
 
     if has_overlay && let Some(ref mut blit) = sd.blit {
-        if let Some(ref frame_buf) = overlay_frame {
+        let (dx, dy, bw, bh) = if let Some(ref frame_buf) = overlay_frame {
             unsafe {
                 blit.upload_if_changed(dev, &dd.mem_props, cmd, img_idx, frame_buf);
             }
-        }
+            (frame_buf.dst_x, frame_buf.dst_y, frame_buf.width, frame_buf.height)
+        } else {
+            (0, 0, extent.width, extent.height)
+        };
         unsafe {
-            blit.record_draw(dev, cmd, framebuffer, extent, img_idx);
+            blit.record_draw(dev, cmd, framebuffer, extent, (dx, dy, bw, bh), img_idx);
         }
     }
 

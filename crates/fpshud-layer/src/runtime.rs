@@ -1,11 +1,15 @@
 use crate::launcher::UiDaemonHandle;
+use fpshud_analytics::{
+    BenchmarkRecorder, BenchmarkSummary, FrametimeAnalyzer, frametime::GRAPH_HISTORY_SIZE,
+};
 use fpshud_core::config::{HudConfig, init_config_from_env, save_config_to_disk};
 use fpshud_core::paths::{get_default_record_dir, get_secure_runtime_dir};
 use fpshud_input::{InputAction, InputManager, SurfaceBackendType};
-use fpshud_ipc::protocol::{LayerToUiMsg, MAX_IPC_PAYLOAD, ShmSlotMeta, UiToLayerMsg};
+use fpshud_ipc::protocol::{
+    FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, ShmSlotMeta, UiToLayerMsg,
+};
 use fpshud_ipc::{IpcConnection, IpcServer, ShmRingReader};
 use fpshud_screenshot::{PixelFormat, RawFrameCapture, ScreenshotWorker};
-use fpshud_telemetry::TelemetryCollector;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
@@ -14,6 +18,8 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct OverlayFrameBuffer {
+    pub dst_x: i32,
+    pub dst_y: i32,
     pub width: u32,
     pub height: u32,
     pub generation: u64,
@@ -23,6 +29,8 @@ pub struct OverlayFrameBuffer {
 impl Default for OverlayFrameBuffer {
     fn default() -> Self {
         Self {
+            dst_x: 0,
+            dst_y: 0,
             width: 0,
             height: 0,
             generation: 0,
@@ -31,7 +39,8 @@ impl Default for OverlayFrameBuffer {
     }
 }
 
-/// Validates monotonic generation and exact surface size, discarding stale pre-resize frames.
+/// Validates monotonic generation and swapchain bounds, accepting compact bounding-box HUD frames
+/// while discarding oversized pre-resize or stale frames.
 #[derive(Debug, Default)]
 pub struct OverlayFrameSync {
     expected_size: (u32, u32),
@@ -46,6 +55,8 @@ impl OverlayFrameSync {
         if self.expected_size != next {
             self.expected_size = next;
             self.latest.rgba = Arc::from([]);
+            self.latest.dst_x = 0;
+            self.latest.dst_y = 0;
             self.latest.width = 0;
             self.latest.height = 0;
         }
@@ -56,11 +67,16 @@ impl OverlayFrameSync {
         self.expected_size
     }
 
-    pub fn accept_metadata_only(&mut self, meta: &ShmSlotMeta, pixels: &[u8]) -> bool {
-        if meta.width == 0 || meta.height == 0 {
+    fn size_within_bounds(&self, width: u32, height: u32) -> bool {
+        if width == 0 || height == 0 {
             return false;
         }
-        if self.expected_size != (0, 0) && (meta.width, meta.height) != self.expected_size {
+        self.expected_size == (0, 0)
+            || (width <= self.expected_size.0 && height <= self.expected_size.1)
+    }
+
+    pub fn accept_metadata_only(&mut self, meta: &ShmSlotMeta, pixels: &[u8]) -> bool {
+        if !self.size_within_bounds(meta.width, meta.height) {
             return false;
         }
         if meta.generation <= self.last_accepted_generation {
@@ -73,6 +89,8 @@ impl OverlayFrameSync {
             return false;
         }
         self.last_accepted_generation = meta.generation;
+        self.latest.dst_x = meta.dst_x;
+        self.latest.dst_y = meta.dst_y;
         self.latest.width = meta.width;
         self.latest.height = meta.height;
         self.latest.generation = meta.generation;
@@ -81,10 +99,7 @@ impl OverlayFrameSync {
     }
 
     pub fn try_consume_shm_slot(&mut self, meta: &ShmSlotMeta, reader: &ShmRingReader) -> bool {
-        if meta.width == 0 || meta.height == 0 {
-            return false;
-        }
-        if self.expected_size != (0, 0) && (meta.width, meta.height) != self.expected_size {
+        if !self.size_within_bounds(meta.width, meta.height) {
             return false;
         }
         if meta.generation <= self.last_accepted_generation {
@@ -101,6 +116,8 @@ impl OverlayFrameSync {
                 return false;
             }
             self.last_accepted_generation = r_gen.max(meta.generation);
+            self.latest.dst_x = meta.dst_x;
+            self.latest.dst_y = meta.dst_y;
             self.latest.width = meta.width;
             self.latest.height = meta.height;
             self.latest.generation = self.last_accepted_generation;
@@ -113,10 +130,18 @@ impl OverlayFrameSync {
 
 pub struct LayerRuntime {
     pub config: HudConfig,
-    pub telemetry: TelemetryCollector,
     pub input: InputManager,
     pub screenshot_worker: ScreenshotWorker,
     pub overlay_sync: OverlayFrameSync,
+    frametime: FrametimeAnalyzer,
+    last_frame_at: Option<Instant>,
+    benchmark: BenchmarkRecorder,
+    bench_started_at: Option<Instant>,
+    last_benchmark: Option<BenchmarkSummary>,
+    benchmark_dir: PathBuf,
+    bench_loads: (f32, f32),
+    active_gpu: Option<(u32, u32)>,
+    active_gpu_sent: bool,
     pending_screenshot: Option<bool>,
     test_mode: bool,
     ipc_server: Option<IpcServer>,
@@ -152,10 +177,18 @@ impl LayerRuntime {
             };
             Mutex::new(Self {
                 config,
-                telemetry: TelemetryCollector::new(),
                 input: InputManager::new(),
-                screenshot_worker: ScreenshotWorker::new(save_dir),
+                screenshot_worker: ScreenshotWorker::new(save_dir.clone()),
                 overlay_sync: OverlayFrameSync::default(),
+                frametime: FrametimeAnalyzer::new(),
+                last_frame_at: None,
+                benchmark: BenchmarkRecorder::default(),
+                bench_started_at: None,
+                last_benchmark: None,
+                benchmark_dir: save_dir,
+                bench_loads: (0.0, 0.0),
+                active_gpu: None,
+                active_gpu_sent: false,
                 pending_screenshot: None,
                 test_mode: false,
                 ipc_server: None,
@@ -181,12 +214,21 @@ impl LayerRuntime {
             enabled: true,
             ..HudConfig::default()
         };
+        let bench_dir = std::env::temp_dir().join("fpshud_test_bench");
         Self {
             config,
-            telemetry: TelemetryCollector::with_mock_root(PathBuf::from("/nonexistent_fpshud_test")),
             input: InputManager::new_headless(),
             screenshot_worker: ScreenshotWorker::new(std::env::temp_dir().join("fpshud_test_shots")),
             overlay_sync: OverlayFrameSync::default(),
+            frametime: FrametimeAnalyzer::new(),
+            last_frame_at: None,
+            benchmark: BenchmarkRecorder::default(),
+            bench_started_at: None,
+            last_benchmark: None,
+            benchmark_dir: bench_dir,
+            bench_loads: (0.0, 0.0),
+            active_gpu: None,
+            active_gpu_sent: false,
             pending_screenshot: None,
             test_mode: true,
             ipc_server: None,
@@ -202,6 +244,24 @@ impl LayerRuntime {
             socket_path: None,
             ipc_recv_buf: vec![0_u8; MAX_IPC_PAYLOAD + 64],
             last_render_api: String::new(),
+        }
+    }
+
+    pub fn notify_active_gpu(&mut self, vendor_id: u32, device_id: u32) {
+        self.active_gpu = Some((vendor_id, device_id));
+        self.active_gpu_sent = false;
+    }
+
+    fn toggle_benchmark(&mut self) {
+        if self.benchmark.is_active() {
+            let summary = self.benchmark.stop();
+            self.bench_started_at = None;
+            if summary.is_some() {
+                self.last_benchmark = summary;
+            }
+        } else {
+            self.benchmark.start(&self.benchmark_dir);
+            self.bench_started_at = Some(Instant::now());
         }
     }
 
@@ -240,9 +300,7 @@ impl LayerRuntime {
     pub fn handle_side_effect_actions(&mut self, actions: &[InputAction]) {
         for &action in actions {
             match action {
-                InputAction::ToggleBenchmark => {
-                    self.telemetry.toggle_benchmark();
-                }
+                InputAction::ToggleBenchmark => self.toggle_benchmark(),
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
@@ -263,9 +321,7 @@ impl LayerRuntime {
                     self.config.hud_visible = !self.config.hud_visible;
                     config_changed = true;
                 }
-                InputAction::ToggleBenchmark => {
-                    self.telemetry.toggle_benchmark();
-                }
+                InputAction::ToggleBenchmark => self.toggle_benchmark(),
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
@@ -309,6 +365,7 @@ impl LayerRuntime {
         if conn.send_msg(&bytes, &[]).is_err() {
             self.ipc_conn = None;
             self.init_sent = false;
+            self.active_gpu_sent = false;
             self.input.set_external_overlay_active(false);
             return false;
         }
@@ -316,7 +373,7 @@ impl LayerRuntime {
     }
 
     fn ensure_ipc_started(&mut self) {
-        if self.test_mode || !self.config.enabled || self.ipc_server.is_some() {
+        if self.test_mode || self.ipc_server.is_some() {
             return;
         }
         let Ok(runtime_dir) = get_secure_runtime_dir() else {
@@ -351,6 +408,7 @@ impl LayerRuntime {
                 Ok((0, _)) => {
                     self.ipc_conn = None;
                     self.init_sent = false;
+                    self.active_gpu_sent = false;
                     self.input.set_external_overlay_active(false);
                     break;
                 }
@@ -368,6 +426,7 @@ impl LayerRuntime {
                 Err(_) => {
                     self.ipc_conn = None;
                     self.init_sent = false;
+                    self.active_gpu_sent = false;
                     self.input.set_external_overlay_active(false);
                     break;
                 }
@@ -390,8 +449,9 @@ impl LayerRuntime {
                 self.config = cfg;
                 let _ = save_config_to_disk(&self.config);
             }
-            UiToLayerMsg::BenchmarkToggle => {
-                self.telemetry.toggle_benchmark();
+            UiToLayerMsg::BenchmarkToggle => self.toggle_benchmark(),
+            UiToLayerMsg::BenchmarkLoads { cpu_load, gpu_load } => {
+                self.bench_loads = (cpu_load, gpu_load);
             }
             UiToLayerMsg::ScreenshotRequest { with_hud } => {
                 self.pending_screenshot = Some(with_hud);
@@ -428,18 +488,60 @@ impl LayerRuntime {
         }
     }
 
+    fn record_frame_tick(&mut self, now: Instant) {
+        let dt_sec = self
+            .last_frame_at
+            .map_or(1.0 / 60.0, |prev| now.duration_since(prev).as_secs_f32())
+            .clamp(0.000_05, 0.25);
+        self.last_frame_at = Some(now);
+        self.frametime.record_frame(dt_sec);
+        if self.benchmark.is_active() {
+            let fps_inst = if dt_sec > 0.0 { 1.0 / dt_sec } else { 0.0 };
+            self.benchmark.push_sample(
+                fps_inst,
+                dt_sec * 1000.0,
+                self.bench_loads.0,
+                self.bench_loads.1,
+            );
+        }
+    }
+
+    fn build_frame_tick(&self) -> FrameTickData {
+        let metrics = self.frametime.compute_metrics();
+        FrameTickData {
+            fps: metrics.fps,
+            fps_avg: metrics.fps_avg,
+            fps_1pct_low: metrics.fps_1pct_low,
+            fps_01pct_low: metrics.fps_01pct_low,
+            frametime_ms: metrics.frametime_ms,
+            frametime_history: self
+                .frametime
+                .history_slice()
+                .iter()
+                .copied()
+                .take(GRAPH_HISTORY_SIZE)
+                .collect(),
+            render_api: self.last_render_api.clone(),
+            benchmark_active: self.benchmark.is_active(),
+            benchmark_elapsed_sec: self
+                .bench_started_at
+                .map_or(0.0, |t| t.elapsed().as_secs_f32()),
+            last_benchmark: self.last_benchmark.clone(),
+        }
+    }
+
     pub fn pump_frame(&mut self, width: u32, height: u32, render_api: &str) {
         if !self.config.enabled {
             return;
         }
         let w = width.max(1);
         let h = height.max(1);
+        let now = Instant::now();
         if self.last_render_api != render_api {
             self.last_render_api.clear();
             self.last_render_api.push_str(render_api);
-            self.telemetry.set_render_api(render_api);
         }
-        self.telemetry.on_frame();
+        self.record_frame_tick(now);
 
         self.ensure_ipc_started();
 
@@ -450,6 +552,7 @@ impl LayerRuntime {
         {
             self.ipc_conn = Some(conn);
             self.init_sent = false;
+            self.active_gpu_sent = false;
             self.last_software_cursor = false;
         }
 
@@ -477,9 +580,19 @@ impl LayerRuntime {
                     self.last_sent_size = (w, h);
                 }
             }
+
+            if self.init_sent
+                && !self.active_gpu_sent
+                && let Some((vendor_id, device_id)) = self.active_gpu
+                && self.send_to_ui(&LayerToUiMsg::ActiveGpu {
+                    vendor_id,
+                    device_id,
+                })
+            {
+                self.active_gpu_sent = true;
+            }
         }
 
-        let now = Instant::now();
         if now >= self.next_input_poll {
             let poll_interval_ms = if self.config.gui_open { 8 } else { 32 };
             self.next_input_poll = now + Duration::from_millis(poll_interval_ms);
@@ -514,8 +627,8 @@ impl LayerRuntime {
             && now.duration_since(self.last_telemetry_push) >= telemetry_interval
         {
             self.last_telemetry_push = now;
-            let snap = self.telemetry.get_snapshot();
-            let _ = self.send_to_ui(&LayerToUiMsg::TelemetryUpdate(Box::new(snap)));
+            let tick = self.build_frame_tick();
+            let _ = self.send_to_ui(&LayerToUiMsg::FrameTick(Box::new(tick)));
         }
     }
 
@@ -558,30 +671,32 @@ impl LayerRuntime {
         if self.config.gui_open == initial_gui || self.config.hud_visible == initial_hud {
             return false;
         }
-        if !self.telemetry.get_snapshot().benchmark_active {
+        if !self.benchmark.is_active() {
             return false;
         }
         if self.consume_screenshot_request().is_none() {
             return false;
         }
 
-        // Resize to 1280x720 -> stale 800x600 generation 1 MUST be rejected, matching 1280x720 accepted
+        // Resize to 1280x720 -> oversized 1920x1080 generation 1 MUST be rejected, valid <=1280x720 accepted
         self.overlay_sync.reset_for_resize(1280, 720);
-        let stale_pixels = vec![0xAA_u8; 800 * 600 * 4];
-        let stale_meta = ShmSlotMeta {
+        let oversized_pixels = vec![0xAA_u8; 1920 * 1080 * 4];
+        let oversized_meta = ShmSlotMeta {
             modifier: 0,
             generation: 1,
             slot_index: 0,
-            width: 800,
-            height: 600,
-            stride: 800 * 4,
+            dst_x: 0,
+            dst_y: 0,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 4,
             fourcc: 0,
-            byte_len: stale_pixels.len() as u32,
+            byte_len: oversized_pixels.len() as u32,
             backend: fpshud_ipc::FrameBackendKind::MemfdRgba,
         };
         if self
             .overlay_sync
-            .accept_metadata_only(&stale_meta, &stale_pixels)
+            .accept_metadata_only(&oversized_meta, &oversized_pixels)
         {
             return false;
         }
@@ -591,6 +706,8 @@ impl LayerRuntime {
             modifier: 0,
             generation: 2,
             slot_index: 0,
+            dst_x: 0,
+            dst_y: 0,
             width: 1280,
             height: 720,
             stride: 1280 * 4,

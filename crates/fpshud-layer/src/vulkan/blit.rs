@@ -339,6 +339,38 @@ pub struct VulkanBlitPipeline {
 unsafe impl Send for VulkanBlitPipeline {}
 unsafe impl Sync for VulkanBlitPipeline {}
 
+/// Computes a clamped Vulkan viewport and scissor for a positioned bounding-box HUD texture.
+pub fn compute_vk_overlay_viewport(
+    extent: vk::Extent2D,
+    dst_x: i32,
+    dst_y: i32,
+    box_w: u32,
+    box_h: u32,
+) -> (vk::Viewport, vk::Rect2D) {
+    let max_w = extent.width.max(1);
+    let max_h = extent.height.max(1);
+    let w = box_w.clamp(1, max_w);
+    let h = box_h.clamp(1, max_h);
+    let x = dst_x.clamp(0, (max_w.saturating_sub(w)) as i32);
+    let y = dst_y.clamp(0, (max_h.saturating_sub(h)) as i32);
+
+    let viewport = vk::Viewport::default()
+        .x(x as f32)
+        .y(y as f32)
+        .width(w as f32)
+        .height(h as f32)
+        .min_depth(0.0)
+        .max_depth(1.0);
+    let scissor = vk::Rect2D {
+        offset: vk::Offset2D { x, y },
+        extent: vk::Extent2D {
+            width: w,
+            height: h,
+        },
+    };
+    (viewport, scissor)
+}
+
 impl VulkanBlitPipeline {
     pub(crate) unsafe fn new(
         device: &ash::Device,
@@ -726,8 +758,10 @@ impl VulkanBlitPipeline {
         cmd: vk::CommandBuffer,
         framebuffer: vk::Framebuffer,
         extent: vk::Extent2D,
+        rect: (i32, i32, u32, u32),
         slot_idx: usize,
     ) {
+        let (dst_x, dst_y, box_w, box_h) = rect;
         let Some(slot) = self.slots.get(slot_idx) else {
             return;
         };
@@ -742,17 +776,9 @@ impl VulkanBlitPipeline {
                 extent,
             });
 
-        let viewport = vk::Viewport::default()
-            .x(0.0)
-            .y(0.0)
-            .width(extent.width as f32)
-            .height(extent.height as f32)
-            .min_depth(0.0)
-            .max_depth(1.0);
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
+        let draw_w = if box_w > 0 { box_w } else { slot.tex_width };
+        let draw_h = if box_h > 0 { box_h } else { slot.tex_height };
+        let (viewport, scissor) = compute_vk_overlay_viewport(extent, dst_x, dst_y, draw_w, draw_h);
 
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);

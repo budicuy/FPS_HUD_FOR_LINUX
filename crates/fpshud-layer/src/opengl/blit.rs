@@ -230,6 +230,27 @@ pub fn with_overlay_texture_unit<F: FnOnce()>(ops: &dyn GlStateOps, draw: F) {
     ops.active_texture(prev_active_tex.max(glow::TEXTURE0 as i32) as u32);
 }
 
+/// Converts a top-left origin HUD bounding box `(dst_x, dst_y, box_w, box_h)` into OpenGL's
+/// bottom-left `glViewport` `[x, y, w, h]`, safely clamped to `[0..win_w, 0..win_h]`.
+#[must_use]
+pub fn compute_gl_overlay_viewport(
+    win_w: u32,
+    win_h: u32,
+    dst_x: i32,
+    dst_y: i32,
+    box_w: u32,
+    box_h: u32,
+) -> [i32; 4] {
+    let max_w = win_w.max(1);
+    let max_h = win_h.max(1);
+    let w = box_w.clamp(1, max_w);
+    let h = box_h.clamp(1, max_h);
+    let x = dst_x.clamp(0, (max_w.saturating_sub(w)) as i32);
+    let top_y = dst_y.clamp(0, (max_h.saturating_sub(h)) as i32);
+    let gl_y = (max_h as i32) - top_y - (h as i32);
+    [x, gl_y.max(0), w as i32, h as i32]
+}
+
 /// Returns `true` when the active OpenGL context pointer changed, requiring handle re-creation.
 #[must_use]
 pub const fn should_reset_gl_renderer(cached_ctx: usize, current_ctx: usize) -> bool {
@@ -565,7 +586,16 @@ pub(crate) unsafe fn on_swap_buffers(
             let shot = rt.consume_screenshot_request();
             let ov = if rt.config.hud_visible || rt.config.gui_open {
                 let l = &rt.overlay_sync.latest;
-                (!l.rgba.is_empty()).then(|| (l.width, l.height, l.generation, l.rgba.clone()))
+                (!l.rgba.is_empty()).then(|| {
+                    (
+                        l.dst_x,
+                        l.dst_y,
+                        l.width,
+                        l.height,
+                        l.generation,
+                        l.rgba.clone(),
+                    )
+                })
             } else {
                 None
             };
@@ -576,7 +606,7 @@ pub(crate) unsafe fn on_swap_buffers(
             capture_gl_screenshot(gl, w, h);
         }
 
-        if draw_overlay && let Some((ow, oh, ogen, rgba)) = overlay {
+        if draw_overlay && let Some((dst_x, dst_y, ow, oh, ogen, rgba)) = overlay {
             let backup = GlStateBackup::capture(gl);
             let prev_row_len = gl.get_integerv(glow::UNPACK_ROW_LENGTH);
             let prev_align = gl.get_integerv(glow::UNPACK_ALIGNMENT);
@@ -641,7 +671,10 @@ pub(crate) unsafe fn on_swap_buffers(
                     gl.set_enabled(glow::CULL_FACE, false);
                     gl.set_enabled(glow::BLEND, true);
                     GlStateOps::blend_func(gl, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-                    GlStateOps::viewport(gl, [0, 0, w as i32, h as i32]);
+                    GlStateOps::viewport(
+                        gl,
+                        compute_gl_overlay_viewport(w, h, dst_x, dst_y, ow, oh),
+                    );
                     unsafe {
                         <glow::Context as HasContext>::use_program(gl, gr.program);
                         <glow::Context as HasContext>::bind_vertex_array(gl, gr.vao);

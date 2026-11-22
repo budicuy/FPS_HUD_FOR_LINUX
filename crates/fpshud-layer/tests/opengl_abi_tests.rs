@@ -271,3 +271,13 @@ fn opengl_renderer_detects_context_change_to_avoid_stale_handles() {
     }
     assert!(cache.len() <= 4);
 }
+
+#[test]
+fn opengl_overlay_viewport_flips_y_from_top_left_origin() {
+    use fpshud::opengl::blit::compute_gl_overlay_viewport;
+
+    assert_eq!(
+        compute_gl_overlay_viewport(1280, 720, 16, 20, 320, 140),
+        [16, 560, 320, 140]
+    );
+}
