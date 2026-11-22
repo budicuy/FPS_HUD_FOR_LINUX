@@ -319,3 +319,46 @@ fn full_mode_dual_scale_composites_hud_dashboard_and_clamped_software_cursor() {
     let painted = rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
     assert!(painted > 50_000);
 }
+
+#[test]
+fn hover_change_marks_dirty_immediately_and_stays_idle_within_same_button() {
+    let cfg = HudConfig {
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let mut dash = CpuDashboard::new(UiStore::new(cfg, TelemetrySnapshot::default()));
+    dash.set_render_mode(UiRenderMode::DashboardOnly);
+    dash.set_software_cursor(false); // Wayland native cursor mode
+    let mut rast = TextRasterizer::new();
+    let mut rgba = Vec::new();
+    dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut rgba);
+
+    let adv = dash.preset_button_bounds(PresetType::Advance);
+    // Entering button -> must mark dirty immediately (0ms hover latency)
+    assert!(dash.dispatch_input(
+        &[UiInputEvent::MouseMove {
+            x: adv.x + 5.0,
+            y: adv.y + 5.0,
+        }],
+        1280,
+        720,
+        1.0,
+    ));
+    // Moving inside the same button -> no redundant redraw
+    assert!(!dash.dispatch_input(
+        &[UiInputEvent::MouseMove {
+            x: adv.x + 8.0,
+            y: adv.y + 6.0,
+        }],
+        1280,
+        720,
+        1.0,
+    ));
+    // Leaving button to empty corner -> must mark dirty immediately to clear hover
+    assert!(dash.dispatch_input(
+        &[UiInputEvent::MouseMove { x: 2.0, y: 2.0 }],
+        1280,
+        720,
+        1.0,
+    ));
+}

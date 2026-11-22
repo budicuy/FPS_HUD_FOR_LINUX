@@ -234,6 +234,7 @@ pub struct CpuDashboard {
     drag_gui_start_cursor: (f32, f32),
     drag_gui_start_origin: (f32, f32),
     cursor_logical: (f32, f32),
+    last_hovered_hit: Option<(bool, usize)>,
     last_eff_scale: f32,
     last_panel_size: (f32, f32),
 }
@@ -261,6 +262,7 @@ impl CpuDashboard {
             drag_gui_start_cursor: (0.0, 0.0),
             drag_gui_start_origin: (0.0, 0.0),
             cursor_logical: (0.0, 0.0),
+            last_hovered_hit: None,
             last_eff_scale: 1.0,
             last_panel_size: (960.0, 580.0),
         }
@@ -391,6 +393,11 @@ impl CpuDashboard {
                     let lx = x / eff_scale;
                     let ly = y / eff_scale;
                     self.cursor_logical = (lx, ly);
+                    let next_hover = self.resolve_hovered_hit(lx, ly);
+                    if next_hover != self.last_hovered_hit {
+                        self.last_hovered_hit = next_hover;
+                        dirty = true;
+                    }
                     if self.draw_software_cursor {
                         dirty = true;
                     }
@@ -435,6 +442,29 @@ impl CpuDashboard {
             }
         }
         dirty
+    }
+
+    fn resolve_hovered_hit(&self, lx: f32, ly: f32) -> Option<(bool, usize)> {
+        if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
+            return None;
+        }
+        if self.open_dropdown.is_some() {
+            for (idx, &(rect, _)) in self.popover_hits.iter().enumerate().rev() {
+                if rect.contains(lx, ly) {
+                    return Some((true, idx));
+                }
+            }
+            return None;
+        }
+        for (idx, &(rect, action)) in self.base_hits.iter().enumerate().rev() {
+            if matches!(action, HitAction::DragHeader | HitAction::DragPreview) {
+                continue;
+            }
+            if rect.contains(lx, ly) {
+                return Some((false, idx));
+            }
+        }
+        None
     }
 
     fn handle_left_down(&mut self, lx: f32, ly: f32) -> bool {
