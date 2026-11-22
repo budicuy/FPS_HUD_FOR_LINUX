@@ -149,3 +149,56 @@ fn config_enums_roundtrip_as_i32_and_serde() {
         assert_eq!(FontFamily::from_i32(i).as_i32(), i);
     }
 }
+
+#[test]
+fn presets_default_to_stack_and_custom_text_color_bg_alpha_full_range() {
+    let mut cfg = HudConfig::default();
+    assert!(!cfg.custom_text_color_enabled);
+
+    cfg.arrangement = ArrangementMode::Linear;
+    apply_preset_minimal(&mut cfg);
+    assert_eq!(cfg.arrangement, ArrangementMode::Stack);
+
+    cfg.arrangement = ArrangementMode::Double;
+    apply_preset_standard(&mut cfg);
+    assert_eq!(cfg.arrangement, ArrangementMode::Stack);
+
+    cfg.arrangement = ArrangementMode::Linear;
+    apply_preset_advance(&mut cfg);
+    assert_eq!(cfg.arrangement, ArrangementMode::Stack);
+
+    let mut custom_cfg = HudConfig {
+        arrangement: ArrangementMode::Linear,
+        ..HudConfig::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let missing_path = dir.path().join("no_config.ini");
+    assert!(!load_ini_file(&missing_path, &mut custom_cfg));
+    apply_preset_standard(&mut custom_cfg);
+    assert_eq!(custom_cfg.arrangement, ArrangementMode::Stack);
+
+    // Legacy INI dengan non-white text_color tanpa key custom_text_color_enabled -> otomatis true
+    let legacy_path = dir.path().join("legacy_color.ini");
+    fs::write(&legacy_path, "text_color=10,20,30\nbg_alpha=1.0\n").unwrap();
+    let mut loaded = HudConfig::default();
+    assert!(load_ini_file(&legacy_path, &mut loaded));
+    assert!(loaded.custom_text_color_enabled);
+    assert!((loaded.bg_alpha - 1.0).abs() < 1e-4);
+
+    // Legacy INI dengan white text_color tanpa key -> tetap false
+    let white_path = dir.path().join("legacy_white.ini");
+    fs::write(&white_path, "text_color=255,255,255\n").unwrap();
+    let mut loaded_white = HudConfig::default();
+    assert!(load_ini_file(&white_path, &mut loaded_white));
+    assert!(!loaded_white.custom_text_color_enabled);
+
+    // Explicit custom_text_color_enabled=0 mempertahankan swatch text_color tetapi flag false
+    loaded.custom_text_color_enabled = false;
+    let rt_path = dir.path().join("explicit_flag.ini");
+    assert!(save_ini_file(&rt_path, &loaded));
+    let mut reloaded = HudConfig::default();
+    assert!(load_ini_file(&rt_path, &mut reloaded));
+    assert!(!reloaded.custom_text_color_enabled);
+    assert_eq!(reloaded.text_color, ColorRgba::new(10, 20, 30, 255));
+    assert!((reloaded.bg_alpha - 1.0).abs() < 1e-4);
+}

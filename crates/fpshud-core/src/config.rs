@@ -372,6 +372,7 @@ pub struct HudConfig {
     pub background_style: BackgroundStyle,
     pub font_family: FontFamily,
     pub text_color: ColorRgba,
+    pub custom_text_color_enabled: bool,
 
     pub category_colors_enabled: bool,
     pub thermal_warnings_enabled: bool,
@@ -424,6 +425,7 @@ impl Default for HudConfig {
             background_style: BackgroundStyle::Translucent,
             font_family: FontFamily::SansBold,
             text_color: ColorRgba::default(),
+            custom_text_color_enabled: false,
             category_colors_enabled: true,
             thermal_warnings_enabled: true,
             dim_labels_enabled: true,
@@ -490,7 +492,7 @@ pub fn apply_preset_minimal(cfg: &mut HudConfig) {
     cfg.preset = PresetType::Minimal;
     cfg.metrics = vec![MetricType::Fps, MetricType::FrameTimes];
     cfg.position = LayoutPosition::TopLeft;
-    cfg.arrangement = ArrangementMode::Linear;
+    cfg.arrangement = ArrangementMode::Stack;
     cfg.background_style = BackgroundStyle::Translucent;
     cfg.bg_alpha = 0.35;
 }
@@ -508,15 +510,17 @@ pub fn apply_preset_advance(cfg: &mut HudConfig) {
     cfg.preset = PresetType::Advance;
     cfg.metrics = MetricType::ALL.to_vec();
     cfg.position = LayoutPosition::TopCenter;
-    cfg.arrangement = ArrangementMode::Linear;
+    cfg.arrangement = ArrangementMode::Stack;
     cfg.background_style = BackgroundStyle::Translucent;
     cfg.bg_alpha = 0.42;
 }
 
 pub fn apply_preset_custom(cfg: &mut HudConfig) {
+    cfg.arrangement = ArrangementMode::Stack;
     if !load_config_from_disk(cfg) {
         apply_preset_standard(cfg);
         cfg.text_color = ColorRgba::new(0, 229, 255, 255);
+        cfg.custom_text_color_enabled = true;
         cfg.font_size_px = 21.0;
     }
     cfg.preset = PresetType::Custom;
@@ -622,6 +626,8 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
     let keep_enabled = cfg.enabled;
     let keep_open = cfg.gui_open;
     let mut parsed_any = false;
+    let mut saw_text_color = false;
+    let mut saw_custom_text_color_flag = false;
 
     for raw_line in contents.lines() {
         let line = raw_line.trim();
@@ -679,7 +685,13 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
             "text_color" => {
                 if let Some(c) = parse_rgb(val) {
                     cfg.text_color = c;
+                    saw_text_color = true;
                 }
+                parsed_any = true;
+            }
+            "custom_text_color_enabled" => {
+                cfg.custom_text_color_enabled = parse_i32_or(val, 0) != 0;
+                saw_custom_text_color_flag = true;
                 parsed_any = true;
             }
             "text_opacity" => {
@@ -792,6 +804,9 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
     if !parsed_any {
         return false;
     }
+    if saw_text_color && !saw_custom_text_color_flag {
+        cfg.custom_text_color_enabled = cfg.text_color != ColorRgba::new(255, 255, 255, 255);
+    }
     if cfg.metrics.is_empty() {
         cfg.metrics.push(MetricType::Fps);
     }
@@ -836,6 +851,7 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
          font_family={}\n\
          font_size_px={:.2}\n\
          text_color={},{},{}\n\
+         custom_text_color_enabled={}\n\
          text_opacity={:.3}\n\
          bg_alpha={:.3}\n\
          outline_enabled={}\n\
@@ -870,6 +886,7 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
         cfg.text_color.r,
         cfg.text_color.g,
         cfg.text_color.b,
+        i32::from(cfg.custom_text_color_enabled),
         cfg.text_opacity,
         cfg.bg_alpha,
         i32::from(cfg.outline_enabled),
