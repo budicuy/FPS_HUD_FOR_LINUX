@@ -75,6 +75,10 @@ impl OverlayFrameSync {
             || (width <= self.expected_size.0 && height <= self.expected_size.1)
     }
 
+    pub fn reset_generation(&mut self) {
+        self.last_accepted_generation = 0;
+    }
+
     pub fn accept_metadata_only(&mut self, meta: &ShmSlotMeta, pixels: &[u8]) -> bool {
         if !self.size_within_bounds(meta.width, meta.height) {
             return false;
@@ -416,6 +420,7 @@ impl LayerRuntime {
                     for fd in fds {
                         if let Ok(reader) = ShmRingReader::from_borrowed_fd(fd.as_fd(), 0) {
                             self.shm_reader = Some(reader);
+                            self.overlay_sync.reset_generation();
                         }
                     }
                     if let Ok(msg) = UiToLayerMsg::decode(&self.ipc_recv_buf[..n]) {

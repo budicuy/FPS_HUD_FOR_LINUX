@@ -352,4 +352,17 @@ fn vulkan_positioned_overlay_viewport_and_subrect_shm_sync() {
         ),
         (16, 20, 4, 4)
     );
+
+    // Regression: switching presets (e.g. Minimal -> Advance) can reallocate SHM FD;
+    // reset_generation() ensures generation=1 from the new ring is accepted immediately.
+    let mut high_meta = meta;
+    high_meta.generation = 42;
+    assert!(sync.accept_metadata_only(&high_meta, &[255_u8; 64]));
+    assert!(!sync.accept_metadata_only(&meta, &[255_u8; 64]));
+    sync.reset_generation();
+    let mut resized_meta = meta;
+    resized_meta.dst_x = 500;
+    resized_meta.generation = 1;
+    assert!(sync.accept_metadata_only(&resized_meta, &[255_u8; 64]));
+    assert_eq!(sync.latest.dst_x, 500);
 }

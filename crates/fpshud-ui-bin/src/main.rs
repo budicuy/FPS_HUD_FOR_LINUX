@@ -729,11 +729,17 @@ impl DaemonState {
     }
 
     fn ensure_shm_capacity(&mut self, width: u32, height: u32) -> Result<()> {
-        let needed = (width.max(1) as usize)
-            .saturating_mul(height.max(1) as usize)
-            .saturating_mul(4);
-        if self.shm_writer.is_none() || needed > self.shm_slot_bytes {
-            let writer = ShmRingWriter::new(width.max(1), height.max(1))?;
+        let w = width.max(1);
+        let h = height.max(1);
+        let needed = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+        if let Some(writer) = &mut self.shm_writer {
+            if needed > self.shm_slot_bytes {
+                writer.resize(w, h)?;
+                self.shm_slot_bytes = needed;
+                self.shm_fd_dirty = true;
+            }
+        } else {
+            let writer = ShmRingWriter::new(w, h)?;
             self.shm_slot_bytes = needed;
             self.shm_writer = Some(writer);
             self.shm_fd_dirty = true;
