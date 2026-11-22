@@ -4,9 +4,11 @@ pub mod dashboard;
 pub mod hud;
 pub mod state;
 pub mod toast;
+pub mod widgets;
 
 pub use dashboard::{FpshudRootView, UiRenderMode};
 pub use state::{MetricCategory, SensorFilter, UiStore};
+pub use widgets::DropdownId;
 
 use fpshud_core::HudConfig;
 use fpshud_ipc::UiToLayerMsg;

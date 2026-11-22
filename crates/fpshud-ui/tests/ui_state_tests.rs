@@ -619,3 +619,46 @@ fn hud_grouping_middle_dot_order_and_effective_text_color_opacity_100() {
         }
     }
 }
+
+#[test]
+fn widgets_option_tables_and_popover_viewport_clamping() {
+    use fpshud_ui::widgets::{
+        BG_OPACITY_PCTS, DropdownId, FONT_OPTIONS, FONT_SIZE_OPTIONS, POSITION_OPTIONS,
+        SCALE_OPTIONS, TEXT_COLOR_SWATCHES, TEXT_OPACITY_PCTS, clamp_popover_origin,
+    };
+    use gpui::{Bounds, Point, Size, px};
+
+    assert_eq!(BG_OPACITY_PCTS.len(), 20);
+    assert_eq!(BG_OPACITY_PCTS[0], 5);
+    assert_eq!(BG_OPACITY_PCTS[19], 100);
+    for pair in BG_OPACITY_PCTS.windows(2) {
+        assert_eq!(pair[1] - pair[0], 5);
+    }
+
+    assert_eq!(POSITION_OPTIONS.len(), 7);
+    assert!(POSITION_OPTIONS.iter().any(|(lbl, _)| *lbl == "Top Center"));
+    assert!(POSITION_OPTIONS.iter().any(|(lbl, _)| *lbl == "Bottom Center"));
+    assert!(!POSITION_OPTIONS.iter().any(|(lbl, _)| *lbl == "TL" || *lbl == "BC"));
+
+    assert_eq!(FONT_OPTIONS.len(), 2);
+    assert!(SCALE_OPTIONS.contains(&1.0) && SCALE_OPTIONS.contains(&0.5) && SCALE_OPTIONS.contains(&2.0));
+    assert!(FONT_SIZE_OPTIONS.contains(&12) && FONT_SIZE_OPTIONS.contains(&20) && FONT_SIZE_OPTIONS.contains(&36));
+    assert_eq!(TEXT_OPACITY_PCTS, [20, 40, 60, 80, 100]);
+    assert_eq!(TEXT_COLOR_SWATCHES.len(), 4);
+    assert_eq!(DropdownId::BgOpacity.index(), 7);
+
+    let bottom_anchor = Bounds::new(
+        Point::new(px(180.0), px(660.0)),
+        Size::new(px(150.0), px(24.0)),
+    );
+    let (px_x, px_y) = clamp_popover_origin(bottom_anchor, 220.0, 160.0, 1280.0, 720.0);
+    assert!(px_y >= 8.0 && px_y + 160.0 <= 712.0, "popup must flip upward inside 720p, got y={px_y}");
+    assert!(px_x >= 8.0 && px_x + 220.0 <= 1272.0);
+
+    let right_anchor = Bounds::new(
+        Point::new(px(860.0), px(100.0)),
+        Size::new(px(140.0), px(24.0)),
+    );
+    let (rx, ry) = clamp_popover_origin(right_anchor, 220.0, 140.0, 960.0, 640.0);
+    assert!(rx + 220.0 <= 952.0 && ry >= 100.0);
+}
