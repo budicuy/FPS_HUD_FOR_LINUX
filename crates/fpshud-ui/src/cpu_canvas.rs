@@ -611,43 +611,129 @@ impl<'a> CpuCanvas<'a> {
         );
     }
 
-    /// Draws the frametime bar sparkline inside `rect`.
+    /// Draws an informative continuous line + area-fill frametime graph with reference lines and min/max readout.
     pub fn draw_frametime_sparkline(
         &mut self,
+        rasterizer: &mut TextRasterizer,
         rect: Rect,
         snap: &TelemetrySnapshot,
         border_color: u32,
     ) {
-        self.fill_rounded_rect(rect, 3.0, rgba_u32(10, 14, 22, 210));
-        self.stroke_rounded_rect(rect, 3.0, 1.0, border_color);
+        self.fill_rounded_rect(rect, 4.0, rgba_u32(8, 12, 18, 225));
+        self.stroke_rounded_rect(rect, 4.0, 1.0, border_color);
 
-        let inner_w = (rect.w - 4.0).max(1.0);
-        let inner_h = (rect.h - 4.0).max(1.0);
         let samples = &snap.frametime_history;
         if samples.is_empty() {
             return;
         }
-        let max_bars = ((inner_w / 3.0).floor() as usize).clamp(1, 64);
-        let start = samples.len().saturating_sub(max_bars);
-        let slice = &samples[start..];
-        let step_x = inner_w / (max_bars as f32);
-        let bar_w = (step_x - 1.0).max(1.0);
 
-        for (i, &ft) in slice.iter().enumerate() {
-            let clamped = if ft.is_finite() { ft.clamp(1.0, 50.0) } else { 16.7 };
-            let frac = (clamped / 50.0).clamp(0.08, 1.0);
-            let bh = (inner_h * frac).max(2.0);
-            let bx = rect.x + 2.0 + (i as f32) * step_x;
-            let by = rect.bottom() - 2.0 - bh;
-            let col = if clamped > 33.3 {
-                rgba_u32(255, 80, 80, 235)
-            } else if clamped > 22.2 {
-                rgba_u32(255, 190, 40, 235)
-            } else {
-                rgba_u32(90, 220, 130, 235)
-            };
-            self.fill_rect(Rect::new(bx, by, bar_w, bh), col);
+        let max_pts = ((rect.w - 8.0) / 2.5).floor().clamp(8.0, 96.0) as usize;
+        let start = samples.len().saturating_sub(max_pts);
+        let slice = &samples[start..];
+
+        let mut min_ft = f32::INFINITY;
+        let mut max_ft = 0.0_f32;
+        for &ft in slice {
+            if ft.is_finite() && ft > 0.1 {
+                min_ft = min_ft.min(ft);
+                max_ft = max_ft.max(ft);
+            }
         }
+        if !min_ft.is_finite() {
+            min_ft = 16.7;
+            max_ft = 16.7;
+        }
+
+        // Dynamic ceiling: at least 25ms (or 35ms if >22ms), smoothly expands for spikes
+        let ceil_ms = if max_ft > 33.3 {
+            (max_ft * 1.15).min(100.0)
+        } else if max_ft > 20.0 {
+            35.0
+        } else {
+            25.0
+        };
+
+        let header_h = 12.0_f32.min(rect.h * 0.35);
+        let plot_x = rect.x + 4.0;
+        let plot_y = rect.y + header_h + 1.0;
+        let plot_w = (rect.w - 8.0).max(4.0);
+        let plot_h = (rect.h - header_h - 4.0).max(6.0);
+
+        // Reference guide lines (16.7ms = 60 FPS, 33.3ms = 30 FPS)
+        for &(ref_ms, ref_col) in &[
+            (16.67_f32, rgba_u32(90, 220, 130, 48)),
+            (33.33_f32, rgba_u32(255, 180, 50, 48)),
+        ] {
+            if ref_ms < ceil_ms {
+                let ry = plot_y + plot_h * (1.0 - ref_ms / ceil_ms);
+                self.draw_h_line(plot_x, ry, plot_w, 1.0, ref_col);
+            }
+        }
+
+        // Continuous line + translucent vertical area fill under each segment
+        let n = slice.len();
+        let step_x = if n > 1 {
+            plot_w / ((n - 1) as f32)
+        } else {
+            plot_w
+        };
+        let mut prev: Option<(f32, f32)> = None;
+        for (i, &raw) in slice.iter().enumerate() {
+            let ft = if raw.is_finite() {
+                raw.clamp(0.5, ceil_ms)
+            } else {
+                16.7_f32.min(ceil_ms)
+            };
+            let px = plot_x + (i as f32) * step_x;
+            let py = plot_y + plot_h * (1.0 - (ft / ceil_ms).clamp(0.0, 1.0));
+            let (line_col, fill_col) = if ft > 33.3 {
+                (rgba_u32(255, 85, 85, 250), rgba_u32(255, 85, 85, 52))
+            } else if ft > 20.0 {
+                (rgba_u32(255, 195, 55, 250), rgba_u32(255, 195, 55, 48))
+            } else {
+                (rgba_u32(85, 232, 145, 250), rgba_u32(85, 232, 145, 44))
+            };
+
+            if let Some((x0, y0)) = prev {
+                let seg_w = (px - x0).max(1.0);
+                let steps = (seg_w.ceil() as usize).max(1);
+                for s in 0..=steps {
+                    let t = (s as f32) / (steps as f32);
+                    let sx = x0 + (px - x0) * t;
+                    let sy = y0 + (py - y0) * t;
+                    let fill_h = (plot_y + plot_h - sy).max(0.0);
+                    if fill_h > 0.5 {
+                        self.fill_rect(Rect::new(sx, sy, 1.2, fill_h), fill_col);
+                    }
+                    self.fill_rect(Rect::new(sx, sy - 0.8, 1.6, 1.8), line_col);
+                }
+            } else {
+                self.fill_rect(Rect::new(px, py - 0.8, 2.0, 2.0), line_col);
+            }
+            prev = Some((px, py));
+        }
+
+        // Compact informative min/max readout in top-right of graph
+        let info = format!("{min_ft:.1} - {max_ft:.1} ms");
+        let info_w = rasterizer.measure_text(false, 9.0, &info);
+        self.draw_text_in_rect(
+            rasterizer,
+            Rect::new(rect.right() - info_w - 5.0, rect.y + 1.0, info_w + 3.0, header_h),
+            false,
+            9.0,
+            rgba_u32(178, 196, 220, 220),
+            &info,
+            false,
+        );
+        self.draw_text_in_rect(
+            rasterizer,
+            Rect::new(rect.x + 5.0, rect.y + 1.0, 64.0, header_h),
+            false,
+            9.0,
+            rgba_u32(138, 158, 184, 210),
+            "FRAMETIME",
+            false,
+        );
     }
 
     /// Draws the pure-X11 software cursor indicator, safely clamped inside the viewport.

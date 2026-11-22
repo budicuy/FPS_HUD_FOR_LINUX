@@ -35,7 +35,8 @@ fn canvas_rounded_rect_clip_toggle_sparkline_and_extreme_cursor_no_panic() {
         ..TelemetrySnapshot::default()
     };
     canvas.draw_frametime_sparkline(
-        Rect::new(10.0, 70.0, 160.0, 24.0),
+        &mut rast,
+        Rect::new(10.0, 70.0, 196.0, 42.0),
         &snap,
         rgba_u32(72, 140, 220, 140),
     );

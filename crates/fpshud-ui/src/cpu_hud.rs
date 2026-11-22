@@ -366,12 +366,12 @@ impl CpuHudRenderer {
         let left_w = lines.iter().map(|l| l.width).fold(0.0_f32, f32::max);
         let right_w = right_lines.iter().map(|l| l.width).fold(0.0_f32, f32::max);
         let graph_h = if store.config.hud_graph_enabled {
-            (26.0 * eff_scale).round()
+            (42.0 * eff_scale).round()
         } else {
             0.0
         };
         let graph_w = if store.config.hud_graph_enabled {
-            (168.0 * eff_scale).round()
+            (196.0 * eff_scale).round()
         } else {
             0.0
         };
@@ -475,6 +475,7 @@ impl CpuHudRenderer {
             let gy = oy + layout.pad_y + layout.text_h + (5.0 * layout.eff_scale).round();
             let gw = (box_w - layout.pad_x * 2.0).max(16.0);
             canvas.draw_frametime_sparkline(
+                rasterizer,
                 Rect::new(ox + layout.pad_x, gy, gw, layout.graph_h),
                 &store.telemetry,
                 rgba_u32(72, 140, 220, 150),

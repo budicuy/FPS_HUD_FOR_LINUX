@@ -843,7 +843,7 @@ impl CpuDashboard {
             x += bw + 5.0;
         }
 
-        // Right side: Close button + Sparkline + Live FPS
+        // Right side: Close button
         let close_w = 54.0;
         let close_rect = Rect::new(rect.right() - close_w, rect.y + 1.0, close_w, 22.0);
         self.close_bounds = close_rect;
@@ -856,28 +856,6 @@ impl CpuDashboard {
             rgba_u32(170, 50, 50, 230),
             true,
             HitAction::CloseGui,
-            false,
-        );
-
-        let spark_rect = Rect::new(close_rect.x - 168.0, rect.y, 160.0, 24.0);
-        canvas.draw_frametime_sparkline(
-            spark_rect,
-            &self.store.telemetry,
-            rgba_u32(72, 140, 220, 140),
-        );
-
-        let live_txt = format!(
-            "{:.0} FPS \u{00B7} {:.1} ms",
-            self.store.telemetry.fps, self.store.telemetry.frametime_ms
-        );
-        let live_w = rasterizer.measure_text(false, 12.0, &live_txt);
-        canvas.draw_text_in_rect(
-            rasterizer,
-            Rect::new(spark_rect.x - live_w - 10.0, rect.y, live_w + 4.0, 24.0),
-            false,
-            12.0,
-            rgba_u32(255, 215, 0, 255),
-            &live_txt,
             false,
         );
     }
