@@ -67,11 +67,9 @@ pub fn active_modifier_mask(keys_down: &[bool; 512]) -> u32 {
 #[must_use]
 pub fn is_gui_toggle_key(code: u32, mode: i32) -> bool {
     match mode {
-        1 => code == KEY_INSERT,
         2 => code == KEY_F10,
         3 => code == KEY_HOME,
-        4 => code == KEY_F12,
-        _ => code == KEY_INSERT || code == KEY_F12,
+        _ => code == KEY_F12,
     }
 }
 

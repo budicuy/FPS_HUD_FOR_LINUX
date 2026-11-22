@@ -41,14 +41,16 @@ fn all_four_keybinds_legacy_fallback_repeat_filter_and_capture_mode() {
     let mut mgr = InputManager::new_headless();
     let mut cfg = HudConfig::default();
 
-    // 1. Default key_toggle_gui = 0 menerima Insert (110) & F12 (88); repeat ditahan
+    // 1. Default key_toggle_gui = 0 hanya menerima F12 (88), bukan Insert (110); repeat ditahan
+    assert!(mgr.handle_key_event(110, true, &mut cfg).is_empty());
+    assert!(mgr.handle_key_event(110, false, &mut cfg).is_empty());
     assert_eq!(
-        mgr.handle_key_event(110, true, &mut cfg),
+        mgr.handle_key_event(88, true, &mut cfg),
         vec![InputAction::ToggleGui]
     );
     assert!(cfg.gui_open);
-    assert!(mgr.handle_key_event(110, true, &mut cfg).is_empty());
-    assert!(mgr.handle_key_event(110, false, &mut cfg).is_empty());
+    assert!(mgr.handle_key_event(88, true, &mut cfg).is_empty());
+    assert!(mgr.handle_key_event(88, false, &mut cfg).is_empty());
 
     assert_eq!(
         mgr.handle_key_event(88, true, &mut cfg),
