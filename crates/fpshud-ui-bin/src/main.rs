@@ -2,15 +2,17 @@ mod wayland_overlay;
 
 use anyhow::{Context, Result};
 use fpshud_core::HudConfig;
-use fpshud_gpui_platform::OffscreenGpuiRuntime;
 use fpshud_input::keycodes::KEY_ESC;
 use fpshud_input::{InputAction, InputManager, KeybindTarget, UiInputEvent};
 use fpshud_ipc::protocol::{FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, UiToLayerMsg};
 use fpshud_ipc::{IpcClient, IpcConnection, ShmRingWriter};
 use fpshud_telemetry::{SensorPollMask, TelemetryCollector, TelemetrySnapshot};
+use fpshud_ui::cpu_canvas::TextRasterizer;
+use fpshud_ui::cpu_dashboard::CpuDashboard;
 use fpshud_ui::cpu_hud::CpuHudRenderer;
+use fpshud_ui::state::UiRenderMode;
 use fpshud_ui::toast::ToastState;
-use fpshud_ui::{FpshudRootView, UiRenderMode, UiStore};
+use fpshud_ui::UiStore;
 use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -128,8 +130,9 @@ struct DaemonState {
     telemetry: TelemetrySnapshot,
     telemetry_collector: Option<TelemetryCollector>,
     pending_bench_loads: Option<(f32, f32)>,
+    rasterizer: TextRasterizer,
     cpu_hud: CpuHudRenderer,
-    runtime: Option<OffscreenGpuiRuntime>,
+    dashboard: Option<CpuDashboard>,
     shm_writer: Option<ShmRingWriter>,
     shm_slot_bytes: usize,
     shm_fd_dirty: bool,
@@ -143,7 +146,6 @@ struct DaemonState {
 
     // Isolated Wayland compositor overlay (zwlr_layer_shell_v1 / xdg_toplevel fallback)
     overlay_portal: Option<WaylandOverlayPortal>,
-    overlay_runtime: Option<OffscreenGpuiRuntime>,
     overlay_dirty: DirtyScheduler,
     overlay_input: InputManager,
     overlay_rgba_scratch: Vec<u8>,
@@ -164,8 +166,9 @@ impl DaemonState {
             telemetry: TelemetrySnapshot::default(),
             telemetry_collector: None,
             pending_bench_loads: None,
+            rasterizer: TextRasterizer::new(),
             cpu_hud: CpuHudRenderer::new(),
-            runtime: None,
+            dashboard: None,
             shm_writer: None,
             shm_slot_bytes: 0,
             shm_fd_dirty: true,
@@ -177,7 +180,6 @@ impl DaemonState {
             surface_height: 720,
             software_cursor: false,
             overlay_portal: None,
-            overlay_runtime: None,
             overlay_dirty: DirtyScheduler::new(false),
             overlay_input: InputManager::new_headless(),
             overlay_rgba_scratch: Vec::new(),
@@ -225,31 +227,50 @@ impl DaemonState {
         }
     }
 
-    fn sync_in_game_runtime(&mut self) {
-        if let Some(rt) = &mut self.runtime {
-            let cfg = self.config.clone();
-            let snap = self.telemetry.clone();
-            let mode = if self.overlay_portal.is_some() {
-                UiRenderMode::HudOnly
-            } else {
-                UiRenderMode::Full
-            };
-            rt.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, mode);
-                FpshudRootView::sync_all(cx, cfg, snap);
-            });
+    fn ensure_dashboard_for_mode(&mut self, mode: UiRenderMode) {
+        let cfg = self.config.clone();
+        let snap = self.telemetry.clone();
+        let sw = mode == UiRenderMode::Full && self.software_cursor;
+        if let Some(dash) = &mut self.dashboard {
+            dash.set_render_mode(mode);
+            dash.set_software_cursor(sw);
+            dash.sync_all(cfg, snap);
+        } else {
+            let mut dash = CpuDashboard::new(UiStore::new(cfg, snap));
+            dash.set_render_mode(mode);
+            dash.set_software_cursor(sw);
+            self.dashboard = Some(dash);
         }
     }
 
-    fn sync_overlay_runtime(&mut self) {
-        if let Some(ort) = &mut self.overlay_runtime {
-            let cfg = self.config.clone();
-            let snap = self.telemetry.clone();
-            ort.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, UiRenderMode::DashboardOnly);
-                FpshudRootView::set_software_cursor(cx, false);
-                FpshudRootView::sync_all(cx, cfg, snap);
-            });
+    fn release_dashboard_resources(&mut self) {
+        self.dashboard = None;
+        self.overlay_rgba_scratch = Vec::new();
+    }
+
+    fn render_dashboard_into_scratch(&mut self, width: u32, height: u32, scale: f32) {
+        if let Some(dash) = &mut self.dashboard {
+            dash.store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
+            dash.render_rgba(
+                &mut self.rasterizer,
+                width,
+                height,
+                scale,
+                &mut self.overlay_rgba_scratch,
+            );
+        }
+    }
+
+    fn sync_dashboard(&mut self) {
+        if let Some(dash) = &mut self.dashboard {
+            let mode = if self.overlay_portal.is_some() {
+                UiRenderMode::DashboardOnly
+            } else {
+                UiRenderMode::Full
+            };
+            dash.set_render_mode(mode);
+            dash.set_software_cursor(mode == UiRenderMode::Full && self.software_cursor);
+            dash.sync_all(self.config.clone(), self.telemetry.clone());
         }
     }
 
@@ -260,26 +281,15 @@ impl DaemonState {
                 self.sync_poll_mask();
                 if (cfg.gui_scale - self.surface_scale).abs() > 1e-4 {
                     self.surface_scale = cfg.gui_scale.clamp(0.5, 3.0);
-                    if let Some(rt) = &mut self.runtime {
-                        rt.resize_with_scale(
-                            self.surface_width,
-                            self.surface_height,
-                            self.surface_scale,
-                        );
-                    }
-                    if let Some(ort) = &mut self.overlay_runtime {
-                        ort.resize_with_scale(
-                            self.overlay_size.0,
-                            self.overlay_size.1,
-                            self.surface_scale,
-                        );
-                    }
+                }
+                if !self.config.gui_open && self.overlay_portal.is_none() {
+                    self.release_dashboard_resources();
+                } else {
+                    self.sync_dashboard();
                 }
                 // Reflect live settings edits immediately into the in-game HUD behind the overlay.
-                self.sync_in_game_runtime();
                 self.scheduler.mark_dirty();
                 if self.overlay_portal.is_some() {
-                    self.sync_overlay_runtime();
                     self.overlay_dirty.mark_dirty();
                 }
             }
@@ -309,24 +319,7 @@ impl DaemonState {
         self.surface_height = h;
         self.surface_scale = s;
         self.sync_poll_mask();
-
-        let mode = if self.overlay_portal.is_some() {
-            UiRenderMode::HudOnly
-        } else {
-            UiRenderMode::Full
-        };
-
-        if let Some(rt) = &mut self.runtime {
-            rt.resize_with_scale(w, h, s);
-            let cfg = self.config.clone();
-            let snap = self.telemetry.clone();
-            let sw = self.software_cursor;
-            rt.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, mode);
-                FpshudRootView::sync_all(cx, cfg, snap);
-                FpshudRootView::set_software_cursor(cx, sw);
-            });
-        }
+        self.sync_dashboard();
         self.scheduler.mark_dirty();
         Ok(())
     }
@@ -352,9 +345,6 @@ impl DaemonState {
                 self.surface_width = w;
                 self.surface_height = h;
                 self.surface_scale = s;
-                if let Some(rt) = &mut self.runtime {
-                    rt.resize_with_scale(w, h, s);
-                }
                 if let Some(writer) = &mut self.shm_writer {
                     writer.resize(w, h)?;
                     self.shm_fd_dirty = true;
@@ -363,7 +353,7 @@ impl DaemonState {
             }
             LayerToUiMsg::TelemetryUpdate(snap) => {
                 self.telemetry = *snap;
-                self.sync_in_game_runtime();
+                self.sync_dashboard();
                 let toast_active = !self.config.gui_open
                     && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
                 let in_game_needs_draw = self.config.hud_visible
@@ -376,13 +366,12 @@ impl DaemonState {
                     && self.last_overlay_telemetry_draw.elapsed() >= Duration::from_millis(500)
                 {
                     self.last_overlay_telemetry_draw = Instant::now();
-                    self.sync_overlay_runtime();
                     self.overlay_dirty.mark_dirty();
                 }
             }
             LayerToUiMsg::FrameTick(tick) => {
                 self.merge_frame_tick(*tick);
-                self.sync_in_game_runtime();
+                self.sync_dashboard();
                 let toast_active = !self.config.gui_open
                     && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
                 let in_game_needs_draw = self.config.hud_visible
@@ -395,7 +384,6 @@ impl DaemonState {
                     && self.last_overlay_telemetry_draw.elapsed() >= Duration::from_millis(500)
                 {
                     self.last_overlay_telemetry_draw = Instant::now();
-                    self.sync_overlay_runtime();
                     self.overlay_dirty.mark_dirty();
                 }
             }
@@ -412,42 +400,39 @@ impl DaemonState {
                 self.sync_poll_mask();
                 if (self.config.gui_scale - self.surface_scale).abs() > 1e-4 {
                     self.surface_scale = self.config.gui_scale.clamp(0.5, 3.0);
-                    if let Some(rt) = &mut self.runtime {
-                        rt.resize_with_scale(
-                            self.surface_width,
-                            self.surface_height,
-                            self.surface_scale,
-                        );
-                    }
-                    if let Some(ort) = &mut self.overlay_runtime {
-                        ort.resize_with_scale(
-                            self.overlay_size.0,
-                            self.overlay_size.1,
-                            self.surface_scale,
-                        );
-                    }
                 }
-                self.sync_in_game_runtime();
+                if !self.config.gui_open && self.overlay_portal.is_none() {
+                    self.release_dashboard_resources();
+                } else {
+                    self.sync_dashboard();
+                }
                 self.scheduler.mark_dirty();
                 if self.overlay_portal.is_some() {
-                    self.sync_overlay_runtime();
                     self.overlay_dirty.mark_dirty();
                 }
             }
             LayerToUiMsg::InputEvents(events) => {
                 // While the isolated Wayland overlay owns compositor focus, ignore stale
                 // XWayland/in-process layer input so events never double-fire.
-                if self.overlay_portal.is_none()
-                    && let Some(rt) = &mut self.runtime
-                {
-                    rt.dispatch_input(&events);
-                    self.scheduler.mark_dirty();
+                if self.overlay_portal.is_none() && self.config.gui_open {
+                    self.ensure_dashboard_for_mode(UiRenderMode::Full);
+                    if let Some(dash) = &mut self.dashboard {
+                        let dirty = dash.dispatch_input(
+                            &events,
+                            self.surface_width,
+                            self.surface_height,
+                            self.surface_scale,
+                        );
+                        if dirty {
+                            self.scheduler.mark_dirty();
+                        }
+                    }
                 }
             }
             LayerToUiMsg::SoftwareCursor(enabled) => {
                 self.software_cursor = enabled;
-                if let Some(rt) = &mut self.runtime {
-                    rt.update_app(|cx| FpshudRootView::set_software_cursor(cx, enabled));
+                if let Some(dash) = &mut self.dashboard {
+                    dash.set_software_cursor(self.overlay_portal.is_none() && enabled);
                     self.scheduler.mark_dirty();
                 }
             }
@@ -464,43 +449,17 @@ impl DaemonState {
             return Ok(());
         };
         let (ow, oh) = portal.size();
-        let scale = self.config.gui_scale.clamp(0.5, 3.0);
         self.overlay_size = (ow, oh);
         self.overlay_input = InputManager::new_headless();
 
-        let cfg = self.config.clone();
-        let snap = self.telemetry.clone();
-        if let Some(ort) = &mut self.overlay_runtime {
-            ort.resize_with_scale(ow, oh, scale);
-            ort.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, UiRenderMode::DashboardOnly);
-                FpshudRootView::set_software_cursor(cx, false);
-                FpshudRootView::clear_keybind_capture(cx);
-                FpshudRootView::clear_open_dropdown(cx);
-                FpshudRootView::sync_all(cx, cfg, snap);
-            });
-        } else {
-            match OffscreenGpuiRuntime::new_with_view(ow, oh, scale, |_, _| {
-                FpshudRootView::new(UiStore::new(cfg, snap))
-            }) {
-                Ok(mut ort) => {
-                    ort.update_app(|cx| {
-                        FpshudRootView::set_render_mode(cx, UiRenderMode::DashboardOnly);
-                        FpshudRootView::set_software_cursor(cx, false);
-                    });
-                    self.overlay_runtime = Some(ort);
-                }
-                Err(_) => {
-                    // Clean fallback to in-swapchain dashboard if secondary wgpu init fails
-                    drop(portal);
-                    return Ok(());
-                }
-            }
+        self.ensure_dashboard_for_mode(UiRenderMode::DashboardOnly);
+        if let Some(dash) = &mut self.dashboard {
+            dash.clear_keybind_capture();
+            dash.clear_open_dropdown();
         }
 
         self.overlay_portal = Some(portal);
         self.overlay_dirty.mark_dirty();
-        self.sync_in_game_runtime();
         self.scheduler.mark_dirty();
 
         send_ui_msg(conn, &UiToLayerMsg::ExternalOverlayActive(true), None, false)?;
@@ -510,11 +469,9 @@ impl DaemonState {
 
     fn close_external_overlay(&mut self, conn: &mut IpcConnection) -> Result<()> {
         if self.overlay_portal.take().is_some() {
-            self.overlay_runtime = None;
-            self.overlay_rgba_scratch = Vec::new();
+            self.release_dashboard_resources();
             self.overlay_input = InputManager::new_headless();
             self.overlay_dirty = DirtyScheduler::new(false);
-            self.sync_in_game_runtime();
             self.scheduler.mark_dirty();
         }
         if self.external_overlay_reported {
@@ -559,15 +516,14 @@ impl DaemonState {
                                 capturing: false,
                                 target: KeybindTarget::None,
                             });
-                            if let Some(ort) = &mut self.overlay_runtime {
-                                ort.update_app(FpshudRootView::clear_keybind_capture);
+                            if let Some(dash) = &mut self.dashboard {
+                                dash.clear_keybind_capture();
                             }
                             if self.config != prev_cfg {
                                 outgoing.push(UiToLayerMsg::ConfigUpdated(self.config.clone()));
                             }
-                            self.sync_in_game_runtime();
+                            self.sync_dashboard();
                             self.scheduler.mark_dirty();
-                            self.sync_overlay_runtime();
                             self.overlay_dirty.mark_dirty();
                         }
                         continue;
@@ -593,10 +549,9 @@ impl DaemonState {
 
                     if self.config != prev_cfg {
                         outgoing.push(UiToLayerMsg::ConfigUpdated(self.config.clone()));
-                        self.sync_in_game_runtime();
+                        self.sync_dashboard();
                         self.scheduler.mark_dirty();
                         if self.config.gui_open {
-                            self.sync_overlay_runtime();
                             self.overlay_dirty.mark_dirty();
                         }
                     }
@@ -662,9 +617,6 @@ impl DaemonState {
 
         if let Some((rw, rh)) = poll.resized {
             self.overlay_size = (rw, rh);
-            if let Some(ort) = &mut self.overlay_runtime {
-                ort.resize_with_scale(rw, rh, self.config.gui_scale.clamp(0.5, 3.0));
-            }
             self.overlay_dirty.mark_dirty();
         }
 
@@ -684,24 +636,34 @@ impl DaemonState {
         }
 
         if !all_ui_events.is_empty()
-            && let Some(ort) = &mut self.overlay_runtime
+            && let Some(dash) = &mut self.dashboard
         {
-            ort.dispatch_input(&all_ui_events);
-            self.overlay_dirty.mark_dirty();
-            let outgoing = ort.update_app(FpshudRootView::take_outgoing);
+            let scale = self.config.gui_scale.clamp(0.5, 3.0);
+            let dirty =
+                dash.dispatch_input(&all_ui_events, self.overlay_size.0, self.overlay_size.1, scale);
+            if dirty {
+                self.overlay_dirty.mark_dirty();
+            }
+            let outgoing = dash.take_outgoing();
             self.forward_overlay_outgoing(conn, outgoing)?;
             if self.overlay_portal.is_none() {
                 return Ok(true);
             }
         }
 
-        if self.overlay_dirty.take_should_render()
-            && let (Some(portal), Some(ort)) =
-                (&mut self.overlay_portal, &mut self.overlay_runtime)
-        {
-            let (rw, rh) = ort.render_scene_to_rgba(&mut self.overlay_rgba_scratch)?;
-            let presented = portal.present_rgba(rw, rh, &self.overlay_rgba_scratch)?;
-            let outgoing = ort.update_app(FpshudRootView::take_outgoing);
+        if self.overlay_dirty.take_should_render() && self.overlay_portal.is_some() {
+            let (ow, oh) = self.overlay_size;
+            let scale = self.config.gui_scale.clamp(0.5, 3.0);
+            self.render_dashboard_into_scratch(ow, oh, scale);
+            let presented = if let Some(portal) = &mut self.overlay_portal {
+                portal.present_rgba(ow, oh, &self.overlay_rgba_scratch)?
+            } else {
+                false
+            };
+            let outgoing = self
+                .dashboard
+                .as_mut()
+                .map_or_else(Vec::new, CpuDashboard::take_outgoing);
             self.forward_overlay_outgoing(conn, outgoing)?;
             if self.handle_overlay_present_outcome(presented) {
                 had_activity = true;
@@ -767,12 +729,13 @@ impl DaemonState {
 
         // Fast zero-wgpu path: HudOnly (GUI closed OR GUI rendered on isolated Wayland overlay)
         if !self.config.gui_open || self.overlay_portal.is_some() {
-            if self.runtime.is_some() {
-                self.runtime = None;
+            if !self.config.gui_open && self.dashboard.is_some() {
+                self.release_dashboard_resources();
             }
             let mut store = UiStore::new(self.config.clone(), self.telemetry.clone());
             store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
-            let Some(frame) = self.cpu_hud.render(
+            let Some(frame) = self.cpu_hud.render_with_rasterizer(
+                &mut self.rasterizer,
                 &store,
                 self.surface_width,
                 self.surface_height,
@@ -797,33 +760,32 @@ impl DaemonState {
             return Ok(());
         }
 
-        // Pure-X11 fallback path when GUI is open without WaylandOverlayPortal: create GPUI on-demand
-        if self.runtime.is_none() {
-            let cfg = self.config.clone();
-            let snap = self.telemetry.clone();
-            let sw = self.software_cursor;
-            let mut rt = OffscreenGpuiRuntime::new_with_view(
-                self.surface_width,
-                self.surface_height,
-                self.surface_scale,
-                |_, _| FpshudRootView::new(UiStore::new(cfg, snap)),
-            )?;
-            rt.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, UiRenderMode::Full);
-                FpshudRootView::set_software_cursor(cx, sw);
-            });
-            self.runtime = Some(rt);
-        }
+        // Pure-X11 fallback path when GUI is open without WaylandOverlayPortal: 100% CPU Full composite
+        self.ensure_dashboard_for_mode(UiRenderMode::Full);
+        self.render_dashboard_into_scratch(
+            self.surface_width,
+            self.surface_height,
+            self.surface_scale,
+        );
         self.ensure_shm_capacity(self.surface_width, self.surface_height)?;
-        let (Some(rt), Some(writer)) = (&mut self.runtime, &mut self.shm_writer) else {
+        let Some(writer) = &mut self.shm_writer else {
             return Ok(());
         };
-        let meta = rt.render_scene_to_slot(writer)?;
+        let meta = writer.write_next_slot_at(
+            0,
+            0,
+            self.surface_width,
+            self.surface_height,
+            &self.overlay_rgba_scratch,
+        )?;
         let send_fd = self.shm_fd_dirty;
         send_ui_msg(conn, &UiToLayerMsg::FrameReady(meta), Some(writer), send_fd)?;
         self.shm_fd_dirty = false;
 
-        let outgoing = rt.update_app(FpshudRootView::take_outgoing);
+        let outgoing = self
+            .dashboard
+            .as_mut()
+            .map_or_else(Vec::new, CpuDashboard::take_outgoing);
         for msg in outgoing {
             self.apply_outgoing_msg(&msg);
             self.sync_poll_mask();
@@ -1195,10 +1157,10 @@ mod tests {
         })
         .unwrap();
         assert!(
-            st.runtime.is_none(),
-            "HudOnly mode must NOT allocate wgpu/GPUI runtime"
+            st.dashboard.is_none(),
+            "HudOnly mode must NOT allocate CpuDashboard"
         );
-        assert!(st.overlay_runtime.is_none());
+        assert_eq!(st.overlay_rgba_scratch.capacity(), 0);
 
         let tick = FrameTickData {
             fps: 144.0,
@@ -1216,5 +1178,50 @@ mod tests {
             .unwrap();
         assert!((st.telemetry.fps - 144.0).abs() < 0.01);
         assert_eq!(st.telemetry.render_api, "VULKAN");
+    }
+
+    #[test]
+    fn daemon_cpu_gui_open_input_close_reopen_releases_memory_and_resets_transient_state() {
+        use fpshud_core::HudConfig;
+        use fpshud_input::KeybindTarget;
+        use fpshud_ipc::protocol::LayerToUiMsg;
+        use fpshud_ui::state::UiRenderMode;
+
+        let mut state = crate::DaemonState::new_for_test_headless();
+        let mut cfg = HudConfig {
+            gui_open: true,
+            ..HudConfig::default()
+        };
+        state
+            .handle_layer_msg(LayerToUiMsg::Init {
+                width: 1280,
+                height: 720,
+                scale: 1.0,
+                config: cfg.clone(),
+            })
+            .unwrap();
+        state.ensure_dashboard_for_mode(UiRenderMode::Full);
+        assert!(state.dashboard.is_some());
+
+        state.render_dashboard_into_scratch(1280, 720, 1.0);
+        assert!(!state.overlay_rgba_scratch.is_empty());
+
+        // Close GUI -> must drop dashboard and deallocate scratch buffer (capacity == 0)
+        cfg.gui_open = false;
+        state
+            .handle_layer_msg(LayerToUiMsg::ConfigSync(cfg.clone()))
+            .unwrap();
+        assert!(state.dashboard.is_none());
+        assert_eq!(state.overlay_rgba_scratch.capacity(), 0);
+
+        // Reopen -> clean transient state (no lingering dropdown or keybind capture)
+        cfg.gui_open = true;
+        state
+            .handle_layer_msg(LayerToUiMsg::ConfigSync(cfg))
+            .unwrap();
+        state.ensure_dashboard_for_mode(UiRenderMode::Full);
+        let dash = state.dashboard.as_ref().unwrap();
+        assert!(dash.open_dropdown().is_none());
+        assert_eq!(dash.active_keybind_capture(), KeybindTarget::None);
     }
 }
