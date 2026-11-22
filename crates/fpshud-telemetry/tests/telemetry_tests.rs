@@ -175,6 +175,10 @@ fn nvml_d3cold_bandwidth_and_live_nvidia_probe() {
     let bw = compute_nvml_bandwidth_gbs(7000, 192, 50);
     assert!((bw - 168.0).abs() < 0.1, "expected 168 GB/s, got {bw}");
 
+    // 2b. Non-root path & non-NVIDIA vendor_id wajib mengembalikan None dengan aman tanpa wake/crash
+    assert!(NvidiaNvmlProvider::init_for_root(root_susp.path(), 0x10de, 0).is_none());
+    assert!(NvidiaNvmlProvider::init_for_root(std::path::Path::new("/"), 0x1002, 0).is_none());
+
     // 3. Real host NVML probe when libnvidia-ml.so.1 exists
     if let Some(mut nvml) = NvidiaNvmlProvider::init_for_root(std::path::Path::new("/"), 0, 0) {
         let mut snap = TelemetrySnapshot::default();

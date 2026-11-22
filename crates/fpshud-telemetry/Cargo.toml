@@ -7,13 +7,13 @@ license.workspace = true
 
 [features]
 default = []
-vendor-gpu-apis = ["dep:libloading"]
+vendor-gpu-apis = ["dep:nvml-wrapper"]
 
 [dependencies]
 chrono.workspace = true
 fpshud-core = { path = "../fpshud-core" }
 fpshud-analytics = { path = "../fpshud-analytics" }
-libloading = { workspace = true, optional = true }
+nvml-wrapper = { workspace = true, optional = true }
 rustix.workspace = true
 serde.workspace = true
 

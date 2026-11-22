@@ -33,6 +33,7 @@ gpui_ce_wgpu = "0.3.0"
 libc = "0.2"
 libloading = "0.8"
 memmap2 = "0.9"
+nvml-wrapper = "0.13"
 png = "0.18"
 postcard = { version = "1.1", features = ["use-std"] }
 rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "thread", "time"] }
