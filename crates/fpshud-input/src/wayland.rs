@@ -1154,10 +1154,12 @@ pub fn test_roundtrip_subsurface_shield(width: u32, height: u32) -> Option<(bool
     let err = unsafe { (rt.client.wl_display_get_error)(dpy) };
     wb.clear_parent_surface_if_matches(parent.cast());
     unsafe { destroy_proxy(rt.client, &mut parent, Some(0)) };
-    drop(wb);
+    wb.detach_display(std::ptr::null_mut());
     unsafe {
         (rt.client.wl_display_disconnect)(dpy);
     }
+    // Dropping wb after wl_display_disconnect must be a safe no-op once detached.
+    drop(wb);
     Some((was_active, deactivated, err))
 }
 

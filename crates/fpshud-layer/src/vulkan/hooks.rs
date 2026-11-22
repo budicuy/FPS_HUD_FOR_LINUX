@@ -360,20 +360,35 @@ pub(crate) unsafe extern "system" fn hook_destroy_surface_khr(
     p_allocator: *const vk::AllocationCallbacks<'_>,
 ) {
     if surface != vk::SurfaceKHR::null() {
-        let info = registry()
+        let (info, any_wl_remaining) = registry()
             .lock()
             .ok()
-            .and_then(|mut reg| reg.surfaces.remove(&surface.as_raw()));
+            .map(|mut reg| {
+                let info = reg.surfaces.remove(&surface.as_raw());
+                let wl_left = reg
+                    .surfaces
+                    .values()
+                    .any(|(backend, _)| *backend == SurfaceBackendType::Wayland);
+                (info, wl_left)
+            })
+            .unwrap_or((None, false));
         match info {
             Some((SurfaceBackendType::X11, win_id)) if win_id != 0 => {
                 if let Ok(mut rt) = LayerRuntime::global().lock() {
                     rt.input.clear_x11_target_window_if_matches(win_id as u32);
                 }
             }
-            Some((SurfaceBackendType::Wayland, wl_surf_raw)) if wl_surf_raw != 0 => {
+            Some((SurfaceBackendType::Wayland, wl_surf_raw)) => {
                 if let Ok(mut rt) = LayerRuntime::global().lock() {
-                    rt.input
-                        .clear_wayland_surface_if_matches(wl_surf_raw as usize as *mut c_void);
+                    if wl_surf_raw != 0 {
+                        rt.input
+                            .clear_wayland_surface_if_matches(wl_surf_raw as usize as *mut c_void);
+                    }
+                    if !any_wl_remaining {
+                        // Detach before the app disconnects wl_display (e.g. vkcube calls
+                        // wl_display_disconnect between vkDestroySurfaceKHR and vkDestroyInstance).
+                        rt.input.detach_wayland_display(std::ptr::null_mut());
+                    }
                 }
             }
             _ => {}
