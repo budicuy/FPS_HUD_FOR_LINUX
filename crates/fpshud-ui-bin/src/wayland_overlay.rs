@@ -401,6 +401,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for OverlayState {
                 };
                 state.key_events.push(OverlayKeyEvent::Key { code: key, down });
             }
+            wl_keyboard::Event::Leave { .. } => {
+                state.closed = true;
+            }
             _ => {}
         }
     }
