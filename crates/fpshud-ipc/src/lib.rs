@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Fixed-width zero-`usize` IPC framing, `SO_PEERCRED` Unix sockets, and `memfd`/DMA-BUF ring.
 
 pub mod protocol;

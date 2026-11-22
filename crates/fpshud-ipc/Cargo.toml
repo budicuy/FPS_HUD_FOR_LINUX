@@ -10,7 +10,6 @@ fpshud-core = { path = "../fpshud-core" }
 fpshud-analytics = { path = "../fpshud-analytics" }
 fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-input = { path = "../fpshud-input" }
-memmap2.workspace = true
 postcard.workspace = true
 rustix.workspace = true
 serde.workspace = true

@@ -85,16 +85,16 @@ impl OverlayFrameSync {
         if expected_bytes == 0 {
             return false;
         }
-        if let Some((r_gen, _slot, slice)) = reader.read_latest() {
-            if r_gen <= self.last_accepted_generation || slice.len() != expected_bytes {
+        let mut scratch = Vec::new();
+        if let Some((r_gen, _slot)) = reader.read_latest_into(&mut scratch) {
+            if r_gen <= self.last_accepted_generation || scratch.len() != expected_bytes {
                 return false;
             }
             self.last_accepted_generation = r_gen.max(meta.generation);
             self.latest.width = meta.width;
             self.latest.height = meta.height;
             self.latest.generation = self.last_accepted_generation;
-            self.latest.rgba.clear();
-            self.latest.rgba.extend_from_slice(slice);
+            self.latest.rgba = scratch;
             return true;
         }
         false

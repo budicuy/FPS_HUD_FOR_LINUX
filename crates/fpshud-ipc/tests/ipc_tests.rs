@@ -229,3 +229,23 @@ fn shm_corrupt_header_truncated_and_oob_rejected() {
     // Kapasitas slot >= 4 GiB harus ditolak sebelum truncating cast u32
     assert!(ShmRingWriter::validate_slot_capacity(65_536, 16_384).is_err());
 }
+
+#[test]
+fn shm_seqlock_rejects_odd_in_progress_sequence_and_read_latest_into_reuses_buffer() {
+    use std::os::unix::fs::FileExt;
+
+    let mut writer = ShmRingWriter::new(2, 2).unwrap();
+    let reader = ShmRingReader::from_borrowed_fd(writer.fd(), writer.mapped_byte_len()).unwrap();
+    writer.write_next_slot(2, 2, &[42_u8; 16]).unwrap();
+
+    let mut dst = Vec::with_capacity(64);
+    let (g, slot) = reader.read_latest_into(&mut dst).unwrap();
+    assert_eq!((g, slot), (1, 0));
+    assert_eq!(dst, vec![42_u8; 16]);
+
+    // Simulasikan writer sedang berada di tengah penulisan (OFF_SEQ = 48 bernilai ganjil)
+    let raw_file = std::fs::File::from(writer.fd().try_clone_to_owned().unwrap());
+    raw_file.write_all_at(&3_u64.to_ne_bytes(), 48).unwrap();
+    assert!(reader.read_latest().is_none());
+    assert!(reader.read_latest_into(&mut dst).is_none());
+}
