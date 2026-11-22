@@ -754,7 +754,7 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
     };
 
-    let (enabled, hud_visible, gui_open, take_shot, overlay_frame) = {
+    let (enabled, show_in_game_overlay, take_shot, overlay_frame) = {
         let Ok(mut rt) = LayerRuntime::global().lock() else {
             return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
         };
@@ -767,19 +767,15 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         } else {
             None
         };
-        let buf = if rt.config.hud_visible || rt.config.gui_open {
+        let show_overlay = rt.config.hud_visible
+            || (rt.config.gui_open && !rt.input.is_external_overlay_active());
+        let buf = if show_overlay {
             let l = &rt.overlay_sync.latest;
             (!l.rgba.is_empty()).then(|| l.clone())
         } else {
             None
         };
-        (
-            rt.config.enabled,
-            rt.config.hud_visible,
-            rt.config.gui_open,
-            shot,
-            buf,
-        )
+        (rt.config.enabled, show_overlay, shot, buf)
     };
 
     if !enabled || !sd.initialized || img_idx >= sd.frames.len() {
@@ -790,7 +786,7 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
     let extent = sd.extent;
     let format = sd.format;
     let supports_transfer_src = sd.supports_transfer_src;
-    let has_overlay = hud_visible || gui_open;
+    let has_overlay = show_in_game_overlay;
 
     // Wait bounded on previous slot fence (2s) before reusing command buffer/staging
     let mut fence = sd.frames[img_idx].fence;

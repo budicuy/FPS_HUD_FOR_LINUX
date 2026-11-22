@@ -584,7 +584,9 @@ pub(crate) unsafe fn on_swap_buffers(
             }
             rt.pump_frame(w, h, api_name);
             let shot = rt.consume_screenshot_request();
-            let ov = if rt.config.hud_visible || rt.config.gui_open {
+            let show_overlay = rt.config.hud_visible
+                || (rt.config.gui_open && !rt.input.is_external_overlay_active());
+            let ov = if show_overlay {
                 let l = &rt.overlay_sync.latest;
                 (!l.rgba.is_empty()).then(|| {
                     (
@@ -599,7 +601,7 @@ pub(crate) unsafe fn on_swap_buffers(
             } else {
                 None
             };
-            (rt.config.hud_visible || rt.config.gui_open, shot, ov)
+            (show_overlay, shot, ov)
         };
 
         if let Some(false) = take_shot {

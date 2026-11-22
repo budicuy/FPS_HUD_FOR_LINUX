@@ -212,6 +212,7 @@ enum HitAction {
     ToggleBorder,
     SelectBorderOpacity(u8),
     SetBorderColor(ColorRgba),
+    ToggleHudVisible,
     ToggleCategoryColors,
     SetTextColor(ColorRgba),
     ToggleCustomTextColor,
@@ -591,6 +592,7 @@ impl CpuDashboard {
                 self.store.set_border_alpha_pct(pct);
             }
             HitAction::SetBorderColor(c) => self.store.set_border_color(c),
+            HitAction::ToggleHudVisible => self.store.toggle_hud_visible(),
             HitAction::ToggleCategoryColors => self.store.toggle_category_colors(),
             HitAction::SetTextColor(c) => self.store.set_text_color(c),
             HitAction::ToggleCustomTextColor => self.store.toggle_custom_text_color(),
@@ -1075,6 +1077,16 @@ impl CpuDashboard {
         y += 2.0;
         canvas.draw_h_line(ix, y, iw, 1.0, rgba_u32(52, 66, 88, 170));
         y += 5.0;
+
+        self.paint_switch_row(
+            canvas,
+            rasterizer,
+            Rect::new(ix, y, iw, 21.0),
+            "Show HUD",
+            self.store.config.hud_visible,
+            HitAction::ToggleHudVisible,
+        );
+        y += 23.0;
 
         self.paint_switch_row(
             canvas,

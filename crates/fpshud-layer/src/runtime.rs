@@ -324,6 +324,9 @@ impl LayerRuntime {
                 }
                 InputAction::ToggleHud => {
                     self.config.hud_visible = !self.config.hud_visible;
+                    if !self.config.hud_visible {
+                        self.overlay_sync.latest.rgba = std::sync::Arc::from([]);
+                    }
                     config_changed = true;
                 }
                 InputAction::ToggleBenchmark => self.toggle_benchmark(),

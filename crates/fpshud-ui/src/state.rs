@@ -629,6 +629,11 @@ impl UiStore {
         self.emit_config_updated();
     }
 
+    pub fn toggle_hud_visible(&mut self) {
+        self.config.hud_visible = !self.config.hud_visible;
+        self.emit_config_updated();
+    }
+
     pub fn toggle_category_colors(&mut self) {
         self.config.category_colors_enabled = !self.config.category_colors_enabled;
         self.emit_config_updated();
