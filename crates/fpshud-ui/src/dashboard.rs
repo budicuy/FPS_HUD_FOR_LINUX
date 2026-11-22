@@ -941,12 +941,12 @@ impl FpshudRootView {
                     )),
             )
             .child(self.styled_button(
-                "Save Configuration",
+                "Reset Settings",
                 false,
-                rgba_u32(42, 145, 95, 235),
+                rgba_u32(175, 58, 58, 235),
                 true,
                 |view, _, _, cx| {
-                    view.store.save_configuration();
+                    view.store.reset_settings();
                     view.flush_outgoing(cx);
                 },
                 cx,

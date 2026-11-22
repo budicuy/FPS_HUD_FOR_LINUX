@@ -128,14 +128,20 @@ fn drm_gpu_system_io_battery_and_collector_toggle_benchmark() {
     assert!(!finished_snap.benchmark_active);
     assert!(finished_snap.last_benchmark.is_some());
 
-    // Uji pemformatan seluruh 31 MetricType & indikator '~' pada EstimatedDvfs
+    // Uji pemformatan seluruh 31 MetricType & clamp non-negatif pada CpuPower
     let mut fmt_snap = finished_snap.clone();
     fmt_snap.cpu_power_w = 55.2;
     fmt_snap.cpu_power_source = CpuPowerSource::EstimatedDvfs;
     assert_eq!(
         fmt_snap.format_metric_value(fpshud_core::MetricType::CpuPower),
-        "~55.2 W"
+        "55.2 W"
     );
+    fmt_snap.cpu_power_w = -3.0;
+    assert_eq!(
+        fmt_snap.format_metric_value(fpshud_core::MetricType::CpuPower),
+        "0.0 W"
+    );
+    fmt_snap.cpu_power_w = 55.2;
     fmt_snap.cpu_power_source = CpuPowerSource::DirectHwmon;
     assert_eq!(
         fmt_snap.format_metric_value(fpshud_core::MetricType::CpuPower),

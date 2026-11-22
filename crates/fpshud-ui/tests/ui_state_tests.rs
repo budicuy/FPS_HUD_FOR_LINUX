@@ -22,19 +22,28 @@ fn ui_store_all_metrics_filters_thermal_drag_and_actions() {
         5
     );
 
-    // 2. Formatting all 31 metrics + '~' EstimatedDvfs vs DirectHwmon + Unavailable N/A
+    // 2. Formatting all 31 metrics + non-negative CpuPower + Unavailable N/A
     store.telemetry.cpu_power_w = 48.0;
     store.telemetry.cpu_power_source = CpuPowerSource::EstimatedDvfs;
     let (_, val_est, _, _) = store.format_metric_row(MetricType::CpuPower);
-    assert!(val_est.starts_with('~'));
+    assert_eq!(val_est, "48.0 W");
 
     store.telemetry.cpu_power_source = CpuPowerSource::DirectHwmon;
     let (_, val_hw, _, _) = store.format_metric_row(MetricType::CpuPower);
-    assert!(!val_hw.starts_with('~'));
+    assert_eq!(val_hw, "48.0 W");
 
     store.telemetry.cpu_power_source = CpuPowerSource::Unavailable;
     let (_, val_na, _, _) = store.format_metric_row(MetricType::CpuPower);
     assert_eq!(val_na, "N/A");
+
+    // Reset Settings restores defaults while keeping GUI open and auto-saving via ConfigUpdated
+    store.config.gui_open = true;
+    store.config.gui_scale = 1.5;
+    store.config.bg_alpha = 0.9;
+    store.reset_settings();
+    assert!(store.config.gui_open);
+    assert!((store.config.gui_scale - HudConfig::default().gui_scale).abs() < 1e-4);
+    assert!(store.take_outgoing().iter().any(|m| matches!(m, UiToLayerMsg::ConfigUpdated(c) if c.gui_open)));
 
     // Thermal warning + category colors
     store.config.category_colors_enabled = true;

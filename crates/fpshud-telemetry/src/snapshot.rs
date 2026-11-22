@@ -165,9 +165,10 @@ impl TelemetrySnapshot {
             MetricType::CpuAllCoreClock => format!("{} MHz avg", self.cpu_clock_mhz),
             MetricType::CpuPower => match self.cpu_power_source {
                 CpuPowerSource::Unavailable => "N/A".to_string(),
-                CpuPowerSource::EstimatedDvfs => format!("~{:.1} W", self.cpu_power_w),
-                CpuPowerSource::DirectHwmon | CpuPowerSource::DirectRapl => {
-                    format!("{:.1} W", self.cpu_power_w)
+                CpuPowerSource::EstimatedDvfs
+                | CpuPowerSource::DirectHwmon
+                | CpuPowerSource::DirectRapl => {
+                    format!("{:.1} W", self.cpu_power_w.max(0.0))
                 }
             },
             MetricType::CpuTemp => format!("{:.0}°C", self.cpu_temp_c),

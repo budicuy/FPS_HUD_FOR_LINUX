@@ -600,6 +600,14 @@ impl UiStore {
         self.emit_config_updated();
     }
 
+    pub fn reset_settings(&mut self) {
+        let keep_open = self.config.gui_open;
+        self.config = HudConfig::default();
+        self.config.gui_open = keep_open;
+        self.status_message = Some("Settings reset to defaults.".to_string());
+        self.emit_config_updated();
+    }
+
     pub fn trigger_screenshot(&mut self) {
         self.outgoing.push(UiToLayerMsg::ScreenshotRequest {
             with_hud: self.config.screenshot_with_hud,

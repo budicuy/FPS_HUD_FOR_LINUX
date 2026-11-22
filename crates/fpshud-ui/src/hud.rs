@@ -97,23 +97,16 @@ fn build_metric_chip(
     item_font_px: f32,
     alpha: u8,
 ) -> AnyElement {
-    let (_, value, val_color, is_warn) = store.format_metric_row(metric);
+    let (_, value, val_color, _is_warn) = store.format_metric_row(metric);
     let sub_label = hud_metric_short_label(metric);
     let sub_color = dimmed_text_rgba(store, alpha);
-    let chip_bg = if is_warn {
-        rgba_u32(120, 26, 26, 95)
-    } else {
-        rgba_u32(0, 0, 0, 0)
-    };
 
     let mut chip = div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(4.0))
-        .px(px(if is_warn { 4.0 } else { 1.0 }))
-        .rounded(px(3.0))
-        .bg(rgba(chip_bg))
+        .px(px(1.0))
         .text_size(px(item_font_px));
 
     // For instant FPS, render the bare value cleanly after the FPS group badge (e.g. "FPS | 59 · Avg 60 · FT 16.8 ms").
