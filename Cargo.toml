@@ -36,6 +36,7 @@ png = "0.18"
 postcard = { version = "1.1", features = ["use-std"] }
 rustix = { version = "1.1", features = ["fs", "mm", "net", "param", "process", "thread", "time"] }
 serde = { version = "1.0", features = ["derive"] }
+swash = "0.2"
 tempfile = "3"
 wayland-client = { version = "0.31", default-features = false }
 wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging", "unstable"] }

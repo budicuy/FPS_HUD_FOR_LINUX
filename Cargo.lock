@@ -931,11 +931,11 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "ash-layer",
+ "fpshud-analytics",
  "fpshud-core",
  "fpshud-input",
  "fpshud-ipc",
  "fpshud-screenshot",
- "fpshud-telemetry",
  "glow",
  "libc",
  "tempfile",
@@ -975,6 +975,7 @@ dependencies = [
  "fpshud-ipc",
  "fpshud-telemetry",
  "gpui-ce",
+ "swash",
  "tempfile",
 ]
 

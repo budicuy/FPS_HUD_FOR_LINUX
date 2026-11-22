@@ -921,3 +921,59 @@ fn open_dropdown_resets_across_close_reopen_without_intermediate_render_and_on_d
         None
     );
 }
+
+#[test]
+fn cpu_hud_renderer_produces_compact_premultiplied_rgba_across_layouts_and_styles() {
+    use fpshud_core::{ArrangementMode, BackgroundStyle, HudConfig, LayoutPosition, MetricType};
+    use fpshud_telemetry::TelemetrySnapshot;
+    use fpshud_ui::{UiStore, cpu_hud::CpuHudRenderer};
+
+    let cfg = HudConfig {
+        hud_visible: true,
+        gui_open: false,
+        hud_graph_enabled: true,
+        metrics: MetricType::ALL.to_vec(),
+        ..HudConfig::default()
+    };
+
+    let snap = TelemetrySnapshot {
+        fps: 61.0,
+        frametime_ms: 16.4,
+        frametime_history: vec![16.2, 16.5, 24.0, 35.0],
+        gpu_temp_c: 92.0,
+        ..TelemetrySnapshot::default()
+    };
+
+    let mut store = UiStore::new(cfg, snap);
+    store.elapsed_sec = 10.0;
+    let mut renderer = CpuHudRenderer::new();
+
+    for arr in [ArrangementMode::Stack, ArrangementMode::Double, ArrangementMode::Linear] {
+        store.config.arrangement = arr;
+        let frame = renderer.render(&store, 1280, 720, 1.0).expect("HUD frame expected");
+        assert!(frame.width > 40 && frame.width <= 1280);
+        assert!(frame.height > 20 && frame.height <= 720);
+        assert_eq!(frame.rgba.len(), (frame.width as usize) * (frame.height as usize) * 4);
+        let mut opaque_count = 0usize;
+        for px in frame.rgba.as_chunks::<4>().0 {
+            assert!(px[0] <= px[3] && px[1] <= px[3] && px[2] <= px[3]);
+            if px[3] > 0 {
+                opaque_count += 1;
+            }
+        }
+        assert!(opaque_count > 100);
+    }
+
+    store.config.arrangement = ArrangementMode::Stack;
+    store.config.position = LayoutPosition::TopRight;
+    store.config.background_style = BackgroundStyle::None;
+    let right = renderer.render(&store, 1280, 720, 1.0).unwrap();
+    assert!(right.dst_x > 400);
+
+    store.config.hud_visible = false;
+    assert!(renderer.render(&store, 1280, 720, 1.0).is_none());
+
+    store.elapsed_sec = 1.0;
+    let toast = renderer.render(&store, 1280, 720, 1.0).unwrap();
+    assert!(toast.width > 100 && toast.height >= 20);
+}

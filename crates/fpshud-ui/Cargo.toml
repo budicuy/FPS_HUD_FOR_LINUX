@@ -12,6 +12,7 @@ fpshud-telemetry = { path = "../fpshud-telemetry" }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-ipc = { path = "../fpshud-ipc" }
 gpui.workspace = true
+swash.workspace = true
 
 [dev-dependencies]
 fpshud-gpui-platform = { path = "../fpshud-gpui-platform" }
