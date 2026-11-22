@@ -32,7 +32,7 @@ const DEFAULT_FALLBACK_H: u32 = 720;
 const XDG_FALLBACK_W: u32 = 1104;
 const XDG_FALLBACK_H: u32 = 684;
 
-/// Converts premultiplied RGBA8888 pixels from GPUI/wgpu into little-endian Wayland `ARGB8888` (`[B, G, R, A]`).
+/// Converts premultiplied RGBA8888 pixels into little-endian Wayland `ARGB8888` (`[B, G, R, A]`).
 pub fn rgba_to_wl_argb8888(rgba: &[u8], out_argb: &mut [u8]) {
     let (src_chunks, _) = rgba.as_chunks::<4>();
     let (dst_chunks, _) = out_argb.as_chunks_mut::<4>();

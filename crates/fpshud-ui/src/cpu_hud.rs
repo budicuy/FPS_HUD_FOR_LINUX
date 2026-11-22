@@ -1,4 +1,4 @@
-//! Ultra-lightweight 100% safe-Rust CPU glyph-cached HUD renderer (`swash`, 0 `wgpu`, 0 MiB VRAM).
+//! Ultra-lightweight 100% safe-Rust CPU glyph-cached HUD renderer (`swash`, 0 MiB VRAM).
 //!
 //! Renders either:
 //! - A compact bounding-box `CpuHudFrame` for positioned Vulkan/OpenGL viewport blitting (`HudOnly`), or

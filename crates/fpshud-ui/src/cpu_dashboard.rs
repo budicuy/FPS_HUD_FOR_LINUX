@@ -1,4 +1,4 @@
-//! 100% Pure-Rust CPU 3-column Settings dashboard renderer (`0` `wgpu`, `0` `GPUI-CE`, `0` MiB VRAM).
+//! 100% Pure-Rust CPU 3-column Settings dashboard renderer (`0` GPU / `0` MiB VRAM).
 //!
 //! Renders the complete interactive Settings panel directly into premultiplied RGBA8888 via
 //! `CpuCanvas` + `TextRasterizer`, with 2-layer Z-order hit-testing (base panel + occluded

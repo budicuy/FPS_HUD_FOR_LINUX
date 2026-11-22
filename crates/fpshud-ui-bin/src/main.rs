@@ -496,7 +496,7 @@ impl DaemonState {
         key_events: &[OverlayKeyEvent],
     ) -> (Vec<UiToLayerMsg>, Vec<UiInputEvent>) {
         let mut outgoing = Vec::new();
-        let mut gpui_keys = Vec::new();
+        let mut ui_keys = Vec::new();
 
         for ev in key_events {
             match ev {
@@ -557,7 +557,7 @@ impl DaemonState {
                     }
 
                     if self.config.gui_open {
-                        gpui_keys.push(if *down {
+                        ui_keys.push(if *down {
                             UiInputEvent::KeyDown {
                                 code: *code,
                                 mod_mask: 0,
@@ -573,7 +573,7 @@ impl DaemonState {
             }
         }
 
-        (outgoing, gpui_keys)
+        (outgoing, ui_keys)
     }
 
     fn forward_overlay_outgoing(
@@ -622,8 +622,8 @@ impl DaemonState {
 
         let mut all_ui_events = poll.ui_events;
         if !poll.key_events.is_empty() {
-            let (key_outgoing, gpui_keys) = self.handle_overlay_key_events(&poll.key_events);
-            all_ui_events.extend(gpui_keys);
+            let (key_outgoing, ui_keys) = self.handle_overlay_key_events(&poll.key_events);
+            all_ui_events.extend(ui_keys);
             if !self.config.gui_open {
                 self.close_external_overlay(conn)?;
             }
@@ -727,7 +727,7 @@ impl DaemonState {
             return Ok(());
         }
 
-        // Fast zero-wgpu path: HudOnly (GUI closed OR GUI rendered on isolated Wayland overlay)
+        // Fast CPU path: HudOnly (GUI closed OR GUI rendered on isolated Wayland overlay)
         if !self.config.gui_open || self.overlay_portal.is_some() {
             if !self.config.gui_open && self.dashboard.is_some() {
                 self.release_dashboard_resources();
@@ -1139,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_hud_only_keeps_gpui_runtime_unallocated_and_merges_frame_tick() {
+    fn daemon_hud_only_keeps_dashboard_unallocated_and_merges_frame_tick() {
         use fpshud_core::HudConfig;
         use fpshud_ipc::protocol::{FrameTickData, LayerToUiMsg};
 

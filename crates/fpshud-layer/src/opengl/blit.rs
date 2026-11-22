@@ -543,7 +543,7 @@ fn capture_gl_screenshot(gl: &glow::Context, width: u32, height: u32) {
     }
 }
 
-/// Pumps telemetry/IPC and draws GPUI-CE RGBA overlay onto current OpenGL context before swap.
+/// Pumps telemetry/IPC and draws Pure-Rust CPU RGBA overlay onto current OpenGL context before swap.
 ///
 /// # Safety
 /// Must be called from the active OpenGL thread inside `glXSwapBuffers` or `eglSwapBuffers`.

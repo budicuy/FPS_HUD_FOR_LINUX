@@ -1,4 +1,4 @@
-//! Shared 100% safe-Rust CPU 2D rasterizer & `swash` glyph cache (`0` GPU / `0` `wgpu` / `0` VRAM).
+//! Shared 100% safe-Rust CPU 2D rasterizer & `swash` glyph cache (`0` GPU / `0` VRAM).
 //!
 //! Used by both `CpuHudRenderer` (compact bounding-box HUD) and `CpuDashboard` (3-column Settings UI).
 
