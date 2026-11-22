@@ -68,7 +68,7 @@ def find_child_ui(parent_pid):
     return None
 
 def press_f12():
-    subprocess.run(["ydotool", "key", "88:1", "88:0"], capture_output=True)
+    subprocess.run(["ydotool", "key", "-d", "50", "88:1", "88:0"], capture_output=True)
 
 def run_case(idx, label, disable_hud=False, open_gui=False, close_gui=False):
     tmpdir = tempfile.mkdtemp(prefix="fpshud_bench_")

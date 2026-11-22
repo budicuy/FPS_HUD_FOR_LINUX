@@ -553,7 +553,7 @@ fn run_x11_loop(conn: RustConnection, root: u32, shared: Arc<SharedState>) {
             queue.extend(batch);
         }
 
-        let sleep_ms = if actively_tracking_pointer { 8 } else { 32 };
+        let sleep_ms = if actively_tracking_pointer { 8 } else { 16 };
         thread::sleep(Duration::from_millis(sleep_ms));
     }
 
