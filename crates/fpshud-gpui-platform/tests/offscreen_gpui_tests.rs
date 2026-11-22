@@ -130,3 +130,30 @@ fn offscreen_runtime_renders_transparent_quad_and_text_then_resizes() {
     let meta2 = rt.render_scene_to_slot(&mut writer).unwrap();
     assert_eq!((meta2.width, meta2.height), (800, 450));
 }
+
+#[test]
+fn resize_with_scale_updates_window_scale_factor_and_rendered_pixel_size() {
+    let mut rt = OffscreenGpuiRuntime::new_with_view(640, 360, 1.0, |_w, _cx| ProbeOverlayView)
+        .expect("offscreen gpui runtime init");
+    let mut rgba_1x = Vec::new();
+    let _ = rt.render_scene_to_rgba(&mut rgba_1x).unwrap();
+    // At 1.0x scale, ProbeOverlayView has p(40) + w(300) -> red box ends at x=340, so x=420 is transparent
+    let idx_420_100 = (100 * 640 + 420) * 4;
+    assert_eq!(rgba_1x[idx_420_100 + 3], 0);
+
+    // Resize with 1.5x scale -> window.scale_factor() must become 1.5 and box spans x=60..510 -> x=420 is painted!
+    rt.resize_with_scale(640, 360, 1.5);
+    let sf = rt.update_app(|cx| {
+        cx.windows()[0]
+            .update(cx, |_, window, _| window.scale_factor())
+            .unwrap()
+    });
+    assert!((sf - 1.5).abs() < 1e-4, "expected window.scale_factor() == 1.5, got {sf}");
+
+    let mut rgba_15x = Vec::new();
+    let _ = rt.render_scene_to_rgba(&mut rgba_15x).unwrap();
+    assert!(
+        rgba_15x[idx_420_100 + 3] > 0 && rgba_15x[idx_420_100] > 0,
+        "at 1.5x scale, red box must expand to cover physical pixel (420, 100)"
+    );
+}

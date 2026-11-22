@@ -275,6 +275,7 @@ impl OffscreenGpuiRuntime {
         {
             let mut st = self.window_state.lock();
             st.bounds.size = logical_size;
+            st.scale_factor = self.scale;
             let _ = st.target.resize(w, h);
             st.dirty = true;
         }
