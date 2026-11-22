@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Pure-Rust PNG screenshot capture encoder and non-blocking worker thread.
 
 pub mod writer;

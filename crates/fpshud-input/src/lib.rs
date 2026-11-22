@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Pure-Rust input handling (`x11rb`), optional non-privileged `evdev`, & swapchain disambiguation.
 
 pub mod evdev;

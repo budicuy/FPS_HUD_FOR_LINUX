@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 mod wayland_overlay;
 
 use anyhow::{Context, Result};

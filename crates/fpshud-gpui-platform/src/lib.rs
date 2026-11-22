@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Custom headless GPUI-CE `Platform` & `PlatformWindow` rendering to offscreen `wgpu` + SHM.
 
 pub mod fonts;

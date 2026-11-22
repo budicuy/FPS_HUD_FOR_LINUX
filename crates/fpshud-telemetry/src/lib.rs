@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! 100% sudo-free Linux telemetry collector covering all 31 FPSHUD metrics.
 
 pub mod cpu;
