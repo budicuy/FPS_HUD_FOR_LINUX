@@ -688,7 +688,7 @@ impl FpshudRootView {
         let filters = [
             ("All (31)", SensorFilter::All),
             ("Standard", SensorFilter::Standard),
-            ("FPS (5)", SensorFilter::Fps),
+            ("FPS (5)", SensorFilter::Group(crate::state::MetricCategory::Fps)),
         ];
         let filter_btns: Vec<AnyElement> = filters
             .into_iter()

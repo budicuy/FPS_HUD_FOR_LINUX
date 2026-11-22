@@ -6,7 +6,7 @@ pub mod state;
 pub mod toast;
 
 pub use dashboard::{FpshudRootView, UiRenderMode};
-pub use state::{SensorFilter, UiStore};
+pub use state::{MetricCategory, SensorFilter, UiStore};
 
 use fpshud_core::HudConfig;
 use fpshud_ipc::UiToLayerMsg;

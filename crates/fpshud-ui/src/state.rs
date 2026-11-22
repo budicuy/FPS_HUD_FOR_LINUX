@@ -1,18 +1,28 @@
 use fpshud_analytics::BenchmarkSummary;
 use fpshud_core::{
-    ColorRgba, FontFamily, HudConfig, Keybind, LayoutPosition, MetricType, PresetType,
-    apply_preset_advance, apply_preset_custom, apply_preset_minimal, apply_preset_standard,
-    keybind::format_keybind, reset_layout_to_default, save_config_to_disk,
+    ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, Keybind, LayoutPosition,
+    MetricType, PresetType, apply_preset_advance, apply_preset_custom, apply_preset_minimal,
+    apply_preset_standard, keybind::format_keybind, reset_layout_to_default, save_config_to_disk,
 };
 use fpshud_input::KeybindTarget;
 use fpshud_ipc::UiToLayerMsg;
 use fpshud_telemetry::TelemetrySnapshot;
 
+pub const DEFAULT_ACCENT_TEXT_COLOR: ColorRgba = ColorRgba::new(140, 225, 255, 255);
+
+pub const CATEGORY_ORDER: [MetricCategory; 5] = [
+    MetricCategory::Fps,
+    MetricCategory::Gpu,
+    MetricCategory::Cpu,
+    MetricCategory::Ram,
+    MetricCategory::Sys,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorFilter {
     All,
     Standard,
-    Fps,
+    Group(MetricCategory),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +83,117 @@ pub const fn category_label(cat: MetricCategory) -> &'static str {
 }
 
 #[must_use]
+pub const fn category_display_title(cat: MetricCategory) -> &'static str {
+    match cat {
+        MetricCategory::Fps => "FPS & Frametime",
+        MetricCategory::Gpu => "GPU Monitor",
+        MetricCategory::Cpu => "CPU Monitor",
+        MetricCategory::Ram => "RAM Monitor",
+        MetricCategory::Sys => "Sistem Monitor",
+    }
+}
+
+/// Groups active metrics in canonical category order `FPS -> GPU -> CPU -> RAM -> SYS`,
+/// preserving `MetricType::ALL` order within each non-empty group.
+#[must_use]
+pub fn group_metrics_ordered(metrics: &[MetricType]) -> Vec<(MetricCategory, Vec<MetricType>)> {
+    let mut out = Vec::new();
+    for cat in CATEGORY_ORDER {
+        let items: Vec<MetricType> = MetricType::ALL
+            .iter()
+            .copied()
+            .filter(|m| metric_category(*m) == cat && metrics.contains(m))
+            .collect();
+        if !items.is_empty() {
+            out.push((cat, items));
+        }
+    }
+    out
+}
+
+/// Concise sensor label inside a grouped HUD row or Settings group card.
+#[must_use]
+pub const fn hud_metric_short_label(metric: MetricType) -> &'static str {
+    match metric {
+        MetricType::Fps => "FPS",
+        MetricType::FpsAvg => "Avg",
+        MetricType::Fps1Low => "1% Low",
+        MetricType::Fps01Low => "0.1% Low",
+        MetricType::FrameTimes => "FT",
+        MetricType::GpuLoad | MetricType::CpuLoad => "Load",
+        MetricType::GpuClock | MetricType::CpuClock => "Clock",
+        MetricType::GpuVramClock => "VRAM Clk",
+        MetricType::GpuVram => "VRAM",
+        MetricType::GpuBandwidth => "BW",
+        MetricType::GpuTemp | MetricType::CpuTemp => "Temp",
+        MetricType::GpuFan => "Fan",
+        MetricType::GpuPower | MetricType::CpuPower => "Power",
+        MetricType::CpuAllCoreLoad => "Cores",
+        MetricType::CpuAllCoreClock => "Clocks",
+        MetricType::Ram => "System",
+        MetricType::GameRam => "Game",
+        MetricType::SwapRam => "Swap",
+        MetricType::MemPressure => "PSI",
+        MetricType::EngineApi => "API",
+        MetricType::GpuModel => "GPU",
+        MetricType::CpuModel => "CPU",
+        MetricType::SystemClock => "Clock",
+        MetricType::Battery => "Batt",
+        MetricType::DiskIo => "Disk",
+        MetricType::DiskTemp => "Disk Temp",
+        MetricType::NetSpeed => "Net",
+    }
+}
+
+#[must_use]
+pub const fn effective_text_color(cfg: &HudConfig) -> ColorRgba {
+    if cfg.custom_text_color_enabled {
+        cfg.text_color
+    } else {
+        ColorRgba::new(255, 255, 255, 255)
+    }
+}
+
+#[must_use]
+pub const fn position_display_name(pos: LayoutPosition) -> &'static str {
+    match pos {
+        LayoutPosition::TopLeft => "Top Left",
+        LayoutPosition::TopCenter => "Top Center",
+        LayoutPosition::TopRight => "Top Right",
+        LayoutPosition::BottomLeft => "Bottom Left",
+        LayoutPosition::BottomCenter => "Bottom Center",
+        LayoutPosition::BottomRight => "Bottom Right",
+        LayoutPosition::Custom => "Custom",
+    }
+}
+
+#[must_use]
+pub const fn arrangement_display_name(arr: ArrangementMode) -> &'static str {
+    match arr {
+        ArrangementMode::Stack => "Stack",
+        ArrangementMode::Double => "Double",
+        ArrangementMode::Linear => "Linear",
+    }
+}
+
+#[must_use]
+pub const fn bg_style_display_name(style: BackgroundStyle) -> &'static str {
+    match style {
+        BackgroundStyle::None => "None",
+        BackgroundStyle::Translucent => "Translucent",
+        BackgroundStyle::Solid => "Solid",
+    }
+}
+
+#[must_use]
+pub const fn font_dropdown_label(font: FontFamily) -> &'static str {
+    match font {
+        FontFamily::SansBold => "Open Sans Bold",
+        FontFamily::MonoBold | FontFamily::VeraMono | FontFamily::AdwaitaMono => "Vera Mono Bold",
+    }
+}
+
+#[must_use]
 pub fn rgba_u32(r: u8, g: u8, b: u8, a: u8) -> u32 {
     (u32::from(r) << 24) | (u32::from(g) << 16) | (u32::from(b) << 8) | u32::from(a)
 }
@@ -85,7 +206,7 @@ pub fn color_to_rgba_u32(c: ColorRgba, alpha: u8) -> u32 {
 #[must_use]
 pub fn category_color_rgba(cat: MetricCategory, cfg: &HudConfig, alpha: u8) -> u32 {
     if !cfg.category_colors_enabled {
-        return color_to_rgba_u32(cfg.text_color, alpha);
+        return color_to_rgba_u32(effective_text_color(cfg), alpha);
     }
     match cat {
         MetricCategory::Fps => rgba_u32(255, 215, 0, alpha),
@@ -104,7 +225,7 @@ pub fn resolve_metric_value_color(
     cfg: &HudConfig,
     alpha: u8,
 ) -> (u32, bool) {
-    let base = color_to_rgba_u32(cfg.text_color, alpha);
+    let base = color_to_rgba_u32(effective_text_color(cfg), alpha);
     if !cfg.thermal_warnings_enabled {
         return (base, false);
     }
@@ -315,13 +436,11 @@ impl UiStore {
         match filter {
             SensorFilter::All => MetricType::ALL.to_vec(),
             SensorFilter::Standard => HudConfig::default().metrics,
-            SensorFilter::Fps => vec![
-                MetricType::Fps,
-                MetricType::FpsAvg,
-                MetricType::Fps1Low,
-                MetricType::Fps01Low,
-                MetricType::FrameTimes,
-            ],
+            SensorFilter::Group(cat) => MetricType::ALL
+                .iter()
+                .copied()
+                .filter(|m| metric_category(*m) == cat)
+                .collect(),
         }
     }
 
@@ -387,7 +506,70 @@ impl UiStore {
     }
 
     pub fn step_bg_alpha(&mut self, delta: f32) {
-        self.config.bg_alpha = (self.config.bg_alpha + delta).clamp(0.05, 0.95);
+        self.config.bg_alpha = (self.config.bg_alpha + delta).clamp(0.05, 1.0);
+        self.emit_config_updated();
+    }
+
+    pub fn set_arrangement(&mut self, arr: ArrangementMode) {
+        self.config.arrangement = arr;
+        self.emit_config_updated();
+    }
+
+    pub fn set_background_style(&mut self, style: BackgroundStyle) {
+        self.config.background_style = style;
+        self.emit_config_updated();
+    }
+
+    pub fn set_font_family(&mut self, font: FontFamily) {
+        self.config.font_family = font;
+        self.emit_config_updated();
+    }
+
+    pub fn set_gui_scale(&mut self, scale: f32) {
+        self.config.gui_scale = scale.clamp(0.5, 2.5);
+        self.emit_config_updated();
+    }
+
+    pub fn set_font_size_px(&mut self, size: f32) {
+        self.config.font_size_px = size.clamp(11.0, 36.0);
+        self.emit_config_updated();
+    }
+
+    pub fn set_text_opacity_pct(&mut self, pct: u8) {
+        self.config.text_opacity = f32::from(pct.clamp(10, 100)) / 100.0;
+        self.emit_config_updated();
+    }
+
+    pub fn set_bg_alpha_pct(&mut self, pct: u8) {
+        self.config.bg_alpha = f32::from(pct.clamp(5, 100)) / 100.0;
+        if self.config.background_style == BackgroundStyle::None {
+            self.config.background_style = BackgroundStyle::Translucent;
+        }
+        self.emit_config_updated();
+    }
+
+    pub fn set_text_color(&mut self, color: ColorRgba) {
+        self.config.text_color = color;
+        self.config.custom_text_color_enabled = true;
+        self.emit_config_updated();
+    }
+
+    pub fn toggle_custom_text_color(&mut self) {
+        let next = !self.config.custom_text_color_enabled;
+        self.config.custom_text_color_enabled = next;
+        if next && self.config.text_color == ColorRgba::new(255, 255, 255, 255) {
+            self.config.text_color = DEFAULT_ACCENT_TEXT_COLOR;
+        }
+        self.emit_config_updated();
+    }
+
+    pub fn toggle_category_colors(&mut self) {
+        self.config.category_colors_enabled = !self.config.category_colors_enabled;
+        self.emit_config_updated();
+    }
+
+    pub fn toggle_thermal_warnings(&mut self) {
+        self.config.thermal_warnings_enabled = !self.config.thermal_warnings_enabled;
         self.emit_config_updated();
     }
 
@@ -399,7 +581,7 @@ impl UiStore {
     pub fn cycle_text_color(&mut self) {
         const PALETTE: [ColorRgba; 4] = [
             ColorRgba::new(255, 255, 255, 255),
-            ColorRgba::new(140, 225, 255, 255),
+            DEFAULT_ACCENT_TEXT_COLOR,
             ColorRgba::new(150, 255, 165, 255),
             ColorRgba::new(255, 220, 120, 255),
         ];
@@ -408,6 +590,7 @@ impl UiStore {
             .position(|&c| c == self.config.text_color)
             .map_or(0, |i| (i + 1) % PALETTE.len());
         self.config.text_color = PALETTE[next_idx];
+        self.config.custom_text_color_enabled = true;
         self.emit_config_updated();
     }
 

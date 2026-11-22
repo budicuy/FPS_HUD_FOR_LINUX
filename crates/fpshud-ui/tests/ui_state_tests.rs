@@ -15,7 +15,12 @@ fn ui_store_all_metrics_filters_thermal_drag_and_actions() {
     // 1. Sensor filtering
     assert_eq!(store.filtered_metrics(SensorFilter::All).len(), 31);
     assert!(!store.filtered_metrics(SensorFilter::Standard).is_empty());
-    assert_eq!(store.filtered_metrics(SensorFilter::Fps).len(), 5);
+    assert_eq!(
+        store
+            .filtered_metrics(SensorFilter::Group(fpshud_ui::MetricCategory::Fps))
+            .len(),
+        5
+    );
 
     // 2. Formatting all 31 metrics + '~' EstimatedDvfs vs DirectHwmon + Unavailable N/A
     store.telemetry.cpu_power_w = 48.0;
@@ -510,4 +515,107 @@ fn render_mode_splits_hud_only_and_dashboard_only_without_duplication() {
             .unwrap()
     });
     assert_eq!(capture_after, KeybindTarget::None);
+}
+
+#[test]
+fn hud_grouping_middle_dot_order_and_effective_text_color_opacity_100() {
+    use fpshud_core::{ColorRgba, MetricType};
+    use fpshud_ui::{
+        MetricCategory, SensorFilter,
+        state::{effective_text_color, group_metrics_ordered, hud_metric_short_label},
+    };
+
+    // Urutan acak lintas kategori wajib terkelompok kanonik FPS -> GPU -> CPU -> RAM -> SYS
+    let scrambled = vec![
+        MetricType::NetSpeed,
+        MetricType::CpuTemp,
+        MetricType::Ram,
+        MetricType::FrameTimes,
+        MetricType::GpuPower,
+        MetricType::Fps,
+        MetricType::GpuLoad,
+        MetricType::CpuLoad,
+    ];
+    let grouped = group_metrics_ordered(&scrambled);
+    let cats: Vec<MetricCategory> = grouped.iter().map(|(c, _)| *c).collect();
+    assert_eq!(
+        cats,
+        vec![
+            MetricCategory::Fps,
+            MetricCategory::Gpu,
+            MetricCategory::Cpu,
+            MetricCategory::Ram,
+            MetricCategory::Sys,
+        ]
+    );
+    assert_eq!(grouped[0].1, vec![MetricType::Fps, MetricType::FrameTimes]);
+    assert_eq!(grouped[1].1, vec![MetricType::GpuLoad, MetricType::GpuPower]);
+    assert_eq!(grouped[2].1, vec![MetricType::CpuLoad, MetricType::CpuTemp]);
+
+    // Grup tanpa metrik tidak boleh muncul; seluruh short label tidak kosong
+    assert!(group_metrics_ordered(&[]).is_empty());
+    for &m in MetricType::ALL {
+        assert!(!hud_metric_short_label(m).is_empty());
+    }
+
+    // SensorFilter::Group mencakup tepat 31 sensor tanpa overlap
+    let mut store = UiStore::new(HudConfig::default(), TelemetrySnapshot::default());
+    assert_eq!(store.filtered_metrics(SensorFilter::Group(MetricCategory::Fps)).len(), 5);
+    assert_eq!(store.filtered_metrics(SensorFilter::Group(MetricCategory::Gpu)).len(), 8);
+    assert_eq!(store.filtered_metrics(SensorFilter::Group(MetricCategory::Cpu)).len(), 6);
+    assert_eq!(store.filtered_metrics(SensorFilter::Group(MetricCategory::Ram)).len(), 4);
+    assert_eq!(store.filtered_metrics(SensorFilter::Group(MetricCategory::Sys)).len(), 8);
+
+    // Toggle Text Color dari default putih otomatis memilih Ice Cyan; OFF kembali putih tapi swatch tetap tersimpan
+    assert!(!store.config.custom_text_color_enabled);
+    assert_eq!(effective_text_color(&store.config), ColorRgba::new(255, 255, 255, 255));
+    store.toggle_custom_text_color();
+    assert!(store.config.custom_text_color_enabled);
+    assert_ne!(store.config.text_color, ColorRgba::new(255, 255, 255, 255));
+    let saved_tint = store.config.text_color;
+    store.toggle_custom_text_color();
+    assert!(!store.config.custom_text_color_enabled);
+    assert_eq!(store.config.text_color, saved_tint);
+    assert_eq!(effective_text_color(&store.config), ColorRgba::new(255, 255, 255, 255));
+
+    // set_bg_alpha_pct mendukung 5%..100% dan keluar dari BackgroundStyle::None otomatis
+    store.config.background_style = BackgroundStyle::None;
+    store.set_bg_alpha_pct(100);
+    assert!((store.config.bg_alpha - 1.0).abs() < 1e-4);
+    assert_eq!(store.config.background_style, BackgroundStyle::Translucent);
+    store.set_bg_alpha_pct(5);
+    assert!((store.config.bg_alpha - 0.05).abs() < 1e-4);
+
+    // Render smoke test HUD Opsi A pada 0, 1, dan 31 metrik (Advance) lintas Stack/Double/Linear dengan bg_alpha=1.0
+    let mut cfg = HudConfig {
+        hud_visible: true,
+        gui_open: false,
+        bg_alpha: 1.0,
+        background_style: BackgroundStyle::Translucent,
+        ..HudConfig::default()
+    };
+    let snap = TelemetrySnapshot {
+        fps: 59.0,
+        frametime_ms: 16.8,
+        gpu_load: 49.0,
+        gpu_temp_c: 88.0,
+        cpu_load: 22.0,
+        ..TelemetrySnapshot::default()
+    };
+    let mut rt = OffscreenGpuiRuntime::new_with_view(1280, 720, 1.0, {
+        let cfg = cfg.clone();
+        let snap = snap.clone();
+        move |_, _| FpshudRootView::new(UiStore::new(cfg, snap))
+    })
+    .unwrap();
+    let mut rgba = Vec::new();
+    for metrics in [vec![], vec![MetricType::Fps], MetricType::ALL.to_vec()] {
+        cfg.metrics = metrics;
+        for arr in [ArrangementMode::Stack, ArrangementMode::Double, ArrangementMode::Linear] {
+            cfg.arrangement = arr;
+            rt.update_app(|cx| FpshudRootView::sync_all(cx, cfg.clone(), snap.clone()));
+            let (w, h) = rt.render_scene_to_rgba(&mut rgba).unwrap();
+            assert_eq!((w, h), (1280, 720));
+        }
+    }
 }
