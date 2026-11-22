@@ -9,15 +9,26 @@ use fpshud_telemetry::TelemetryCollector;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OverlayFrameBuffer {
     pub width: u32,
     pub height: u32,
     pub generation: u64,
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<[u8]>,
+}
+
+impl Default for OverlayFrameBuffer {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            generation: 0,
+            rgba: Arc::from([]),
+        }
+    }
 }
 
 /// Validates monotonic generation and exact surface size, discarding stale pre-resize frames.
@@ -25,6 +36,7 @@ pub struct OverlayFrameBuffer {
 pub struct OverlayFrameSync {
     expected_size: (u32, u32),
     last_accepted_generation: u64,
+    scratch: Vec<u8>,
     pub latest: OverlayFrameBuffer,
 }
 
@@ -33,7 +45,7 @@ impl OverlayFrameSync {
         let next = (width.max(1), height.max(1));
         if self.expected_size != next {
             self.expected_size = next;
-            self.latest.rgba.clear();
+            self.latest.rgba = Arc::from([]);
             self.latest.width = 0;
             self.latest.height = 0;
         }
@@ -64,8 +76,7 @@ impl OverlayFrameSync {
         self.latest.width = meta.width;
         self.latest.height = meta.height;
         self.latest.generation = meta.generation;
-        self.latest.rgba.clear();
-        self.latest.rgba.extend_from_slice(&pixels[..expected_bytes]);
+        self.latest.rgba = Arc::from(&pixels[..expected_bytes]);
         true
     }
 
@@ -85,16 +96,15 @@ impl OverlayFrameSync {
         if expected_bytes == 0 {
             return false;
         }
-        let mut scratch = Vec::new();
-        if let Some((r_gen, _slot)) = reader.read_latest_into(&mut scratch) {
-            if r_gen <= self.last_accepted_generation || scratch.len() != expected_bytes {
+        if let Some((r_gen, _slot)) = reader.read_latest_into(&mut self.scratch) {
+            if r_gen <= self.last_accepted_generation || self.scratch.len() != expected_bytes {
                 return false;
             }
             self.last_accepted_generation = r_gen.max(meta.generation);
             self.latest.width = meta.width;
             self.latest.height = meta.height;
             self.latest.generation = self.last_accepted_generation;
-            self.latest.rgba = scratch;
+            self.latest.rgba = Arc::from(self.scratch.as_slice());
             return true;
         }
         false

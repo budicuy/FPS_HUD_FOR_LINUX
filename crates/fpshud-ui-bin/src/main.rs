@@ -144,6 +144,7 @@ struct DaemonState {
     overlay_rgba_scratch: Vec<u8>,
     overlay_size: (u32, u32),
     external_overlay_reported: bool,
+    last_overlay_telemetry_draw: Instant,
 }
 
 impl DaemonState {
@@ -168,6 +169,7 @@ impl DaemonState {
             overlay_rgba_scratch: Vec::new(),
             overlay_size: (1280, 720),
             external_overlay_reported: false,
+            last_overlay_telemetry_draw: Instant::now(),
         }
     }
 
@@ -333,7 +335,10 @@ impl DaemonState {
                 if in_game_needs_draw {
                     self.scheduler.mark_dirty();
                 }
-                if self.overlay_portal.is_some() {
+                if self.overlay_portal.is_some()
+                    && self.last_overlay_telemetry_draw.elapsed() >= Duration::from_millis(500)
+                {
+                    self.last_overlay_telemetry_draw = Instant::now();
                     self.sync_overlay_runtime();
                     self.overlay_dirty.mark_dirty();
                 }
@@ -440,6 +445,8 @@ impl DaemonState {
 
     fn close_external_overlay(&mut self, conn: &mut IpcConnection) -> Result<()> {
         if self.overlay_portal.take().is_some() {
+            self.overlay_runtime = None;
+            self.overlay_rgba_scratch = Vec::new();
             self.overlay_input = InputManager::new_headless();
             self.overlay_dirty = DirtyScheduler::new(false);
             self.sync_in_game_runtime();
