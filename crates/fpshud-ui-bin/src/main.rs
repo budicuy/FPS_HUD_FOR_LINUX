@@ -5,9 +5,10 @@ use fpshud_core::HudConfig;
 use fpshud_gpui_platform::OffscreenGpuiRuntime;
 use fpshud_input::keycodes::KEY_ESC;
 use fpshud_input::{InputAction, InputManager, KeybindTarget, UiInputEvent};
-use fpshud_ipc::protocol::{LayerToUiMsg, MAX_IPC_PAYLOAD, UiToLayerMsg};
+use fpshud_ipc::protocol::{FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, UiToLayerMsg};
 use fpshud_ipc::{IpcClient, IpcConnection, ShmRingWriter};
-use fpshud_telemetry::TelemetrySnapshot;
+use fpshud_telemetry::{SensorPollMask, TelemetryCollector, TelemetrySnapshot};
+use fpshud_ui::cpu_hud::CpuHudRenderer;
 use fpshud_ui::toast::ToastState;
 use fpshud_ui::{FpshudRootView, UiRenderMode, UiStore};
 use std::io;
@@ -125,8 +126,12 @@ fn send_ui_msg(
 struct DaemonState {
     config: HudConfig,
     telemetry: TelemetrySnapshot,
+    telemetry_collector: Option<TelemetryCollector>,
+    pending_bench_loads: Option<(f32, f32)>,
+    cpu_hud: CpuHudRenderer,
     runtime: Option<OffscreenGpuiRuntime>,
     shm_writer: Option<ShmRingWriter>,
+    shm_slot_bytes: usize,
     shm_fd_dirty: bool,
     scheduler: DirtyScheduler,
     toast_was_active: bool,
@@ -148,12 +153,21 @@ struct DaemonState {
 }
 
 impl DaemonState {
+    #[cfg(test)]
     fn new() -> Self {
+        Self::new_for_test_headless()
+    }
+
+    fn new_for_test_headless() -> Self {
         Self {
             config: HudConfig::default(),
             telemetry: TelemetrySnapshot::default(),
+            telemetry_collector: None,
+            pending_bench_loads: None,
+            cpu_hud: CpuHudRenderer::new(),
             runtime: None,
             shm_writer: None,
+            shm_slot_bytes: 0,
             shm_fd_dirty: true,
             scheduler: DirtyScheduler::new(false),
             toast_was_active: true,
@@ -170,6 +184,44 @@ impl DaemonState {
             overlay_size: (1280, 720),
             external_overlay_reported: false,
             last_overlay_telemetry_draw: Instant::now(),
+        }
+    }
+
+    fn new_with_parent(parent_pid: u32) -> Self {
+        let mut st = Self::new_for_test_headless();
+        st.telemetry_collector = Some(TelemetryCollector::new_for_pid(
+            (parent_pid > 0).then_some(parent_pid),
+        ));
+        st
+    }
+
+    fn sync_poll_mask(&self) {
+        if let Some(tc) = &self.telemetry_collector {
+            tc.set_poll_mask(SensorPollMask::from_metrics(
+                &self.config.metrics,
+                self.config.gui_open,
+            ));
+        }
+    }
+
+    fn merge_frame_tick(&mut self, tick: FrameTickData) {
+        if let Some(tc) = &self.telemetry_collector {
+            self.telemetry = tc.get_snapshot();
+        }
+        self.telemetry.fps = tick.fps;
+        self.telemetry.fps_avg = tick.fps_avg;
+        self.telemetry.fps_1pct_low = tick.fps_1pct_low;
+        self.telemetry.fps_01pct_low = tick.fps_01pct_low;
+        self.telemetry.frametime_ms = tick.frametime_ms;
+        self.telemetry.frametime_history = tick.frametime_history;
+        self.telemetry.render_api = tick.render_api;
+        self.telemetry.benchmark_active = tick.benchmark_active;
+        self.telemetry.benchmark_elapsed_sec = tick.benchmark_elapsed_sec;
+        if tick.last_benchmark.is_some() {
+            self.telemetry.last_benchmark = tick.last_benchmark;
+        }
+        if self.telemetry.benchmark_active {
+            self.pending_bench_loads = Some((self.telemetry.cpu_load, self.telemetry.gpu_load));
         }
     }
 
@@ -205,6 +257,7 @@ impl DaemonState {
         match msg {
             UiToLayerMsg::ConfigUpdated(cfg) => {
                 self.config = cfg.clone();
+                self.sync_poll_mask();
                 if (cfg.gui_scale - self.surface_scale).abs() > 1e-4 {
                     self.surface_scale = cfg.gui_scale.clamp(0.5, 3.0);
                     if let Some(rt) = &mut self.runtime {
@@ -255,6 +308,7 @@ impl DaemonState {
         self.surface_width = w;
         self.surface_height = h;
         self.surface_scale = s;
+        self.sync_poll_mask();
 
         let mode = if self.overlay_portal.is_some() {
             UiRenderMode::HudOnly
@@ -262,10 +316,8 @@ impl DaemonState {
             UiRenderMode::Full
         };
 
-        if let (Some(rt), Some(writer)) = (&mut self.runtime, &mut self.shm_writer) {
+        if let Some(rt) = &mut self.runtime {
             rt.resize_with_scale(w, h, s);
-            writer.resize(w, h)?;
-            self.shm_fd_dirty = true;
             let cfg = self.config.clone();
             let snap = self.telemetry.clone();
             let sw = self.software_cursor;
@@ -274,21 +326,6 @@ impl DaemonState {
                 FpshudRootView::sync_all(cx, cfg, snap);
                 FpshudRootView::set_software_cursor(cx, sw);
             });
-        } else {
-            let cfg = self.config.clone();
-            let snap = self.telemetry.clone();
-            let sw = self.software_cursor;
-            let mut rt = OffscreenGpuiRuntime::new_with_view(w, h, s, |_, _| {
-                FpshudRootView::new(UiStore::new(cfg, snap))
-            })?;
-            rt.update_app(|cx| {
-                FpshudRootView::set_render_mode(cx, mode);
-                FpshudRootView::set_software_cursor(cx, sw);
-            });
-            let writer = ShmRingWriter::new(w, h)?;
-            self.runtime = Some(rt);
-            self.shm_writer = Some(writer);
-            self.shm_fd_dirty = true;
         }
         self.scheduler.mark_dirty();
         Ok(())
@@ -343,8 +380,36 @@ impl DaemonState {
                     self.overlay_dirty.mark_dirty();
                 }
             }
+            LayerToUiMsg::FrameTick(tick) => {
+                self.merge_frame_tick(*tick);
+                self.sync_in_game_runtime();
+                let toast_active = !self.config.gui_open
+                    && ToastState::should_show(self.started_at.elapsed().as_secs_f32());
+                let in_game_needs_draw = self.config.hud_visible
+                    || toast_active
+                    || (self.config.gui_open && self.overlay_portal.is_none());
+                if in_game_needs_draw {
+                    self.scheduler.mark_dirty();
+                }
+                if self.overlay_portal.is_some()
+                    && self.last_overlay_telemetry_draw.elapsed() >= Duration::from_millis(500)
+                {
+                    self.last_overlay_telemetry_draw = Instant::now();
+                    self.sync_overlay_runtime();
+                    self.overlay_dirty.mark_dirty();
+                }
+            }
+            LayerToUiMsg::ActiveGpu {
+                vendor_id,
+                device_id,
+            } => {
+                if let Some(tc) = &self.telemetry_collector {
+                    tc.notify_active_gpu(vendor_id, device_id);
+                }
+            }
             LayerToUiMsg::ConfigSync(cfg) => {
                 self.config = cfg;
+                self.sync_poll_mask();
                 if (self.config.gui_scale - self.surface_scale).abs() > 1e-4 {
                     self.surface_scale = self.config.gui_scale.clamp(0.5, 3.0);
                     if let Some(rt) = &mut self.runtime {
@@ -663,10 +728,87 @@ impl DaemonState {
         }
     }
 
+    fn ensure_shm_capacity(&mut self, width: u32, height: u32) -> Result<()> {
+        let needed = (width.max(1) as usize)
+            .saturating_mul(height.max(1) as usize)
+            .saturating_mul(4);
+        if self.shm_writer.is_none() || needed > self.shm_slot_bytes {
+            let writer = ShmRingWriter::new(width.max(1), height.max(1))?;
+            self.shm_slot_bytes = needed;
+            self.shm_writer = Some(writer);
+            self.shm_fd_dirty = true;
+        }
+        Ok(())
+    }
+
+    fn flush_pending_bench_loads(&mut self, conn: &mut IpcConnection) -> Result<()> {
+        if let Some((cpu_load, gpu_load)) = self.pending_bench_loads.take() {
+            send_ui_msg(
+                conn,
+                &UiToLayerMsg::BenchmarkLoads { cpu_load, gpu_load },
+                None,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
     fn render_if_dirty(&mut self, conn: &mut IpcConnection) -> Result<()> {
+        self.flush_pending_bench_loads(conn)?;
         if !self.scheduler.take_should_render() {
             return Ok(());
         }
+
+        // Fast zero-wgpu path: HudOnly (GUI closed OR GUI rendered on isolated Wayland overlay)
+        if !self.config.gui_open || self.overlay_portal.is_some() {
+            if self.runtime.is_some() {
+                self.runtime = None;
+            }
+            let mut store = UiStore::new(self.config.clone(), self.telemetry.clone());
+            store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
+            let Some(frame) = self.cpu_hud.render(
+                &store,
+                self.surface_width,
+                self.surface_height,
+                self.surface_scale,
+            ) else {
+                return Ok(());
+            };
+            self.ensure_shm_capacity(frame.width, frame.height)?;
+            let Some(writer) = &mut self.shm_writer else {
+                return Ok(());
+            };
+            let meta = writer.write_next_slot_at(
+                frame.dst_x,
+                frame.dst_y,
+                frame.width,
+                frame.height,
+                &frame.rgba,
+            )?;
+            let send_fd = self.shm_fd_dirty;
+            send_ui_msg(conn, &UiToLayerMsg::FrameReady(meta), Some(writer), send_fd)?;
+            self.shm_fd_dirty = false;
+            return Ok(());
+        }
+
+        // Pure-X11 fallback path when GUI is open without WaylandOverlayPortal: create GPUI on-demand
+        if self.runtime.is_none() {
+            let cfg = self.config.clone();
+            let snap = self.telemetry.clone();
+            let sw = self.software_cursor;
+            let mut rt = OffscreenGpuiRuntime::new_with_view(
+                self.surface_width,
+                self.surface_height,
+                self.surface_scale,
+                |_, _| FpshudRootView::new(UiStore::new(cfg, snap)),
+            )?;
+            rt.update_app(|cx| {
+                FpshudRootView::set_render_mode(cx, UiRenderMode::Full);
+                FpshudRootView::set_software_cursor(cx, sw);
+            });
+            self.runtime = Some(rt);
+        }
+        self.ensure_shm_capacity(self.surface_width, self.surface_height)?;
         let (Some(rt), Some(writer)) = (&mut self.runtime, &mut self.shm_writer) else {
             return Ok(());
         };
@@ -678,6 +820,7 @@ impl DaemonState {
         let outgoing = rt.update_app(FpshudRootView::take_outgoing);
         for msg in outgoing {
             self.apply_outgoing_msg(&msg);
+            self.sync_poll_mask();
             send_ui_msg(conn, &msg, None, false)?;
         }
         Ok(())
@@ -700,7 +843,7 @@ fn run_daemon(args: DaemonArgs) -> Result<()> {
         return Ok(());
     }
 
-    let mut state = DaemonState::new();
+    let mut state = DaemonState::new_with_parent(u32::try_from(args.parent_pid).unwrap_or(0));
     let mut recv_buf = vec![0_u8; MAX_IPC_PAYLOAD + 64];
 
     loop {
@@ -1025,5 +1168,47 @@ mod tests {
         assert!(st.overlay_dirty.take_should_render());
         assert!(st.handle_overlay_present_outcome(true));
         assert!(!st.overlay_dirty.take_should_render());
+    }
+
+    #[test]
+    fn daemon_hud_only_keeps_gpui_runtime_unallocated_and_merges_frame_tick() {
+        use fpshud_core::HudConfig;
+        use fpshud_ipc::protocol::{FrameTickData, LayerToUiMsg};
+
+        let mut st = crate::DaemonState::new_for_test_headless();
+        let cfg = HudConfig {
+            hud_visible: true,
+            gui_open: false,
+            ..HudConfig::default()
+        };
+        st.handle_layer_msg(LayerToUiMsg::Init {
+            width: 1280,
+            height: 720,
+            scale: 1.0,
+            config: cfg,
+        })
+        .unwrap();
+        assert!(
+            st.runtime.is_none(),
+            "HudOnly mode must NOT allocate wgpu/GPUI runtime"
+        );
+        assert!(st.overlay_runtime.is_none());
+
+        let tick = FrameTickData {
+            fps: 144.0,
+            fps_avg: 140.0,
+            fps_1pct_low: 110.0,
+            fps_01pct_low: 95.0,
+            frametime_ms: 6.94,
+            frametime_history: vec![6.9, 7.0],
+            render_api: "VULKAN".to_string(),
+            benchmark_active: false,
+            benchmark_elapsed_sec: 0.0,
+            last_benchmark: None,
+        };
+        st.handle_layer_msg(LayerToUiMsg::FrameTick(Box::new(tick)))
+            .unwrap();
+        assert!((st.telemetry.fps - 144.0).abs() < 0.01);
+        assert_eq!(st.telemetry.render_api, "VULKAN");
     }
 }

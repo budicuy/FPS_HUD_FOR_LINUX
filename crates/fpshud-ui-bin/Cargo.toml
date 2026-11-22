@@ -15,7 +15,7 @@ fpshud-core = { path = "../fpshud-core" }
 fpshud-gpui-platform = { path = "../fpshud-gpui-platform" }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-ipc = { path = "../fpshud-ipc" }
-fpshud-telemetry = { path = "../fpshud-telemetry" }
+fpshud-telemetry = { path = "../fpshud-telemetry", features = ["vendor-gpu-apis"] }
 fpshud-ui = { path = "../fpshud-ui" }
 rustix.workspace = true
 wayland-client.workspace = true
