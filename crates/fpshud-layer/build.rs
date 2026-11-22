@@ -13,4 +13,6 @@ fn main() {
         "cargo:rustc-cdylib-link-arg=-Wl,--version-script={}",
         version_script.display()
     );
+    println!("cargo:rustc-cdylib-link-arg=-Wl,--gc-sections");
+    println!("cargo:rustc-cdylib-link-arg=-Wl,--as-needed");
 }

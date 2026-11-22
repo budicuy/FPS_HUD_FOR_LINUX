@@ -49,3 +49,12 @@ gpui_ce_wgpu = { path = "crates/vendor/gpui_ce_wgpu" }
 all = "warn"
 dbg_macro = "warn"
 todo = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
