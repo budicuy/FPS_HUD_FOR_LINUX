@@ -18,6 +18,18 @@ pub const CATEGORY_ORDER: [MetricCategory; 5] = [
     MetricCategory::Sys,
 ];
 
+/// Selects which visual layers the UI renderer paints inside a viewport.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UiRenderMode {
+    /// Renders HUD, launch toast, Settings dashboard, and fallback software cursor (X11/headless).
+    #[default]
+    Full,
+    /// Renders only the in-game HUD and launch toast.
+    HudOnly,
+    /// Renders only the interactive Settings dashboard inside the isolated Wayland overlay surface.
+    DashboardOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorFilter {
     All,

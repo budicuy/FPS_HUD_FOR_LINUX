@@ -83,17 +83,7 @@ pub fn map_preview_point_to_norm(
     (nx, ny)
 }
 
-/// Selects which visual layers `FpshudRootView` paints inside a GPUI offscreen viewport.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum UiRenderMode {
-    /// Renders HUD, launch toast, Settings dashboard, and fallback software cursor (X11/headless).
-    #[default]
-    Full,
-    /// Renders only the in-game HUD and launch toast (while Settings dashboard runs in its own Wayland overlay).
-    HudOnly,
-    /// Renders only the interactive Settings dashboard inside the isolated Wayland overlay surface.
-    DashboardOnly,
-}
+pub use crate::state::UiRenderMode;
 
 pub struct FpshudRootView {
     pub(crate) store: UiStore,
