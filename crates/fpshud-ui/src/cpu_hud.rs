@@ -60,19 +60,15 @@ impl CpuHudRenderer {
         }
     }
 
-    fn is_mono_font(family: FontFamily) -> bool {
-        !matches!(family, FontFamily::SansBold)
-    }
-
     fn measure_spans(
         rasterizer: &mut TextRasterizer,
-        is_mono: bool,
+        font: FontFamily,
         size_px: f32,
         spans: &[TextSpan],
     ) -> f32 {
         let mut w = 0.0_f32;
         for s in spans {
-            w += rasterizer.measure_text(is_mono, size_px, &s.text);
+            w += rasterizer.measure_text_font(font, size_px, &s.text);
         }
         w
     }
@@ -80,7 +76,7 @@ impl CpuHudRenderer {
     fn draw_spans(
         canvas: &mut CpuCanvas<'_>,
         rasterizer: &mut TextRasterizer,
-        is_mono: bool,
+        font: FontFamily,
         size_logical: f32,
         start_x: f32,
         baseline_y: f32,
@@ -88,11 +84,11 @@ impl CpuHudRenderer {
     ) {
         let mut pen_x = start_x;
         for span in spans {
-            pen_x = canvas.draw_text(
+            pen_x = canvas.draw_text_font(
                 rasterizer,
                 pen_x,
                 baseline_y,
-                is_mono,
+                font,
                 size_logical,
                 span.color,
                 &span.text,
@@ -236,7 +232,7 @@ impl CpuHudRenderer {
         store: &UiStore,
         eff_scale: f32,
     ) -> (f32, f32, HudCardLayout) {
-        let is_mono = Self::is_mono_font(store.config.font_family);
+        let font = store.config.font_family;
         let font_size =
             (store.config.font_size_px.clamp(11.0, 36.0) * 0.72 * eff_scale).clamp(9.0, 48.0);
         let line_h = (font_size * 1.38).ceil();
@@ -257,7 +253,7 @@ impl CpuHudRenderer {
             ArrangementMode::Stack | ArrangementMode::Double
         ) {
             for (cat, _) in &groups {
-                let pw = rasterizer.measure_text(is_mono, font_size, category_label(*cat));
+                let pw = rasterizer.measure_text_font(font, font_size, category_label(*cat));
                 prefix_col_w = prefix_col_w.max(pw);
             }
             if prefix_col_w > 0.0 {
@@ -275,7 +271,7 @@ impl CpuHudRenderer {
                         text: category_label(*cat).to_string(),
                         color: category_color_rgba(*cat, &store.config, alpha),
                     });
-                    let cells = build_tabular_cells(rasterizer, is_mono, font_size, store, ms, alpha);
+                    let cells = build_tabular_cells(rasterizer, font, font_size, store, ms, alpha);
                     update_col_widths(&mut left_col_widths, &cells);
                     lines.push(MeasuredLine {
                         prefix,
@@ -292,7 +288,7 @@ impl CpuHudRenderer {
                         text: category_label(*cat).to_string(),
                         color: category_color_rgba(*cat, &store.config, alpha),
                     });
-                    let cells = build_tabular_cells(rasterizer, is_mono, font_size, store, ms, alpha);
+                    let cells = build_tabular_cells(rasterizer, font, font_size, store, ms, alpha);
                     update_col_widths(&mut left_col_widths, &cells);
                     lines.push(MeasuredLine {
                         prefix,
@@ -305,7 +301,7 @@ impl CpuHudRenderer {
                         text: category_label(*cat).to_string(),
                         color: category_color_rgba(*cat, &store.config, alpha),
                     });
-                    let cells = build_tabular_cells(rasterizer, is_mono, font_size, store, ms, alpha);
+                    let cells = build_tabular_cells(rasterizer, font, font_size, store, ms, alpha);
                     update_col_widths(&mut right_col_widths, &cells);
                     right_lines.push(MeasuredLine {
                         prefix,
@@ -332,7 +328,7 @@ impl CpuHudRenderer {
                     }
                     all_spans.extend(build_group_spans_inline(store, *cat, ms, alpha));
                 }
-                let w = Self::measure_spans(rasterizer, is_mono, font_size, &all_spans);
+                let w = Self::measure_spans(rasterizer, font, font_size, &all_spans);
                 lines.push(MeasuredLine {
                     prefix: None,
                     cells: vec![MeasuredCell {
@@ -350,7 +346,7 @@ impl CpuHudRenderer {
                 text,
                 color: rgba_u32(255, 95, 95, 255),
             }];
-            let w = Self::measure_spans(rasterizer, is_mono, font_size, &spans);
+            let w = Self::measure_spans(rasterizer, font, font_size, &spans);
             lines.push(MeasuredLine {
                 prefix: None,
                 cells: vec![MeasuredCell { spans, width: w }],
@@ -391,7 +387,7 @@ impl CpuHudRenderer {
             box_w,
             box_h,
             HudCardLayout {
-                is_mono,
+                font,
                 font_size,
                 line_h,
                 pad_x,
@@ -529,7 +525,7 @@ impl CpuHudRenderer {
 }
 
 struct HudCardLayout {
-    is_mono: bool,
+    font: FontFamily,
     font_size: f32,
     line_h: f32,
     pad_x: f32,
@@ -558,11 +554,11 @@ fn paint_measured_line(
     col_widths: &[f32],
 ) {
     let mut x = if let Some(prefix) = &line.prefix {
-        canvas.draw_text(
+        canvas.draw_text_font(
             rasterizer,
             start_x,
             by,
-            layout.is_mono,
+            layout.font,
             layout.font_size,
             prefix.color,
             &prefix.text,
@@ -576,7 +572,7 @@ fn paint_measured_line(
         CpuHudRenderer::draw_spans(
             canvas,
             rasterizer,
-            layout.is_mono,
+            layout.font,
             layout.font_size,
             x,
             by,
@@ -647,7 +643,7 @@ const fn clean_tabular_prefix(metric: MetricType) -> Option<&'static str> {
 
 fn build_tabular_cells(
     rasterizer: &mut TextRasterizer,
-    is_mono: bool,
+    font: FontFamily,
     font_size: f32,
     store: &UiStore,
     metrics: &[MetricType],
@@ -668,7 +664,7 @@ fn build_tabular_cells(
             text: val,
             color: val_col,
         });
-        let width = CpuHudRenderer::measure_spans(rasterizer, is_mono, font_size, &spans);
+        let width = CpuHudRenderer::measure_spans(rasterizer, font, font_size, &spans);
         cells.push(MeasuredCell { spans, width });
     }
     cells

@@ -295,6 +295,8 @@ pub enum FontFamily {
     MonoBold = 1,
     VeraMono = 2,
     AdwaitaMono = 3,
+    CondensedBold = 4,
+    ExtraBold = 5,
 }
 
 impl FontFamily {
@@ -305,6 +307,8 @@ impl FontFamily {
             Self::MonoBold => 1,
             Self::VeraMono => 2,
             Self::AdwaitaMono => 3,
+            Self::CondensedBold => 4,
+            Self::ExtraBold => 5,
         }
     }
 
@@ -314,6 +318,8 @@ impl FontFamily {
             1 => Self::MonoBold,
             2 => Self::VeraMono,
             3 => Self::AdwaitaMono,
+            4 => Self::CondensedBold,
+            5 => Self::ExtraBold,
             _ => Self::SansBold,
         }
     }

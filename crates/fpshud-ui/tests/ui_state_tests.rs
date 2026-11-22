@@ -146,7 +146,7 @@ fn dashboard_layout_and_popover_geometry_helpers() {
     assert_eq!(POSITION_OPTIONS.len(), 7);
     assert_eq!(ARRANGEMENT_OPTIONS.len(), 3);
     assert_eq!(SCALE_OPTIONS.len(), 7);
-    assert_eq!(FONT_OPTIONS.len(), 2);
+    assert_eq!(FONT_OPTIONS.len(), 5);
     assert_eq!(FONT_SIZE_OPTIONS.len(), 10);
     assert_eq!(TEXT_OPACITY_PCTS.len(), 5);
     assert_eq!(BG_STYLE_OPTIONS.len(), 3);

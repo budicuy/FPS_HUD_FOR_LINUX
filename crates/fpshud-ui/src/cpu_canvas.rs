@@ -3,6 +3,7 @@
 //! Used by both `CpuHudRenderer` (compact bounding-box HUD) and `CpuDashboard` (3-column Settings UI).
 
 use crate::state::rgba_u32;
+use fpshud_core::FontFamily;
 use fpshud_telemetry::TelemetrySnapshot;
 use std::collections::HashMap;
 use swash::FontRef;
@@ -10,9 +11,15 @@ use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
 
 pub const OPEN_SANS_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/OpenSans-Bold.ttf");
+pub const OPEN_SANS_CONDENSED_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/OpenSans-CondensedBold.ttf");
+pub const OPEN_SANS_EXTRA_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/OpenSans-ExtraBold.ttf");
 pub const VERA_MONO_BOLD_TTF: &[u8] = include_bytes!("../../../assets/fonts/VeraMono-Bold.ttf");
+pub const DEJAVU_MONO_BOLD_TTF: &[u8] =
+    include_bytes!("../../../assets/fonts/DejaVuSansMono-Bold.ttf");
 
-/// Validates that embedded TTF font blobs carry recognized SFNT / OpenType headers.
+/// Validates that all 5 embedded TTF font blobs carry recognized SFNT / OpenType headers.
 #[must_use]
 pub fn validate_embedded_font_headers() -> bool {
     let valid_sfnt = |bytes: &[u8]| -> bool {
@@ -24,7 +31,11 @@ pub fn validate_embedded_font_headers() -> bool {
             [0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"true" | b"ttcf"
         )
     };
-    valid_sfnt(OPEN_SANS_BOLD_TTF) && valid_sfnt(VERA_MONO_BOLD_TTF)
+    valid_sfnt(OPEN_SANS_BOLD_TTF)
+        && valid_sfnt(OPEN_SANS_CONDENSED_BOLD_TTF)
+        && valid_sfnt(OPEN_SANS_EXTRA_BOLD_TTF)
+        && valid_sfnt(VERA_MONO_BOLD_TTF)
+        && valid_sfnt(DEJAVU_MONO_BOLD_TTF)
 }
 
 /// Axis-aligned rectangle in logical UI coordinates.
@@ -89,7 +100,7 @@ pub(crate) struct CachedGlyph {
 /// Shared stateful `swash` glyph rasterizer & bitmap cache.
 pub struct TextRasterizer {
     scale_ctx: ScaleContext,
-    glyph_cache: HashMap<(bool, u16, char), CachedGlyph>,
+    glyph_cache: HashMap<(u8, u16, char), CachedGlyph>,
 }
 
 impl Default for TextRasterizer {
@@ -108,17 +119,30 @@ impl TextRasterizer {
     }
 
     #[must_use]
-    fn font_bytes(is_mono: bool) -> &'static [u8] {
-        if is_mono {
-            VERA_MONO_BOLD_TTF
-        } else {
-            OPEN_SANS_BOLD_TTF
+    pub(crate) const fn font_id(family: FontFamily) -> u8 {
+        match family {
+            FontFamily::SansBold => 0,
+            FontFamily::CondensedBold => 1,
+            FontFamily::ExtraBold => 2,
+            FontFamily::VeraMono => 3,
+            FontFamily::MonoBold | FontFamily::AdwaitaMono => 4,
         }
     }
 
-    pub(crate) fn get_glyph(&mut self, is_mono: bool, size_px: f32, ch: char) -> CachedGlyph {
+    #[must_use]
+    fn font_bytes_by_id(id: u8) -> &'static [u8] {
+        match id {
+            1 => OPEN_SANS_CONDENSED_BOLD_TTF,
+            2 => OPEN_SANS_EXTRA_BOLD_TTF,
+            3 => VERA_MONO_BOLD_TTF,
+            4 => DEJAVU_MONO_BOLD_TTF,
+            _ => OPEN_SANS_BOLD_TTF,
+        }
+    }
+
+    pub(crate) fn get_glyph_by_id(&mut self, font_id: u8, size_px: f32, ch: char) -> CachedGlyph {
         let size_key = (size_px.clamp(6.0, 96.0) * 4.0).round() as u16;
-        let key = (is_mono, size_key, ch);
+        let key = (font_id, size_key, ch);
         if let Some(cached) = self.glyph_cache.get(&key) {
             return cached.clone();
         }
@@ -136,7 +160,7 @@ impl TextRasterizer {
             alpha: Vec::new(),
         };
 
-        if let Some(font) = FontRef::from_index(Self::font_bytes(is_mono), 0) {
+        if let Some(font) = FontRef::from_index(Self::font_bytes_by_id(font_id), 0) {
             let gid = font.charmap().map(ch);
             let metrics = font.glyph_metrics(&[]).scale(actual_size);
             out.advance = metrics.advance_width(gid).max(actual_size * 0.25);
@@ -166,7 +190,8 @@ impl TextRasterizer {
     /// Returns `(ascent, descent, line_height)` in logical pixels for the given font size.
     #[must_use]
     pub fn line_metrics(&self, is_mono: bool, size_px: f32) -> (f32, f32, f32) {
-        if let Some(font) = FontRef::from_index(Self::font_bytes(is_mono), 0) {
+        let id = if is_mono { 3 } else { 0 };
+        if let Some(font) = FontRef::from_index(Self::font_bytes_by_id(id), 0) {
             let m = font.metrics(&[]).scale(size_px.clamp(6.0, 96.0));
             let ascent = m.ascent.max(size_px * 0.72);
             let descent = m.descent.abs().max(size_px * 0.18);
@@ -176,13 +201,27 @@ impl TextRasterizer {
         (size_px * 0.8, size_px * 0.2, size_px * 1.2)
     }
 
-    /// Measures horizontal advance width of `text` in logical pixels.
-    pub fn measure_text(&mut self, is_mono: bool, size_px: f32, text: &str) -> f32 {
+    /// Measures horizontal advance width of `text` in logical pixels for any `FontFamily`.
+    pub fn measure_text_font(&mut self, family: FontFamily, size_px: f32, text: &str) -> f32 {
+        let id = Self::font_id(family);
         let mut width = 0.0_f32;
         for ch in text.chars() {
-            width += self.get_glyph(is_mono, size_px, ch).advance;
+            width += self.get_glyph_by_id(id, size_px, ch).advance;
         }
         width
+    }
+
+    /// Measures horizontal advance width of `text` in logical pixels.
+    pub fn measure_text(&mut self, is_mono: bool, size_px: f32, text: &str) -> f32 {
+        self.measure_text_font(
+            if is_mono {
+                FontFamily::VeraMono
+            } else {
+                FontFamily::SansBold
+            },
+            size_px,
+            text,
+        )
     }
 }
 
@@ -489,12 +528,12 @@ impl<'a> CpuCanvas<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_text(
+    pub fn draw_text_font(
         &mut self,
         rasterizer: &mut TextRasterizer,
         x_logical: f32,
         baseline_y_logical: f32,
-        is_mono: bool,
+        family: FontFamily,
         size_logical: f32,
         color: u32,
         text: &str,
@@ -507,9 +546,10 @@ impl<'a> CpuCanvas<'a> {
         let size_px = (size_logical * self.scale).clamp(6.0, 96.0);
         let mut pen_x_px = x_logical * self.scale;
         let baseline_px = baseline_y_logical * self.scale;
+        let fid = TextRasterizer::font_id(family);
 
         for ch in text.chars() {
-            let glyph = rasterizer.get_glyph(is_mono, size_px, ch);
+            let glyph = rasterizer.get_glyph_by_id(fid, size_px, ch);
             if glyph.width > 0 && glyph.height > 0 {
                 let gx0 = pen_x_px.round() as i32 + glyph.left;
                 let gy0 = baseline_px.round() as i32 - glyph.top;
@@ -538,6 +578,32 @@ impl<'a> CpuCanvas<'a> {
             pen_x_px += glyph.advance;
         }
         pen_x_px / self.scale
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text(
+        &mut self,
+        rasterizer: &mut TextRasterizer,
+        x_logical: f32,
+        baseline_y_logical: f32,
+        is_mono: bool,
+        size_logical: f32,
+        color: u32,
+        text: &str,
+    ) -> f32 {
+        self.draw_text_font(
+            rasterizer,
+            x_logical,
+            baseline_y_logical,
+            if is_mono {
+                FontFamily::VeraMono
+            } else {
+                FontFamily::SansBold
+            },
+            size_logical,
+            color,
+            text,
+        )
     }
 
     /// Draws vertically centered text inside `rect`, optionally horizontally centered, clipped to `rect`.
