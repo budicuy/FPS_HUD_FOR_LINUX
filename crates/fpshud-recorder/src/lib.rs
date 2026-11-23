@@ -8,3 +8,4 @@ pub mod pacer;
 pub mod player;
 pub mod probe;
 pub mod session;
+pub mod yuv;

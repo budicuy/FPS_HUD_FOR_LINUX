@@ -1,4 +1,5 @@
 use crate::locate::bundled_ffmpeg_command;
+use crate::yuv::PlayerColorSpace;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ pub struct ParsedMediaMeta {
     pub fps: f32,
     pub video_codec: String,
     pub audio_codec: Option<String>,
+    pub color_space: PlayerColorSpace,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +90,29 @@ pub fn parse_ffmpeg_probe_output(stderr: &str) -> ParsedMediaMeta {
                         meta.fps = fps;
                     }
                 }
+                let lower_vid = after_vid.to_ascii_lowercase();
+                let is_full_range = lower_vid.contains("yuvj")
+                    || lower_vid.contains("(pc,")
+                    || lower_vid.contains("(pc)")
+                    || lower_vid.contains(" pc,")
+                    || lower_vid.contains(" pc)");
+                let explicit_bt601 = lower_vid.contains("bt470bg")
+                    || lower_vid.contains("smpte170m")
+                    || lower_vid.contains("bt601");
+                let explicit_bt709 = lower_vid.contains("bt709");
+                let is_bt709 = if explicit_bt709 {
+                    true
+                } else if explicit_bt601 {
+                    false
+                } else {
+                    meta.height >= 720
+                };
+                meta.color_space = match (is_bt709, is_full_range) {
+                    (true, false) => PlayerColorSpace::Bt709Limited,
+                    (true, true) => PlayerColorSpace::Bt709Full,
+                    (false, false) => PlayerColorSpace::Bt601Limited,
+                    (false, true) => PlayerColorSpace::Bt601Full,
+                };
             }
         } else if trimmed.starts_with("Stream #")
             && trimmed.contains("Audio:")
