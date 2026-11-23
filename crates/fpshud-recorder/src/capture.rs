@@ -135,7 +135,7 @@ pub fn convert_frame_to_rgba8(
         RecorderPixelFormat::A2B10G10R10 | RecorderPixelFormat::A2R10G10B10 => {
             let pq = (transfer == ColorTransfer::PqHdr10).then(pq_10bit_lut);
             let swap_rb = fmt == RecorderPixelFormat::A2R10G10B10;
-            for (i, chunk) in src.chunks_exact(4).take(pixel_count).enumerate() {
+            for (i, chunk) in src.as_chunks::<4>().0.iter().take(pixel_count).enumerate() {
                 let v = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                 let c0 = (v & 0x3FF) as usize;
                 let c1 = ((v >> 10) & 0x3FF) as usize;
@@ -155,7 +155,7 @@ pub fn convert_frame_to_rgba8(
         }
         RecorderPixelFormat::R16G16B16A16Sfloat => {
             let lut = fp16_sdr_lut();
-            for (i, chunk) in src.chunks_exact(8).take(pixel_count).enumerate() {
+            for (i, chunk) in src.as_chunks::<8>().0.iter().take(pixel_count).enumerate() {
                 let r = lut[usize::from(u16::from_le_bytes([chunk[0], chunk[1]]))];
                 let g = lut[usize::from(u16::from_le_bytes([chunk[2], chunk[3]]))];
                 let b = lut[usize::from(u16::from_le_bytes([chunk[4], chunk[5]]))];

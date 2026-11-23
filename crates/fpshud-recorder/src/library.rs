@@ -94,7 +94,7 @@ pub fn parse_ffmpeg_probe_output(stderr: &str) -> ParsedMediaMeta {
             && meta.audio_codec.is_none()
             && let Some((_, after_aud)) = trimmed.split_once("Audio:")
             && let Some(codec_field) = after_aud.split(',').next()
-            && let Some(codec) = codec_field.trim().split_whitespace().next()
+            && let Some(codec) = codec_field.split_whitespace().next()
             && !codec.is_empty()
         {
             meta.audio_codec = Some(codec.to_string());
@@ -175,7 +175,7 @@ pub fn scan_recordings_dir(
         candidates.push((mtime, p));
     }
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     candidates
         .into_iter()

@@ -414,10 +414,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for OverlayState {
                 };
                 state.key_events.push(OverlayKeyEvent::Key { code: key, down });
             }
-            wl_keyboard::Event::Leave { .. } => {
-                if !state.is_xdg_fallback {
-                    state.closed = true;
-                }
+            wl_keyboard::Event::Leave { .. } if !state.is_xdg_fallback => {
+                state.closed = true;
             }
             _ => {}
         }

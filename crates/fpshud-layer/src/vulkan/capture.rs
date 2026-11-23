@@ -84,6 +84,7 @@ impl Default for FrameCaptureStaging {
 }
 
 impl FrameCaptureStaging {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn ensure_allocated(
         &mut self,
         device: &ash::Device,
@@ -461,6 +462,7 @@ impl RecorderCaptureRing {
         self.pix_fmt = None;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn ensure_allocated(
         &mut self,
         device: &ash::Device,

@@ -312,8 +312,19 @@ dependencies = [
  "fpshud-core",
  "fpshud-input",
  "fpshud-ipc",
+ "fpshud-recorder",
  "fpshud-screenshot",
  "glow",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
+name = "fpshud-recorder"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "fpshud-core",
  "libc",
  "tempfile",
 ]
@@ -362,6 +373,7 @@ dependencies = [
  "fpshud-core",
  "fpshud-input",
  "fpshud-ipc",
+ "fpshud-recorder",
  "fpshud-telemetry",
  "fpshud-ui",
  "rustix",
