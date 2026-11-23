@@ -11,7 +11,7 @@ use fpshud_ipc::protocol::{
 use fpshud_ipc::{IpcClient, IpcConnection, ShmRingWriter};
 use fpshud_recorder::library::{delete_recording_safe, scan_recordings_dir};
 use fpshud_recorder::locate::locate_bundled_ffmpeg;
-use fpshud_recorder::player::{PlayerFrame, VideoPlayerSession};
+use fpshud_recorder::player::{PlayerFrame, PlayerOutputMode, VideoPlayerSession};
 use fpshud_telemetry::{SensorPollMask, TelemetryCollector, TelemetrySnapshot};
 use fpshud_ui::cpu_canvas::TextRasterizer;
 use fpshud_ui::cpu_dashboard::CpuDashboard;
@@ -131,6 +131,23 @@ fn send_ui_msg(
     Ok(())
 }
 
+const FULLSCREEN_HUD_HIDE_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[must_use]
+fn should_hide_fullscreen_controls(
+    fullscreen: bool,
+    playing: bool,
+    scrubbing: bool,
+    pointer_over_bars: bool,
+    idle_elapsed: Duration,
+) -> bool {
+    fullscreen
+        && playing
+        && !scrubbing
+        && !pointer_over_bars
+        && idle_elapsed >= FULLSCREEN_HUD_HIDE_TIMEOUT
+}
+
 struct DaemonState {
     config: HudConfig,
     telemetry: TelemetrySnapshot,
@@ -169,6 +186,10 @@ struct DaemonState {
     record_folder_picker_rx: Option<std::sync::mpsc::Receiver<String>>,
     player_session: Option<VideoPlayerSession>,
     player_frame_scratch: PlayerFrame,
+    last_player_interaction: Instant,
+    last_player_mouse_pos: Option<(f32, f32)>,
+    last_ui_displayed_sec: u64,
+    last_ui_player_state: (bool, bool, bool, bool, u32, u32),
 }
 
 impl DaemonState {
@@ -212,6 +233,10 @@ impl DaemonState {
             record_folder_picker_rx: None,
             player_session: None,
             player_frame_scratch: PlayerFrame::default(),
+            last_player_interaction: Instant::now(),
+            last_player_mouse_pos: None,
+            last_ui_displayed_sec: u64::MAX,
+            last_ui_player_state: (false, false, false, false, 0, 0),
         }
     }
 
@@ -421,7 +446,24 @@ impl DaemonState {
             }
             RecorderUiAction::OpenPlayer(path) => {
                 self.player_session = None;
-                match VideoPlayerSession::open(path) {
+                let use_external_plane = self
+                    .overlay_portal
+                    .as_ref()
+                    .is_some_and(WaylandOverlayPortal::supports_video_subsurface);
+                let mode = if use_external_plane {
+                    PlayerOutputMode::NativeYuv
+                } else {
+                    PlayerOutputMode::ViewportScaledYuv
+                };
+                if let Some(dash) = &mut self.dashboard {
+                    dash.store.player_ui.external_video_plane = use_external_plane;
+                    dash.store.player_ui.controls_visible = true;
+                    dash.store.player_ui.video_src_w = 0;
+                    dash.store.player_ui.video_src_h = 0;
+                }
+                self.last_player_interaction = Instant::now();
+                self.last_ui_displayed_sec = u64::MAX;
+                match VideoPlayerSession::open_with_mode(path, mode) {
                     Ok(sess) => {
                         self.player_session = Some(sess);
                     }
@@ -438,6 +480,8 @@ impl DaemonState {
                 self.player_frame_scratch.data.clear();
                 self.player_frame_scratch.data.shrink_to_fit();
                 if let Some(portal) = &mut self.overlay_portal {
+                    portal.destroy_video_plane();
+                    portal.set_cursor_hidden(false);
                     portal.set_fullscreen(false);
                 }
                 self.overlay_dirty.mark_dirty();
@@ -467,8 +511,22 @@ impl DaemonState {
                     .dashboard
                     .as_ref()
                     .is_some_and(CpuDashboard::is_player_fullscreen);
+                self.last_player_interaction = Instant::now();
+                if let Some(dash) = &mut self.dashboard {
+                    dash.set_player_controls_visible(true);
+                }
                 if let Some(portal) = &mut self.overlay_portal {
+                    portal.set_cursor_hidden(false);
                     portal.set_fullscreen(fs);
+                    if let Some(dash) = &self.dashboard
+                        && let Some(rect) = dash.compute_player_fitted_video_rect_px(
+                            self.overlay_size.0,
+                            self.overlay_size.1,
+                            self.config.gui_scale,
+                        )
+                    {
+                        portal.update_video_geometry(rect);
+                    }
                 }
                 self.overlay_dirty.mark_dirty();
             }
@@ -533,7 +591,10 @@ impl DaemonState {
             self.trigger_async_recordings_scan();
         }
 
-        // 3. Drain pending RecorderUiActions from dashboard
+        // 3. Flush debounced 250 ms single-click VideoArea -> PlayerTogglePlay, then drain actions
+        if let Some(dash) = &mut self.dashboard {
+            let _ = dash.flush_pending_video_click();
+        }
         let actions = self
             .dashboard
             .as_mut()
@@ -543,10 +604,47 @@ impl DaemonState {
             self.handle_recorder_ui_action(act, Some(conn))?;
         }
 
-        // 4. Pump active VideoPlayerSession frames & snapshot
+        // 4. Evaluate 2.0s Haruna-style fullscreen auto-hide for controls & OS cursor
+        if let Some(dash) = &mut self.dashboard
+            && dash.store.player_ui.open
+        {
+            let fs = dash.store.player_ui.fullscreen;
+            let playing = dash.store.player_ui.playing;
+            let scrubbing = dash.store.player_ui.scrub_preview_sec.is_some();
+            let over_bars = dash.is_pointer_over_player_bars(
+                self.overlay_size.0,
+                self.overlay_size.1,
+                self.config.gui_scale,
+            );
+            let hide = should_hide_fullscreen_controls(
+                fs,
+                playing,
+                scrubbing,
+                over_bars,
+                self.last_player_interaction.elapsed(),
+            );
+            let target_visible = !hide;
+            if dash.set_player_controls_visible(target_visible) {
+                if let Some(portal) = &mut self.overlay_portal {
+                    portal.set_cursor_hidden(hide);
+                }
+                if self.overlay_portal.is_some() {
+                    self.overlay_dirty.mark_dirty();
+                } else {
+                    self.scheduler.mark_dirty();
+                }
+            }
+        }
+
+        // 5. Pump active VideoPlayerSession frames & snapshot
         if let Some(ref sess) = self.player_session {
             let snap = sess.snapshot();
             let got_frame = sess.take_latest_frame(&mut self.player_frame_scratch);
+            let mut external_plane = false;
+            let mut controls_visible = true;
+            let mut fitted_rect = None;
+            let mut ui_state_changed = false;
+
             if let Some(dash) = &mut self.dashboard {
                 let p = &mut dash.store.player_ui;
                 p.playing = snap.playing;
@@ -555,8 +653,34 @@ impl DaemonState {
                 p.has_audio = snap.has_audio;
                 p.duration_sec = snap.duration_sec;
                 p.current_sec = snap.current_sec;
-                p.error = snap.error;
-                if got_frame {
+                p.error = snap.error.clone();
+                if snap.src_width > 0 && snap.src_height > 0 {
+                    p.video_src_w = snap.src_width;
+                    p.video_src_h = snap.src_height;
+                }
+                external_plane = p.external_video_plane;
+                controls_visible = !p.fullscreen || p.controls_visible;
+
+                let cur_state = (
+                    p.playing,
+                    p.at_eof,
+                    p.muted,
+                    p.has_audio,
+                    p.video_src_w,
+                    p.video_src_h,
+                );
+                if cur_state != self.last_ui_player_state {
+                    self.last_ui_player_state = cur_state;
+                    ui_state_changed = true;
+                }
+
+                if external_plane {
+                    fitted_rect = dash.compute_player_fitted_video_rect_px(
+                        self.overlay_size.0,
+                        self.overlay_size.1,
+                        self.config.gui_scale,
+                    );
+                } else if got_frame {
                     fpshud_recorder::yuv::yuv_frame_to_rgba(
                         self.player_frame_scratch.width,
                         self.player_frame_scratch.height,
@@ -569,9 +693,27 @@ impl DaemonState {
                     p.frame_h = self.player_frame_scratch.height;
                 }
             }
-            if got_frame {
+
+            if external_plane {
+                let mut parent_needs_commit = ui_state_changed;
+                if got_frame
+                    && let (Some(portal), Some(rect)) = (&mut self.overlay_portal, fitted_rect)
+                    && let Ok(outcome) =
+                        portal.present_video_frame(&self.player_frame_scratch, rect)
+                    && outcome.parent_needs_commit
+                {
+                    parent_needs_commit = true;
+                }
+                let disp_sec = snap.current_sec.max(0.0).floor() as u64;
+                if controls_visible && disp_sec != self.last_ui_displayed_sec {
+                    self.last_ui_displayed_sec = disp_sec;
+                    parent_needs_commit = true;
+                }
+                if parent_needs_commit {
+                    self.overlay_dirty.mark_dirty();
+                }
+            } else if got_frame || ui_state_changed {
                 if self.overlay_portal.is_some() {
-                    // Wayland: ONLY mark overlay_dirty (never scheduler.mark_dirty!)
                     self.overlay_dirty.mark_dirty();
                 } else {
                     self.scheduler.mark_dirty();
@@ -952,7 +1094,53 @@ impl DaemonState {
         }
         if let Some((rw, rh)) = poll.resized {
             self.overlay_size = (rw, rh);
+            if let (Some(portal), Some(dash)) = (&mut self.overlay_portal, &self.dashboard)
+                && let Some(rect) =
+                    dash.compute_player_fitted_video_rect_px(rw, rh, self.config.gui_scale)
+            {
+                portal.update_video_geometry(rect);
+            }
             self.overlay_dirty.mark_dirty();
+        }
+
+        // Wake fullscreen controls & OS cursor on real player input activity
+        let player_open = self
+            .dashboard
+            .as_ref()
+            .is_some_and(|d| d.store.player_ui.open);
+        if player_open {
+            let mut woke = !poll.key_events.is_empty();
+            for ev in &poll.ui_events {
+                match *ev {
+                    UiInputEvent::MouseMove { x, y } => {
+                        let moved = self
+                            .last_player_mouse_pos
+                            .is_none_or(|(px, py)| (x - px).abs() > 1.0 || (y - py).abs() > 1.0);
+                        self.last_player_mouse_pos = Some((x, y));
+                        if moved {
+                            woke = true;
+                        }
+                    }
+                    UiInputEvent::MouseDown { .. }
+                    | UiInputEvent::MouseUp { .. }
+                    | UiInputEvent::ScrollWheel { .. }
+                    | UiInputEvent::KeyDown { .. } => {
+                        woke = true;
+                    }
+                    UiInputEvent::KeyUp { .. } => {}
+                }
+            }
+            if woke {
+                self.last_player_interaction = Instant::now();
+                if let Some(dash) = &mut self.dashboard
+                    && dash.set_player_controls_visible(true)
+                {
+                    if let Some(portal) = &mut self.overlay_portal {
+                        portal.set_cursor_hidden(false);
+                    }
+                    self.overlay_dirty.mark_dirty();
+                }
+            }
         }
 
         let mut all_ui_events = poll.ui_events;
@@ -1710,5 +1898,22 @@ mod tests {
             down: true,
         }]);
         assert!(outgoing.contains(&UiToLayerMsg::ToggleRecord));
+    }
+}
+
+#[cfg(test)]
+mod gpu_player_loop_tests {
+    use super::*;
+
+    #[test]
+    fn test_fullscreen_auto_hide_policy() {
+        let t1 = Duration::from_millis(1900);
+        let t2 = Duration::from_secs(2);
+        assert!(!should_hide_fullscreen_controls(false, true, false, false, t2));
+        assert!(!should_hide_fullscreen_controls(true, false, false, false, t2));
+        assert!(!should_hide_fullscreen_controls(true, true, true, false, t2));
+        assert!(!should_hide_fullscreen_controls(true, true, false, true, t2));
+        assert!(!should_hide_fullscreen_controls(true, true, false, false, t1));
+        assert!(should_hide_fullscreen_controls(true, true, false, false, t2));
     }
 }
