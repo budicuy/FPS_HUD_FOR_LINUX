@@ -73,6 +73,7 @@ pub struct OverlayPollResult {
     pub ui_events: Vec<UiInputEvent>,
     pub key_events: Vec<OverlayKeyEvent>,
     pub resized: Option<(u32, u32)>,
+    pub pointer_left: bool,
     pub closed: bool,
 }
 
@@ -117,6 +118,8 @@ struct OverlayState {
     size: (u32, u32),
     pending_xdg_size: (u32, u32),
     resized: Option<(u32, u32)>,
+    pointer_left: bool,
+    is_xdg_fallback: bool,
     closed: bool,
 
     buffer_generation: u64,
@@ -142,6 +145,8 @@ impl OverlayState {
             size: (DEFAULT_FALLBACK_W, DEFAULT_FALLBACK_H),
             pending_xdg_size: (0, 0),
             resized: None,
+            pointer_left: false,
+            is_xdg_fallback: false,
             closed: false,
             buffer_generation: 0,
             buffer_busy: [false; 3],
@@ -373,6 +378,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for OverlayState {
                     _ => {}
                 }
             }
+            wl_pointer::Event::Leave { .. } => {
+                state.pointer_left = true;
+            }
             _ => {}
         }
     }
@@ -407,7 +415,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for OverlayState {
                 state.key_events.push(OverlayKeyEvent::Key { code: key, down });
             }
             wl_keyboard::Event::Leave { .. } => {
-                state.closed = true;
+                if !state.is_xdg_fallback {
+                    state.closed = true;
+                }
             }
             _ => {}
         }
@@ -666,6 +676,7 @@ impl WaylandOverlayPortal {
             surface.commit();
             OverlayRole::LayerSurface(ls)
         } else if let Some(wm_base) = state.xdg_wm_base.clone() {
+            state.is_xdg_fallback = true;
             let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg_surface.get_toplevel(&qh, ());
             toplevel.set_title("FPSHUD Settings".to_string());
@@ -754,7 +765,20 @@ impl WaylandOverlayPortal {
             ui_events: std::mem::take(&mut self.state.ui_events),
             key_events: std::mem::take(&mut self.state.key_events),
             resized: self.state.resized.take(),
+            pointer_left: std::mem::take(&mut self.state.pointer_left),
             closed: self.state.closed,
+        }
+    }
+
+    pub fn set_fullscreen(&mut self, fullscreen: bool) {
+        if let OverlayRole::XdgToplevel { ref toplevel, .. } = self.role {
+            if fullscreen {
+                toplevel.set_fullscreen(None);
+            } else {
+                toplevel.unset_fullscreen();
+            }
+            self.surface.commit();
+            let _ = self.conn.flush();
         }
     }
 

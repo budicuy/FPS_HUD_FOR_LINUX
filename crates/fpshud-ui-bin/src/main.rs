@@ -4,13 +4,18 @@ use anyhow::{Context, Result};
 use fpshud_core::HudConfig;
 use fpshud_input::keycodes::KEY_ESC;
 use fpshud_input::{InputAction, InputManager, KeybindTarget, UiInputEvent};
-use fpshud_ipc::protocol::{FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, UiToLayerMsg};
+use fpshud_ipc::protocol::{
+    FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, RecorderStatusSnapshot, UiToLayerMsg,
+};
 use fpshud_ipc::{IpcClient, IpcConnection, ShmRingWriter};
+use fpshud_recorder::library::{delete_recording_safe, scan_recordings_dir};
+use fpshud_recorder::locate::locate_bundled_ffmpeg;
+use fpshud_recorder::player::{PlayerFrame, VideoPlayerSession};
 use fpshud_telemetry::{SensorPollMask, TelemetryCollector, TelemetrySnapshot};
 use fpshud_ui::cpu_canvas::TextRasterizer;
 use fpshud_ui::cpu_dashboard::CpuDashboard;
 use fpshud_ui::cpu_hud::CpuHudRenderer;
-use fpshud_ui::state::UiRenderMode;
+use fpshud_ui::state::{RecorderUiAction, UiRecordingItem, UiRenderMode};
 use fpshud_ui::toast::ToastState;
 use fpshud_ui::UiStore;
 use std::io;
@@ -155,6 +160,14 @@ struct DaemonState {
     overlay_size: (u32, u32),
     external_overlay_reported: bool,
     last_overlay_telemetry_draw: Instant,
+
+    // Screen Recorder & Built-in Video Player state
+    recorder_status: RecorderStatusSnapshot,
+    bundled_ffmpeg: Option<PathBuf>,
+    recordings_scan_rx: Option<std::sync::mpsc::Receiver<Vec<UiRecordingItem>>>,
+    record_folder_picker_rx: Option<std::sync::mpsc::Receiver<String>>,
+    player_session: Option<VideoPlayerSession>,
+    player_frame_scratch: PlayerFrame,
 }
 
 impl DaemonState {
@@ -192,6 +205,12 @@ impl DaemonState {
             overlay_size: (1280, 720),
             external_overlay_reported: false,
             last_overlay_telemetry_draw: Instant::now(),
+            recorder_status: RecorderStatusSnapshot::default(),
+            bundled_ffmpeg: locate_bundled_ffmpeg(),
+            recordings_scan_rx: None,
+            record_folder_picker_rx: None,
+            player_session: None,
+            player_frame_scratch: PlayerFrame::default(),
         }
     }
 
@@ -271,6 +290,9 @@ impl DaemonState {
     }
 
     fn release_dashboard_resources(&mut self) {
+        self.player_session = None;
+        self.player_frame_scratch.rgba.clear();
+        self.player_frame_scratch.rgba.shrink_to_fit();
         self.dashboard = None;
         self.overlay_rgba_scratch = Vec::new();
     }
@@ -298,7 +320,257 @@ impl DaemonState {
             dash.set_render_mode(mode);
             dash.set_software_cursor(mode == UiRenderMode::Full && self.software_cursor);
             dash.sync_all(self.config.clone(), self.telemetry.clone());
+            dash.store.recorder_status = self.recorder_status.clone();
+            dash.store.recorder_warning = if self.bundled_ffmpeg.is_none() {
+                Some("Bundled fpshud-ffmpeg not found — run scripts/install.sh".to_string())
+            } else {
+                None
+            };
         }
+    }
+
+    fn trigger_async_recordings_scan(&mut self) {
+        let Some(ffmpeg_bin) = self.bundled_ffmpeg.clone() else {
+            return;
+        };
+        let dir = self.config.resolved_record_dir();
+        let active_path = self.recorder_status.active_output_path.clone().map(PathBuf::from);
+        if let Some(dash) = &mut self.dashboard {
+            dash.store.recordings_loading = true;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.recordings_scan_rx = Some(rx);
+        let _ = std::thread::Builder::new()
+            .name("fpshud_scan".to_string())
+            .spawn(move || {
+                let entries = scan_recordings_dir(&ffmpeg_bin, &dir, active_path.as_deref());
+                let items: Vec<UiRecordingItem> = entries
+                    .into_iter()
+                    .map(|e| UiRecordingItem {
+                        path: e.path,
+                        file_name: e.file_name,
+                        duration_sec: e.duration_sec,
+                        size_bytes: e.size_bytes,
+                        width: e.width,
+                        height: e.height,
+                        fps: e.fps,
+                        video_codec: e.video_codec,
+                        audio_codec: e.audio_codec,
+                        in_progress: e.in_progress,
+                    })
+                    .collect();
+                let _ = tx.send(items);
+            });
+    }
+
+    fn handle_recorder_ui_action(
+        &mut self,
+        action: RecorderUiAction,
+        conn: Option<&mut IpcConnection>,
+    ) -> Result<()> {
+        match action {
+            RecorderUiAction::ChooseRecordFolder => {
+                if self.record_folder_picker_rx.is_none() {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.record_folder_picker_rx = Some(rx);
+                    let _ = std::thread::spawn(move || {
+                        let out = std::process::Command::new("zenity")
+                            .args(["--file-selection", "--directory", "--title=Select Recordings Folder"])
+                            .env_remove("LD_PRELOAD")
+                            .env_remove("VK_INSTANCE_LAYERS")
+                            .env("DISABLE_FPS_HUD", "1")
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                            .filter(|s| !s.is_empty());
+                        if let Some(dir) = out {
+                            let _ = tx.send(dir);
+                        }
+                    });
+                }
+            }
+            RecorderUiAction::OpenRecordFolder => {
+                let dir = self.config.resolved_record_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&dir)
+                    .env_remove("LD_PRELOAD")
+                    .env_remove("VK_INSTANCE_LAYERS")
+                    .env("DISABLE_FPS_HUD", "1")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+            RecorderUiAction::RefreshRecordings => {
+                self.trigger_async_recordings_scan();
+            }
+            RecorderUiAction::DeleteRecording(path) => {
+                let dir = self.config.resolved_record_dir();
+                match delete_recording_safe(&dir, &path) {
+                    Ok(()) => {
+                        self.push_toast("Recording deleted.".to_string());
+                        self.trigger_async_recordings_scan();
+                    }
+                    Err(err) => {
+                        self.push_toast(format!("Delete blocked: {err}"));
+                    }
+                }
+            }
+            RecorderUiAction::OpenPlayer(path) => {
+                self.player_session = None;
+                match VideoPlayerSession::open(path) {
+                    Ok(sess) => {
+                        self.player_session = Some(sess);
+                    }
+                    Err(err) => {
+                        if let Some(dash) = &mut self.dashboard {
+                            dash.store.player_ui.error = Some(err.to_string());
+                        }
+                    }
+                }
+                self.overlay_dirty.mark_dirty();
+            }
+            RecorderUiAction::ClosePlayer => {
+                self.player_session = None;
+                self.player_frame_scratch.rgba.clear();
+                self.player_frame_scratch.rgba.shrink_to_fit();
+                if let Some(portal) = &mut self.overlay_portal {
+                    portal.set_fullscreen(false);
+                }
+                self.overlay_dirty.mark_dirty();
+            }
+            RecorderUiAction::PlayerTogglePlay => {
+                if let Some(ref sess) = self.player_session {
+                    sess.toggle_play_pause();
+                }
+            }
+            RecorderUiAction::PlayerSeek(sec) => {
+                if let Some(ref sess) = self.player_session {
+                    sess.seek(sec);
+                }
+            }
+            RecorderUiAction::PlayerSeekRelative(delta) => {
+                if let Some(ref sess) = self.player_session {
+                    sess.seek_relative(delta);
+                }
+            }
+            RecorderUiAction::PlayerToggleMute => {
+                if let Some(ref sess) = self.player_session {
+                    sess.toggle_mute();
+                }
+            }
+            RecorderUiAction::PlayerToggleFullscreen => {
+                let fs = self
+                    .dashboard
+                    .as_ref()
+                    .is_some_and(CpuDashboard::is_player_fullscreen);
+                if let Some(portal) = &mut self.overlay_portal {
+                    portal.set_fullscreen(fs);
+                }
+                self.overlay_dirty.mark_dirty();
+            }
+            RecorderUiAction::PlayerResize(w, h) => {
+                if let Some(ref sess) = self.player_session {
+                    sess.set_viewport_size(w, h);
+                }
+            }
+            RecorderUiAction::OpenInSystemPlayer(path) => {
+                // Pause/stop internal player & close overlay GUI so Layer::Overlay does not cover external player
+                if let Some(ref sess) = self.player_session {
+                    sess.pause();
+                }
+                self.player_session = None;
+                if let Some(dash) = &mut self.dashboard {
+                    dash.store.close_player_modal();
+                }
+                self.config.gui_open = false;
+                if let Some(c) = conn {
+                    self.close_external_overlay(c)?;
+                    send_ui_msg(c, &UiToLayerMsg::ConfigUpdated(self.config.clone()), None, false)?;
+                }
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&path)
+                    .env_remove("LD_PRELOAD")
+                    .env_remove("VK_INSTANCE_LAYERS")
+                    .env("DISABLE_FPS_HUD", "1")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+        }
+        Ok(())
+    }
+
+    fn poll_recorder_and_player(&mut self, conn: &mut IpcConnection) -> Result<()> {
+        // 1. Drain background recordings scan results
+        if let Some(rx) = &self.recordings_scan_rx
+            && let Ok(items) = rx.try_recv()
+        {
+            self.recordings_scan_rx = None;
+            if let Some(dash) = &mut self.dashboard {
+                dash.store.recordings = items;
+                dash.store.recordings_loading = false;
+            }
+            self.overlay_dirty.mark_dirty();
+            if self.overlay_portal.is_none() {
+                self.scheduler.mark_dirty();
+            }
+        }
+
+        // 2. Drain background record folder picker
+        if let Some(rx) = &self.record_folder_picker_rx
+            && let Ok(dir) = rx.try_recv()
+        {
+            self.record_folder_picker_rx = None;
+            self.config.record_folder = dir;
+            let _ = fpshud_core::save_config_to_disk(&self.config);
+            send_ui_msg(conn, &UiToLayerMsg::ConfigUpdated(self.config.clone()), None, false)?;
+            self.sync_dashboard();
+            self.trigger_async_recordings_scan();
+        }
+
+        // 3. Drain pending RecorderUiActions from dashboard
+        let actions = self
+            .dashboard
+            .as_mut()
+            .map(|d| d.store.take_recorder_actions())
+            .unwrap_or_default();
+        for act in actions {
+            self.handle_recorder_ui_action(act, Some(conn))?;
+        }
+
+        // 4. Pump active VideoPlayerSession frames & snapshot
+        if let Some(ref sess) = self.player_session {
+            let snap = sess.snapshot();
+            let got_frame = sess.take_latest_frame(&mut self.player_frame_scratch);
+            if let Some(dash) = &mut self.dashboard {
+                let p = &mut dash.store.player_ui;
+                p.playing = snap.playing;
+                p.at_eof = snap.at_eof;
+                p.muted = snap.muted;
+                p.has_audio = snap.has_audio;
+                p.duration_sec = snap.duration_sec;
+                p.current_sec = snap.current_sec;
+                p.error = snap.error;
+                if got_frame {
+                    std::mem::swap(&mut p.frame_rgba, &mut self.player_frame_scratch.rgba);
+                    p.frame_w = self.player_frame_scratch.width;
+                    p.frame_h = self.player_frame_scratch.height;
+                }
+            }
+            if got_frame {
+                if self.overlay_portal.is_some() {
+                    // Wayland: ONLY mark overlay_dirty (never scheduler.mark_dirty!)
+                    self.overlay_dirty.mark_dirty();
+                } else {
+                    self.scheduler.mark_dirty();
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn apply_outgoing_msg(&mut self, msg: &UiToLayerMsg) {
@@ -468,7 +740,20 @@ impl DaemonState {
                 self.overlay_dirty.mark_dirty();
                 self.push_toast(text);
             }
-            LayerToUiMsg::RecorderStatusUpdate(_) => {}
+            LayerToUiMsg::RecorderStatusUpdate(status) => {
+                let was_rec = self.recorder_status.is_recording;
+                self.recorder_status = status;
+                if let Some(dash) = &mut self.dashboard {
+                    dash.store.recorder_status = self.recorder_status.clone();
+                }
+                if self.recorder_status.is_recording || was_rec {
+                    self.scheduler.mark_dirty();
+                    self.overlay_dirty.mark_dirty();
+                }
+                if was_rec && !self.recorder_status.is_recording {
+                    self.trigger_async_recordings_scan();
+                }
+            }
             LayerToUiMsg::Shutdown => return Ok(false),
         }
         Ok(true)
@@ -651,6 +936,12 @@ impl DaemonState {
             return Ok(true);
         }
 
+        if poll.pointer_left
+            && let Some(dash) = &mut self.dashboard
+        {
+            dash.cancel_active_drags();
+            self.overlay_dirty.mark_dirty();
+        }
         if let Some((rw, rh)) = poll.resized {
             self.overlay_size = (rw, rh);
             self.overlay_dirty.mark_dirty();
@@ -851,6 +1142,7 @@ impl DaemonState {
                 self.release_dashboard_resources();
             }
             let mut store = UiStore::new(self.config.clone(), self.telemetry.clone());
+            store.recorder_status = self.recorder_status.clone();
             store.elapsed_sec = self.started_at.elapsed().as_secs_f32();
             store.active_toast_text = self.active_toast_text.clone();
             store.active_toast_until_sec = self.active_toast_until_sec;
@@ -966,13 +1258,24 @@ fn run_daemon(args: DaemonArgs) -> Result<()> {
         }
 
         state.sync_external_overlay(&mut conn)?;
+        state.poll_recorder_and_player(&mut conn)?;
         let overlay_active = state.poll_and_render_external_overlay(&mut conn)?;
         state.poll_folder_picker(&mut conn)?;
         state.check_toast_expiry();
         state.render_if_dirty(&mut conn)?;
 
         if !received_any && !overlay_active {
-            let sleep_ms = if state.overlay_portal.is_some() { 4 } else { 25 };
+            let player_active = state
+                .player_session
+                .as_ref()
+                .is_some_and(|s| s.snapshot().playing);
+            let sleep_ms = if state.overlay_portal.is_some() {
+                4
+            } else if player_active {
+                10
+            } else {
+                25
+            };
             std::thread::sleep(Duration::from_millis(sleep_ms));
         }
     }
@@ -1344,5 +1647,62 @@ mod tests {
         let dash = state.dashboard.as_ref().unwrap();
         assert!(dash.open_dropdown().is_none());
         assert_eq!(dash.active_keybind_capture(), KeybindTarget::None);
+    }
+
+    #[test]
+    fn test_recorder_status_update_marks_in_game_dirty_even_when_hud_hidden() {
+        use fpshud_core::HudConfig;
+        use fpshud_ipc::protocol::{LayerToUiMsg, RecorderStatusSnapshot};
+
+        let mut st = crate::DaemonState::new_for_test_headless();
+        st.config = HudConfig {
+            hud_visible: false,
+            gui_open: false,
+            ..HudConfig::default()
+        };
+        let _ = st.scheduler.take_should_render();
+        st.handle_layer_msg(LayerToUiMsg::RecorderStatusUpdate(RecorderStatusSnapshot {
+            is_recording: true,
+            elapsed_sec: 3.0,
+            dropped_frames: 0,
+            active_backend: "NVENC H.264".to_string(),
+            active_output_path: None,
+        }))
+        .unwrap();
+        assert!(st.scheduler.take_should_render());
+    }
+
+    #[test]
+    fn test_open_in_system_player_closes_gui_overlay() {
+        use fpshud_core::HudConfig;
+        use fpshud_ui::state::RecorderUiAction;
+        use std::path::PathBuf;
+
+        let mut st = crate::DaemonState::new_for_test_headless();
+        st.config = HudConfig {
+            gui_open: true,
+            ..HudConfig::default()
+        };
+        st.handle_recorder_ui_action(
+            RecorderUiAction::OpenInSystemPlayer(PathBuf::from("/tmp/nonexistent_clip.mp4")),
+            None,
+        )
+        .unwrap();
+        assert!(!st.config.gui_open, "OpenInSystemPlayer must close overlay GUI");
+    }
+
+    #[test]
+    fn test_overlay_key_toggle_record_emits_ipc_toggle_record() {
+        use crate::wayland_overlay::OverlayKeyEvent;
+        use fpshud_input::keycodes::KEY_F8;
+        use fpshud_ipc::protocol::UiToLayerMsg;
+
+        let mut st = crate::DaemonState::new_for_test_headless();
+        st.config.gui_open = true;
+        let (outgoing, _) = st.handle_overlay_key_events(&[OverlayKeyEvent::Key {
+            code: KEY_F8,
+            down: true,
+        }]);
+        assert!(outgoing.contains(&UiToLayerMsg::ToggleRecord));
     }
 }
