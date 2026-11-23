@@ -869,6 +869,23 @@ impl<'a> CpuCanvas<'a> {
         }
     }
 
+    /// Clears all pixels inside `rect` to fully transparent `[0, 0, 0, 0]`
+    /// (used for Wayland subsurface alpha punch-through so the GPU video plane below is visible).
+    pub fn clear_rect(&mut self, rect: Rect) {
+        let x0 = ((rect.x * self.scale).floor() as i32).clamp(0, self.width as i32) as usize;
+        let y0 = ((rect.y * self.scale).floor() as i32).clamp(0, self.height as i32) as usize;
+        let x1 = ((rect.right() * self.scale).ceil() as i32).clamp(0, self.width as i32) as usize;
+        let y1 = ((rect.bottom() * self.scale).ceil() as i32).clamp(0, self.height as i32) as usize;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let row_bytes = (x1 - x0) * 4;
+        for py in y0..y1 {
+            let off = (py * (self.width as usize) + x0) * 4;
+            self.pixels[off..off + row_bytes].fill(0);
+        }
+    }
+
     /// Draws the pure-X11 software cursor indicator, safely clamped inside the viewport.
     pub fn draw_software_cursor(&mut self, x_logical: f32, y_logical: f32) {
         let max_x = (self.width as f32 / self.scale - 6.0).max(0.0);

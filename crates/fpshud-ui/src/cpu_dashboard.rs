@@ -13,8 +13,12 @@ use crate::state::{
     metric_category, position_display_name, rgba_u32,
 };
 use crate::video_player_modal::{
-    PlayerHitAction, VideoPlayerModalLayout, render_video_player_modal,
+    PlayerHitAction, VideoPlayerModalLayout, compute_aspect_fit_rect, compute_modal_layout,
+    render_video_player_modal,
 };
+use std::time::{Duration, Instant};
+
+const VIDEO_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(250);
 use fpshud_core::{
     ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, LayoutPosition, MetricType,
     PresetType, RecordAudioMode, RecordBitrate, RecordCodec, RecordFps, RecordResolution,
@@ -287,6 +291,7 @@ pub struct CpuDashboard {
     rec_list_scroll: f32,
     rec_list_rect: Rect,
     last_player_viewport: (u32, u32),
+    pending_video_click: Option<Instant>,
 }
 
 impl CpuDashboard {
@@ -321,6 +326,7 @@ impl CpuDashboard {
             rec_list_scroll: 0.0,
             rec_list_rect: Rect::default(),
             last_player_viewport: (0, 0),
+            pending_video_click: None,
         }
     }
 
@@ -338,6 +344,74 @@ impl CpuDashboard {
     #[must_use]
     pub fn is_player_fullscreen(&self) -> bool {
         self.store.player_ui.open && self.store.player_ui.fullscreen
+    }
+
+    #[must_use]
+    pub fn has_pending_video_click(&self) -> bool {
+        self.pending_video_click.is_some()
+    }
+
+    pub fn flush_pending_video_click(&mut self) -> bool {
+        self.flush_pending_video_click_at(Instant::now())
+    }
+
+    pub fn flush_pending_video_click_at(&mut self, now: Instant) -> bool {
+        if let Some(clicked_at) = self.pending_video_click
+            && now.saturating_duration_since(clicked_at) >= VIDEO_DOUBLE_CLICK_WINDOW
+        {
+            self.pending_video_click = None;
+            if self.store.player_ui.open {
+                self.store
+                    .push_recorder_action(RecorderUiAction::PlayerTogglePlay);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn set_player_controls_visible(&mut self, visible: bool) -> bool {
+        if self.store.player_ui.controls_visible != visible {
+            self.store.player_ui.controls_visible = visible;
+            return true;
+        }
+        false
+    }
+
+    #[must_use]
+    pub fn is_pointer_over_player_bars(&self, vp_w: u32, vp_h: u32, scale: f32) -> bool {
+        if !self.store.player_ui.open {
+            return false;
+        }
+        let s = scale.clamp(0.5, 3.0);
+        let lw = vp_w as f32 / s;
+        let lh = vp_h as f32 / s;
+        let layout = compute_modal_layout(lw, lh, self.store.player_ui.fullscreen);
+        let (cx, cy) = self.cursor_logical;
+        layout.top_bar.contains(cx, cy) || layout.bottom_bar.contains(cx, cy)
+    }
+
+    #[must_use]
+    pub fn compute_player_fitted_video_rect_px(
+        &self,
+        vp_w: u32,
+        vp_h: u32,
+        scale: f32,
+    ) -> Option<(i32, i32, u32, u32)> {
+        if !self.store.player_ui.open {
+            return None;
+        }
+        let s = scale.clamp(0.5, 3.0);
+        let lw = vp_w as f32 / s;
+        let lh = vp_h as f32 / s;
+        let layout = compute_modal_layout(lw, lh, self.store.player_ui.fullscreen);
+        let src_w = self.store.player_ui.video_src_w;
+        let src_h = self.store.player_ui.video_src_h;
+        let fitted = compute_aspect_fit_rect(layout.video_rect, src_w, src_h);
+        let x = (fitted.x * s).round() as i32;
+        let y = (fitted.y * s).round() as i32;
+        let w = ((fitted.w * s).round() as u32).max(1);
+        let h = ((fitted.h * s).round() as u32).max(1);
+        Some((x, y, w, h))
     }
 
     pub fn sync_all(&mut self, config: HudConfig, telemetry: TelemetrySnapshot) {
@@ -637,7 +711,21 @@ impl CpuDashboard {
                 .map(|(_, a)| *a);
             if let Some(action) = hit {
                 match action {
+                    PlayerHitAction::VideoArea => {
+                        let now = Instant::now();
+                        if let Some(prev) = self.pending_video_click
+                            && now.saturating_duration_since(prev) < VIDEO_DOUBLE_CLICK_WINDOW
+                        {
+                            self.pending_video_click = None;
+                            self.store.player_ui.fullscreen = !self.store.player_ui.fullscreen;
+                            self.store
+                                .push_recorder_action(RecorderUiAction::PlayerToggleFullscreen);
+                        } else {
+                            self.pending_video_click = Some(now);
+                        }
+                    }
                     PlayerHitAction::TogglePlay => {
+                        self.pending_video_click = None;
                         self.store.push_recorder_action(RecorderUiAction::PlayerTogglePlay);
                     }
                     PlayerHitAction::SeekBack => {
@@ -674,6 +762,7 @@ impl CpuDashboard {
                         }
                     }
                     PlayerHitAction::CloseModal => {
+                        self.pending_video_click = None;
                         self.store.close_player_modal();
                     }
                 }
@@ -2672,5 +2761,93 @@ impl CpuDashboard {
                 true,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod player_interaction_tests {
+    use super::*;
+    use fpshud_core::HudConfig;
+    use fpshud_input::UiInputEvent;
+    use fpshud_telemetry::TelemetrySnapshot;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_video_area_single_click_debounce_vs_double_click_fullscreen() {
+        let cfg = HudConfig {
+            gui_open: true,
+            ..HudConfig::default()
+        };
+        let mut dash = CpuDashboard::new(UiStore::new(cfg, TelemetrySnapshot::default()));
+        dash.store
+            .open_player_modal(PathBuf::from("/tmp/a.mp4"), "a.mp4".to_string());
+        let _ = dash.store.take_recorder_actions(); // drain OpenPlayer
+
+        // Render once to populate player_hits
+        let mut buf = vec![0u8; 1280 * 720 * 4];
+        let mut rast = TextRasterizer::new();
+        dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut buf);
+        let _ = dash.store.take_recorder_actions(); // drain initial PlayerResize
+
+        // 1. Click center of video area -> debounced, NOT immediately TogglePlay
+        dash.dispatch_input(
+            &[
+                UiInputEvent::MouseMove { x: 640.0, y: 360.0 },
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ],
+            1280,
+            720,
+            1.0,
+        );
+        assert!(dash.has_pending_video_click());
+        assert!(dash.store.take_recorder_actions().is_empty());
+
+        // 2. Second click within < 250 ms -> ToggleFullscreen ONLY (never TogglePlay!)
+        dash.dispatch_input(
+            &[
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ],
+            1280,
+            720,
+            1.0,
+        );
+        assert!(!dash.has_pending_video_click());
+        let actions = dash.store.take_recorder_actions();
+        assert_eq!(actions, vec![RecorderUiAction::PlayerToggleFullscreen]);
+
+        // 3. New single click -> after 250 ms flush emits TogglePlay
+        dash.dispatch_input(
+            &[
+                UiInputEvent::MouseDown { button: 0 },
+                UiInputEvent::MouseUp { button: 0 },
+            ],
+            1280,
+            720,
+            1.0,
+        );
+        assert!(dash.has_pending_video_click());
+        let fired = dash.flush_pending_video_click_at(Instant::now() + Duration::from_millis(260));
+        assert!(fired);
+        assert_eq!(
+            dash.store.take_recorder_actions(),
+            vec![RecorderUiAction::PlayerTogglePlay]
+        );
+
+        // 4. Spacebar (evdev 57) is 0 ms instant
+        dash.dispatch_input(
+            &[UiInputEvent::KeyDown {
+                code: 57,
+                mod_mask: 0,
+            }],
+            1280,
+            720,
+            1.0,
+        );
+        assert_eq!(
+            dash.store.take_recorder_actions(),
+            vec![RecorderUiAction::PlayerTogglePlay]
+        );
     }
 }

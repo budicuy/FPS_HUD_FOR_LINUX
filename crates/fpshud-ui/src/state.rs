@@ -64,6 +64,10 @@ pub struct VideoPlayerUiState {
     pub muted: bool,
     pub has_audio: bool,
     pub fullscreen: bool,
+    pub controls_visible: bool,
+    pub external_video_plane: bool,
+    pub video_src_w: u32,
+    pub video_src_h: u32,
     pub duration_sec: f64,
     pub current_sec: f64,
     pub scrub_preview_sec: Option<f64>,
@@ -577,6 +581,7 @@ impl UiStore {
             path: Some(path.clone()),
             title,
             playing: true,
+            controls_visible: true,
             ..VideoPlayerUiState::default()
         };
         self.push_recorder_action(RecorderUiAction::OpenPlayer(path));
