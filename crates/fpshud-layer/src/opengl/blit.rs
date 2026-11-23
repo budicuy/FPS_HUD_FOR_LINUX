@@ -575,7 +575,7 @@ pub(crate) unsafe fn on_swap_buffers(
             return;
         }
 
-        let (draw_overlay, take_shot, overlay) = {
+        let (draw_overlay, take_shot, rec_active, rec_plan, overlay) = {
             let Ok(mut rt) = LayerRuntime::global().lock() else {
                 return;
             };
@@ -584,8 +584,13 @@ pub(crate) unsafe fn on_swap_buffers(
             }
             rt.pump_frame(w, h, api_name);
             let shot = rt.consume_screenshot_request();
-            let show_overlay = rt.config.hud_visible
-                || (rt.config.gui_open && !rt.input.is_external_overlay_active());
+            let is_rec = rt.is_recorder_active();
+            let plan = if is_rec {
+                rt.recorder_capture_plan(w, h)
+            } else {
+                None
+            };
+            let show_overlay = rt.should_blit_overlay();
             let ov = if show_overlay {
                 let l = &rt.overlay_sync.latest;
                 (!l.rgba.is_empty()).then(|| {
@@ -601,8 +606,26 @@ pub(crate) unsafe fn on_swap_buffers(
             } else {
                 None
             };
-            (show_overlay, shot, ov)
+            (show_overlay, shot, is_rec, plan, ov)
         };
+
+        let cur_ctx_for_rec = if rec_active || GL_RINGS_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            Some(unsafe { query_current_gl_context(api_name, proc_lookup) })
+        } else {
+            None
+        };
+
+        if let Some(ctx_id) = cur_ctx_for_rec {
+            if !rec_active {
+                cleanup_gl_recorder_ring(gl, ctx_id);
+            } else if let Some(plan) = rec_plan
+                && !plan.with_hud
+            {
+                capture_gl_recorder_frame(gl, ctx_id, w, h, plan.enc_w, plan.enc_h);
+            } else {
+                poll_gl_recorder_ring(gl, ctx_id);
+            }
+        }
 
         if let Some(false) = take_shot {
             capture_gl_screenshot(gl, w, h);
@@ -699,5 +722,377 @@ pub(crate) unsafe fn on_swap_buffers(
         if let Some(true) = take_shot {
             capture_gl_screenshot(gl, w, h);
         }
+
+        if let Some(ctx_id) = cur_ctx_for_rec
+            && rec_active
+            && let Some(plan) = rec_plan
+            && plan.with_hud
+        {
+            capture_gl_recorder_frame(gl, ctx_id, w, h, plan.enc_w, plan.enc_h);
+        }
     });
+}
+
+use fpshud_recorder::capture::{ColorTransfer, PixelBufferPool, RecorderPixelFormat};
+use fpshud_recorder::session::{FramePayload, SubmittedFrame};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static GL_RINGS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static GL_RECORDER_RINGS: OnceLock<Mutex<HashMap<usize, GlRecorderPboRing>>> = OnceLock::new();
+
+/// Selects safe `glBlitFramebuffer` filter (`GL_NEAREST` on MSAA default framebuffer to avoid `GL_INVALID_OPERATION`).
+#[must_use]
+pub const fn select_gl_blit_filter(default_fb_samples: i32, needs_downscale: bool) -> u32 {
+    if default_fb_samples > 0 || !needs_downscale {
+        glow::NEAREST
+    } else {
+        glow::LINEAR
+    }
+}
+
+/// Adaptive PBO slot count (3 for <= 16 MiB frames, 2 for 4K+ frames to stay within memory budget).
+#[must_use]
+pub const fn gl_pbo_ring_slot_count(frame_bytes: usize) -> usize {
+    if frame_bytes > 16 * 1024 * 1024 { 2 } else { 3 }
+}
+
+struct GlPboSlot {
+    pbo: glow::NativeBuffer,
+    fence: Option<glow::Fence>,
+    cap_w: u32,
+    cap_h: u32,
+    src_w: u32,
+    src_h: u32,
+    flip_y: bool,
+}
+
+struct GlRecorderPboRing {
+    slots: Vec<GlPboSlot>,
+    next_slot: usize,
+    cap_w: u32,
+    cap_h: u32,
+    fbo: Option<glow::NativeFramebuffer>,
+    fbo_tex: Option<glow::NativeTexture>,
+    pool: PixelBufferPool,
+}
+
+// SAFETY: Rings are keyed by `cur_ctx` and only accessed on the thread owning that GL context.
+unsafe impl Send for GlRecorderPboRing {}
+
+impl GlRecorderPboRing {
+    fn new(max_pool: usize) -> Self {
+        Self {
+            slots: Vec::new(),
+            next_slot: 0,
+            cap_w: 0,
+            cap_h: 0,
+            fbo: None,
+            fbo_tex: None,
+            pool: PixelBufferPool::new(max_pool),
+        }
+    }
+
+    fn destroy(&mut self, gl: &glow::Context) {
+        for slot in self.slots.drain(..) {
+            unsafe {
+                if let Some(f) = slot.fence {
+                    gl.delete_sync(f);
+                }
+                gl.delete_buffer(slot.pbo);
+            }
+        }
+        if let Some(fbo) = self.fbo.take() {
+            unsafe { gl.delete_framebuffer(fbo) };
+        }
+        if let Some(tex) = self.fbo_tex.take() {
+            unsafe { gl.delete_texture(tex) };
+        }
+        self.pool.clear();
+        self.cap_w = 0;
+        self.cap_h = 0;
+        self.next_slot = 0;
+    }
+
+    fn ensure_allocated(&mut self, gl: &glow::Context, cap_w: u32, cap_h: u32) -> bool {
+        if self.cap_w == cap_w && self.cap_h == cap_h && !self.slots.is_empty() {
+            return true;
+        }
+        self.destroy(gl);
+
+        let frame_bytes = (cap_w as usize).saturating_mul(cap_h as usize).saturating_mul(4);
+        if frame_bytes == 0 {
+            return false;
+        }
+        let slot_count = gl_pbo_ring_slot_count(frame_bytes);
+        self.pool = PixelBufferPool::new(slot_count);
+
+        for _ in 0..slot_count {
+            let Ok(pbo) = (unsafe { gl.create_buffer() }) else {
+                self.destroy(gl);
+                return false;
+            };
+            unsafe {
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
+                gl.buffer_data_size(
+                    glow::PIXEL_PACK_BUFFER,
+                    frame_bytes as i32,
+                    glow::STREAM_READ,
+                );
+            }
+            self.slots.push(GlPboSlot {
+                pbo,
+                fence: None,
+                cap_w,
+                cap_h,
+                src_w: cap_w,
+                src_h: cap_h,
+                flip_y: false,
+            });
+        }
+        unsafe { gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None) };
+
+        // Optional target-sized FBO for GPU downscale & GPU Y-flip
+        if let (Ok(fbo), Ok(tex)) = (unsafe { gl.create_framebuffer() }, unsafe { gl.create_texture() }) {
+            unsafe {
+                gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA8 as i32,
+                    cap_w as i32,
+                    cap_h as i32,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+                HasContext::bind_framebuffer(gl, glow::DRAW_FRAMEBUFFER, Some(fbo));
+                gl.framebuffer_texture_2d(
+                    glow::DRAW_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(tex),
+                    0,
+                );
+                if gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE {
+                    self.fbo = Some(fbo);
+                    self.fbo_tex = Some(tex);
+                } else {
+                    gl.delete_framebuffer(fbo);
+                    gl.delete_texture(tex);
+                }
+                HasContext::bind_framebuffer(gl, glow::DRAW_FRAMEBUFFER, None);
+                gl.bind_texture(glow::TEXTURE_2D, None);
+            }
+        }
+
+        self.cap_w = cap_w;
+        self.cap_h = cap_h;
+        true
+    }
+
+    fn poll_completed(&mut self, gl: &glow::Context, submit: &mut impl FnMut(SubmittedFrame)) {
+        for slot in &mut self.slots {
+            let Some(fence) = slot.fence else {
+                continue;
+            };
+            let wait_res = unsafe { gl.client_wait_sync(fence, 0, 0) };
+            if wait_res != glow::ALREADY_SIGNALED && wait_res != glow::CONDITION_SATISFIED {
+                continue;
+            }
+            unsafe { gl.delete_sync(fence) };
+            slot.fence = None;
+
+            let byte_len = (slot.cap_w as usize)
+                .saturating_mul(slot.cap_h as usize)
+                .saturating_mul(4);
+            unsafe {
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(slot.pbo));
+                let ptr = gl.map_buffer_range(
+                    glow::PIXEL_PACK_BUFFER,
+                    0,
+                    byte_len as i32,
+                    glow::MAP_READ_BIT,
+                );
+                if !ptr.is_null() {
+                    let mut buf = self.pool.take(byte_len);
+                    buf.extend_from_slice(std::slice::from_raw_parts(ptr, byte_len));
+                    gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);
+                    submit(SubmittedFrame {
+                        cap_w: slot.cap_w,
+                        cap_h: slot.cap_h,
+                        src_w: slot.src_w,
+                        src_h: slot.src_h,
+                        pix_fmt: RecorderPixelFormat::Rgba8,
+                        transfer: ColorTransfer::Sdr,
+                        flip_y: slot.flip_y,
+                        payload: FramePayload::OwnedBuffer {
+                            data: buf,
+                            pool: Some(self.pool.clone()),
+                        },
+                    });
+                }
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            }
+        }
+    }
+}
+
+fn poll_gl_recorder_ring(gl: &glow::Context, ctx_id: usize) {
+    let rings = GL_RECORDER_RINGS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut harvested = Vec::new();
+    if let Ok(mut map) = rings.lock()
+        && let Some(ring) = map.get_mut(&ctx_id)
+    {
+        let prev_pack_pbo = gl.get_integerv(glow::PIXEL_PACK_BUFFER_BINDING);
+        ring.poll_completed(gl, &mut |f| harvested.push(f));
+        unsafe {
+            gl.bind_buffer(
+                glow::PIXEL_PACK_BUFFER,
+                NonZeroU32::new(prev_pack_pbo.max(0) as u32).map(glow::NativeBuffer),
+            );
+        }
+    }
+    if !harvested.is_empty()
+        && let Ok(rt) = LayerRuntime::global().lock()
+    {
+        for f in harvested {
+            rt.submit_recorder_frame(f);
+        }
+    }
+}
+
+fn cleanup_gl_recorder_ring(gl: &glow::Context, ctx_id: usize) {
+    let rings = GL_RECORDER_RINGS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = rings.lock() {
+        if let Some(mut ring) = map.remove(&ctx_id) {
+            ring.destroy(gl);
+        }
+        if map.is_empty() {
+            GL_RINGS_ACTIVE.store(false, Ordering::Release);
+        }
+    }
+}
+
+fn capture_gl_recorder_frame(
+    gl: &glow::Context,
+    ctx_id: usize,
+    src_w: u32,
+    src_h: u32,
+    enc_w: u32,
+    enc_h: u32,
+) {
+    let prev_read_fbo = gl.get_integerv(glow::READ_FRAMEBUFFER_BINDING);
+    let prev_draw_fbo = gl.get_integerv(glow::DRAW_FRAMEBUFFER_BINDING);
+    let prev_pack_pbo = gl.get_integerv(glow::PIXEL_PACK_BUFFER_BINDING);
+    let prev_align = gl.get_integerv(glow::PACK_ALIGNMENT);
+    let prev_row_len = gl.get_integerv(glow::PACK_ROW_LENGTH);
+
+    let rings = GL_RECORDER_RINGS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut harvested = Vec::new();
+
+    if let Ok(mut map) = rings.lock() {
+        let ring = map
+            .entry(ctx_id)
+            .or_insert_with(|| GlRecorderPboRing::new(3));
+        GL_RINGS_ACTIVE.store(true, Ordering::Release);
+
+        ring.poll_completed(gl, &mut |f| harvested.push(f));
+
+        if ring.ensure_allocated(gl, enc_w, enc_h) {
+            let slot_idx = ring.next_slot % ring.slots.len();
+            if ring.slots[slot_idx].fence.is_none() {
+                let mut used_fbo_flip = false;
+                if let Some(fbo) = ring.fbo {
+                    unsafe {
+                        HasContext::bind_framebuffer(gl, glow::READ_FRAMEBUFFER, None);
+                        let samples = gl.get_integerv(glow::SAMPLES);
+                        let filter =
+                            select_gl_blit_filter(samples, enc_w != src_w || enc_h != src_h);
+                        // On MSAA default framebuffer with downscale, fall back to direct read to avoid GL_INVALID_OPERATION
+                        if samples == 0 || (enc_w == src_w && enc_h == src_h) {
+                            HasContext::bind_framebuffer(gl, glow::DRAW_FRAMEBUFFER, Some(fbo));
+                            gl.blit_framebuffer(
+                                0,
+                                src_h as i32,
+                                src_w as i32,
+                                0,
+                                0,
+                                0,
+                                enc_w as i32,
+                                enc_h as i32,
+                                glow::COLOR_BUFFER_BIT,
+                                filter,
+                            );
+                            HasContext::bind_framebuffer(gl, glow::READ_FRAMEBUFFER, Some(fbo));
+                            used_fbo_flip = true;
+                        }
+                    }
+                }
+
+                let (cap_w, cap_h, flip_y) = if used_fbo_flip {
+                    (enc_w, enc_h, false)
+                } else {
+                    unsafe { HasContext::bind_framebuffer(gl, glow::READ_FRAMEBUFFER, None) };
+                    (src_w, src_h, true)
+                };
+
+                if (cap_w == ring.cap_w && cap_h == ring.cap_h)
+                    || ring.ensure_allocated(gl, cap_w, cap_h)
+                {
+                    let slot = &mut ring.slots[slot_idx];
+                    unsafe {
+                        gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+                        gl.pixel_store_i32(glow::PACK_ROW_LENGTH, 0);
+                        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(slot.pbo));
+                        gl.read_pixels(
+                            0,
+                            0,
+                            cap_w as i32,
+                            cap_h as i32,
+                            glow::RGBA,
+                            glow::UNSIGNED_BYTE,
+                            glow::PixelPackData::BufferOffset(0),
+                        );
+                        slot.fence = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).ok();
+                        slot.cap_w = cap_w;
+                        slot.cap_h = cap_h;
+                        slot.src_w = src_w;
+                        slot.src_h = src_h;
+                        slot.flip_y = flip_y;
+                    }
+                    ring.next_slot = (slot_idx + 1) % ring.slots.len();
+                }
+            }
+        }
+    }
+
+    unsafe {
+        HasContext::bind_framebuffer(
+            gl,
+            glow::READ_FRAMEBUFFER,
+            NonZeroU32::new(prev_read_fbo.max(0) as u32).map(glow::NativeFramebuffer),
+        );
+        HasContext::bind_framebuffer(
+            gl,
+            glow::DRAW_FRAMEBUFFER,
+            NonZeroU32::new(prev_draw_fbo.max(0) as u32).map(glow::NativeFramebuffer),
+        );
+        gl.bind_buffer(
+            glow::PIXEL_PACK_BUFFER,
+            NonZeroU32::new(prev_pack_pbo.max(0) as u32).map(glow::NativeBuffer),
+        );
+        gl.pixel_store_i32(glow::PACK_ALIGNMENT, prev_align.max(1));
+        gl.pixel_store_i32(glow::PACK_ROW_LENGTH, prev_row_len.max(0));
+    }
+
+    if !harvested.is_empty()
+        && let Ok(rt) = LayerRuntime::global().lock()
+    {
+        for f in harvested {
+            rt.submit_recorder_frame(f);
+        }
+    }
 }

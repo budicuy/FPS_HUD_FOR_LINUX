@@ -63,3 +63,21 @@ fn test_vulkan_format_mapping_includes_fp16_and_color_space() {
         ColorTransfer::Sdr
     );
 }
+
+#[test]
+fn test_gl_blit_filter_uses_nearest_when_msaa_samples_nonzero() {
+    use fpshud::opengl::blit::select_gl_blit_filter;
+
+    assert_eq!(select_gl_blit_filter(4, true), glow::NEAREST);
+    assert_eq!(select_gl_blit_filter(0, true), glow::LINEAR);
+    assert_eq!(select_gl_blit_filter(0, false), glow::NEAREST);
+}
+
+#[test]
+fn test_gl_recorder_pbo_slot_budget_adapts_for_4k() {
+    use fpshud::opengl::blit::gl_pbo_ring_slot_count;
+
+    assert_eq!(gl_pbo_ring_slot_count(1920 * 1080 * 4), 3);
+    assert_eq!(gl_pbo_ring_slot_count(2560 * 1440 * 4), 3);
+    assert_eq!(gl_pbo_ring_slot_count(3840 * 2160 * 4), 2);
+}
