@@ -24,7 +24,7 @@ VULKAN_HEADERS_TAG="v1.4.309"
 X264_COMMIT="31e19f92f00c7003fa115047ce50978bc98c3a0d"
 NASM_VER="2.16.03"
 
-BUILD_STAMP="ffmpeg=${FFMPEG_TAG}|ffnvcodec=${NV_CODEC_TAG}|vkheaders=${VULKAN_HEADERS_TAG}|x264=${X264_COMMIT}|abi=v1"
+BUILD_STAMP="ffmpeg=${FFMPEG_TAG}|ffnvcodec=${NV_CODEC_TAG}|vkheaders=${VULKAN_HEADERS_TAG}|x264=${X264_COMMIT}|abi=v2"
 
 if [ "${FPSHUD_REBUILD_FFMPEG:-0}" != "1" ] \
     && [ -x "$OUT_BIN" ] \
@@ -166,6 +166,8 @@ tar -xf "$FF_TAR" -C "${BUILD_ROOT}/ffmpeg-work" --strip-components=1
         --enable-avdevice \
         --enable-pthreads \
         --enable-nvenc \
+        --enable-nvdec \
+        --enable-hwaccel=h264_nvdec,hevc_nvdec,h264_vaapi,hevc_vaapi,h264_vulkan,hevc_vulkan \
         --enable-ffnvcodec \
         --enable-vaapi \
         --enable-vulkan \
@@ -180,7 +182,7 @@ tar -xf "$FF_TAR" -C "${BUILD_ROOT}/ffmpeg-work" --strip-components=1
         --enable-protocol=file,pipe \
         --enable-indev=pulse,lavfi \
         --enable-outdev=pulse \
-        --enable-filter=scale,format,vflip,setparams,amix,alimiter,aresample,hwupload,scale_vaapi,fps,null,anull,color,aformat \
+        --enable-filter=scale,format,vflip,setparams,amix,alimiter,aresample,hwupload,hwdownload,crop,scale_vaapi,fps,null,anull,color,aformat \
         >/dev/null
     make -j"$NPROC" ffmpeg >/dev/null
     cp -f ffmpeg "$OUT_BIN"
