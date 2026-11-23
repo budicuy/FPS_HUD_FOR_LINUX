@@ -1,3 +1,4 @@
+mod vulkan_video;
 mod wayland_overlay;
 
 use anyhow::{Context, Result};
