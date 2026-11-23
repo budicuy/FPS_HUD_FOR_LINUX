@@ -1269,10 +1269,8 @@ fn run_daemon(args: DaemonArgs) -> Result<()> {
                 .player_session
                 .as_ref()
                 .is_some_and(|s| s.snapshot().playing);
-            let sleep_ms = if state.overlay_portal.is_some() {
+            let sleep_ms = if state.overlay_portal.is_some() || player_active {
                 4
-            } else if player_active {
-                10
             } else {
                 25
             };

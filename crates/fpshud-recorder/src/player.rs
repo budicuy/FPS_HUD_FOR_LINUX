@@ -114,13 +114,45 @@ pub fn build_player_ffmpeg_args(
     args
 }
 
+/// Builds the lightweight audio-only `fpshud-ffmpeg` CLI argument vector so PulseAudio
+/// buffering never blocks rawvideo frame delivery on `pipe:1`.
+#[must_use]
+pub fn build_player_audio_ffmpeg_args(path: &Path, start_sec: f64) -> Vec<String> {
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-re".to_string(),
+    ];
+    if start_sec > 0.001 {
+        args.push("-ss".to_string());
+        args.push(format!("{start_sec:.3}"));
+    }
+    args.extend([
+        "-i".to_string(),
+        path.to_string_lossy().into_owned(),
+        "-vn".to_string(),
+        "-map".to_string(),
+        "0:a:0?".to_string(),
+        "-f".to_string(),
+        "pulse".to_string(),
+        "-name".to_string(),
+        "FPSHUD Player".to_string(),
+        "-buffer_duration".to_string(),
+        "60".to_string(),
+        "default".to_string(),
+    ]);
+    args
+}
+
 struct SharedPlayerState {
     snapshot: PlayerSnapshot,
     viewport: (u32, u32),
     desired_seek_sec: f64,
     single_frame_requested: bool,
     quit: bool,
-    active_child: Option<Child>,
+    active_video_child: Option<Child>,
+    active_audio_child: Option<Child>,
 }
 
 struct LatestFrameSlot {
@@ -164,7 +196,8 @@ impl VideoPlayerSession {
                 desired_seek_sec: 0.0,
                 single_frame_requested: false,
                 quit: false,
-                active_child: None,
+                active_video_child: None,
+                active_audio_child: None,
             }),
             Condvar::new(),
         ));
@@ -204,15 +237,22 @@ impl VideoPlayerSession {
         })
     }
 
-    /// Sends non-blocking SIGKILL to the active child; the worker thread reaps `wait()` so the UI thread never blocks!
+    /// Sends non-blocking SIGKILL to active children; the worker thread reaps `wait()` so the UI thread never blocks!
     fn signal_kill_active_child_locked(st: &mut SharedPlayerState) {
-        if let Some(ref mut child) = st.active_child {
+        if let Some(ref mut child) = st.active_video_child {
+            let _ = child.kill();
+        }
+        if let Some(ref mut child) = st.active_audio_child {
             let _ = child.kill();
         }
     }
 
     fn kill_and_reap_active_child_locked(st: &mut SharedPlayerState) {
-        if let Some(mut child) = st.active_child.take() {
+        if let Some(mut child) = st.active_video_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(mut child) = st.active_audio_child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -465,21 +505,20 @@ fn run_player_worker(
         } else {
             start_sec.max(0.0)
         };
+        // Always run video decoding without PulseAudio muxing in the same process:
+        // mixing `-f pulse` with `rawvideo pipe:1` causes ~1000ms stalls in FFmpeg.
         let args = build_player_ffmpeg_args(
             &path,
             eff_start,
             out_w,
             out_h,
             playback_fps,
-            want_audio,
+            false,
             single_frame,
         );
 
         let mut cmd = bundled_ffmpeg_command(&ffmpeg_bin);
-        if let Some(ref ps) = pulse_server_override {
-            cmd.env("PULSE_SERVER", ps);
-        }
-        let Ok(mut child) = cmd
+        let Ok(mut video_child) = cmd
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -489,25 +528,51 @@ fn run_player_worker(
             break;
         };
 
-        let Some(mut stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
+        let Some(mut stdout) = video_child.stdout.take() else {
+            let _ = video_child.kill();
+            let _ = video_child.wait();
             break;
         };
         tune_pipe_capacity(stdout.as_raw_fd());
 
+        // Spawn decoupled audio-only sidecar when live playback has audio enabled.
+        let mut audio_child = if !single_frame && want_audio {
+            let audio_args = build_player_audio_ffmpeg_args(&path, eff_start);
+            let mut acmd = bundled_ffmpeg_command(&ffmpeg_bin);
+            if let Some(ref ps) = pulse_server_override {
+                acmd.env("PULSE_SERVER", ps);
+            }
+            acmd.args(&audio_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        } else {
+            None
+        };
+
         {
             let Ok(mut st) = lock.lock() else {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = video_child.kill();
+                let _ = video_child.wait();
+                if let Some(mut ac) = audio_child.take() {
+                    let _ = ac.kill();
+                    let _ = ac.wait();
+                }
                 break;
             };
             if st.quit || generation.load(Ordering::Acquire) != my_gen {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = video_child.kill();
+                let _ = video_child.wait();
+                if let Some(mut ac) = audio_child.take() {
+                    let _ = ac.kill();
+                    let _ = ac.wait();
+                }
                 continue;
             }
-            st.active_child = Some(child);
+            st.active_video_child = Some(video_child);
+            st.active_audio_child = audio_child;
         }
 
         let frame_bytes = (out_w as usize) * (out_h as usize) * 4;
@@ -554,32 +619,35 @@ fn run_player_worker(
             }
         }
 
-        let exited_ok = {
+        let (exited_ok, audio_failed_early) = {
             let Ok(mut st) = lock.lock() else {
                 break;
             };
-            if let Some(mut c) = st.active_child.take() {
+            let v_ok = if let Some(mut c) = st.active_video_child.take() {
                 let _ = c.kill();
                 c.wait().is_ok_and(|s| s.success())
             } else {
                 false
-            }
+            };
+            let a_failed = if let Some(mut ac) = st.active_audio_child.take() {
+                let already_failed = ac.try_wait().ok().flatten().is_some_and(|s| !s.success());
+                let _ = ac.kill();
+                let _ = ac.wait();
+                already_failed
+            } else {
+                false
+            };
+            (v_ok, a_failed)
         };
 
-        // If live playback with audio produced 0 frames and failed, retry video-only!
-        if !single_frame
-            && playing
-            && want_audio
-            && frame_idx == 0
-            && !exited_ok
-            && generation.load(Ordering::Acquire) == my_gen
-        {
+        // If audio sidecar failed (e.g. headless CI without PulseAudio), disable audio for future seeks.
+        if audio_failed_early && generation.load(Ordering::Acquire) == my_gen {
             audio_fallback_disabled = true;
             if let Ok(mut st) = lock.lock() {
                 st.snapshot.has_audio = false;
             }
-            continue;
         }
+        let _ = exited_ok;
 
         // Normal EOF handling
         if !single_frame
