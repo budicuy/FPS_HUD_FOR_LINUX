@@ -404,12 +404,13 @@ impl CpuHudRenderer {
 
         if store.recorder_status.is_recording {
             let total = store.recorder_status.elapsed_sec.max(0.0).floor() as u64;
-            let text = format!("● REC {:02}:{:02}", total / 60, total % 60);
+            let text = format!("REC {:02}:{:02}", total / 60, total % 60);
+            let dot_space = (font_size * 0.9).round();
             let spans = vec![TextSpan {
                 text,
                 color: rgba_u32(255, 70, 70, 255),
             }];
-            let w = Self::measure_spans(rasterizer, font, font_size, &spans);
+            let w = dot_space + Self::measure_spans(rasterizer, font, font_size, &spans);
             lines.push(MeasuredLine {
                 prefix: None,
                 cells: vec![MeasuredCell { spans, width: w }],
@@ -505,11 +506,29 @@ impl CpuHudRenderer {
         for (idx, line) in layout.lines.iter().enumerate() {
             let by =
                 oy + layout.pad_y + (idx as f32) * (layout.line_h + layout.row_gap) + baseline_off;
+            let is_rec_line = line
+                .cells
+                .first()
+                .and_then(|c| c.spans.first())
+                .is_some_and(|s| s.text.starts_with("REC "));
+            let line_x = if is_rec_line {
+                let dot_d = (layout.font_size * 0.54).clamp(6.0, 16.0);
+                let dot_x = ox + layout.pad_x;
+                let dot_y = by - layout.font_size * 0.64;
+                canvas.fill_rounded_rect(
+                    Rect::new(dot_x, dot_y, dot_d, dot_d),
+                    dot_d * 0.5,
+                    rgba_u32(255, 58, 58, 255),
+                );
+                ox + layout.pad_x + (layout.font_size * 0.9).round()
+            } else {
+                ox + layout.pad_x
+            };
             paint_measured_line(
                 canvas,
                 rasterizer,
                 layout,
-                ox + layout.pad_x,
+                line_x,
                 by,
                 line,
                 &layout.left_col_widths,
@@ -552,12 +571,14 @@ impl CpuHudRenderer {
         eff_scale: f32,
     ) -> CpuHudFrame {
         let total = elapsed_sec.max(0.0).floor() as u64;
-        let rec_label = format!("● REC {:02}:{:02}", total / 60, total % 60);
+        let rec_label = format!("REC {:02}:{:02}", total / 60, total % 60);
         let font_size = (13.0 * eff_scale).clamp(10.0, 28.0);
         let pad_x = (10.0 * eff_scale).round();
         let pad_y = (5.0 * eff_scale).round();
-        let rec_w = ((rasterizer.measure_text(true, font_size, &rec_label) + pad_x * 2.0).ceil() as u32)
-            .clamp(1, vp_w);
+        let dot_d = (font_size * 0.58).clamp(6.0, 16.0);
+        let dot_gap = (6.0 * eff_scale).round();
+        let text_w = rasterizer.measure_text(true, font_size, &rec_label);
+        let rec_w = ((text_w + dot_d + dot_gap + pad_x * 2.0).ceil() as u32).clamp(1, vp_w);
         let rec_h = (((font_size * 1.35) + pad_y * 2.0).ceil() as u32).clamp(1, vp_h);
         let gap = (6.0 * eff_scale).round() as u32;
 
@@ -578,14 +599,26 @@ impl CpuHudRenderer {
         let badge_rect = Rect::new(0.0, 0.0, rec_w as f32, rec_h as f32);
         canvas.fill_rounded_rect(badge_rect, 6.0 * eff_scale, rgba_u32(18, 12, 14, 225));
         canvas.stroke_rounded_rect(badge_rect, 6.0 * eff_scale, 1.5, rgba_u32(255, 65, 65, 240));
+        let dot_y = (badge_rect.h - dot_d) * 0.5;
+        canvas.fill_rounded_rect(
+            Rect::new(pad_x, dot_y, dot_d, dot_d),
+            dot_d * 0.5,
+            rgba_u32(255, 58, 58, 255),
+        );
+        let text_rect = Rect::new(
+            pad_x + dot_d + dot_gap,
+            0.0,
+            (badge_rect.w - (pad_x + dot_d + dot_gap) - pad_x).max(1.0),
+            badge_rect.h,
+        );
         canvas.draw_text_in_rect(
             rasterizer,
-            badge_rect,
+            text_rect,
             true,
             font_size,
             rgba_u32(255, 78, 78, 255),
             &rec_label,
-            true,
+            false,
         );
 
         if let Some((t, tw, th)) = toast_dims {

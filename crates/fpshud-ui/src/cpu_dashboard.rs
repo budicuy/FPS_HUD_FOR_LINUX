@@ -1513,20 +1513,20 @@ impl CpuDashboard {
             self.dropdown_anchors[DropdownId::BgOpacity.index()] = Rect::default();
         }
         for (label, value, id) in rows {
-            self.paint_dropdown_row(canvas, rasterizer, Rect::new(ix, y, iw, 22.0), label, &value, id);
-            y += 24.0;
+            self.paint_dropdown_row(canvas, rasterizer, Rect::new(ix, y, iw, 20.0), label, &value, id);
+            y += 22.0;
         }
 
         // Border toggle + conditional Border Opacity & Border Color
         self.paint_switch_row(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 21.0),
+            Rect::new(ix, y, iw, 20.0),
             "Border",
             self.store.config.border_enabled,
             HitAction::ToggleBorder,
         );
-        y += 23.0;
+        y += 21.5;
         if self.store.config.border_enabled {
             let b_op = format!("{:.0}%", self.store.config.border_alpha * 100.0);
             self.paint_dropdown_row(
@@ -1636,37 +1636,38 @@ impl CpuDashboard {
         self.paint_switch_row(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 21.0),
+            Rect::new(ix, y, iw, 20.0),
             "Warning Colors",
             self.store.config.thermal_warnings_enabled,
             HitAction::ToggleThermalWarnings,
         );
-        y += 23.0;
+        y += 21.5;
 
         self.paint_switch_row(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 21.0),
+            Rect::new(ix, y, iw, 20.0),
             "Dim Labels",
             self.store.config.dim_labels_enabled,
             HitAction::ToggleDimLabels,
         );
-        y += 23.0;
+        y += 21.5;
 
         self.paint_switch_row(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 21.0),
+            Rect::new(ix, y, iw, 20.0),
             "Frametime Graph",
             self.store.config.hud_graph_enabled,
             HitAction::ToggleHudGraph,
         );
-        y += 25.0;
+        y += 22.5;
 
+        let reset_y = y.min(rect.bottom() - 28.0);
         self.paint_button(
             canvas,
             rasterizer,
-            Rect::new(ix, y, iw, 23.0),
+            Rect::new(ix, reset_y, iw, 22.0),
             "Reset Layout",
             false,
             rgba_u32(70, 82, 104, 230),
@@ -2219,7 +2220,7 @@ impl CpuDashboard {
         } else if is_rec {
             let secs = self.store.recorder_status.elapsed_sec.max(0.0).floor() as u64;
             format!(
-                "● REC {:02}:{:02} | {} | drop {}",
+                "REC {:02}:{:02} | {} | drop {}",
                 secs / 60,
                 secs % 60,
                 self.store.recorder_status.active_backend,
@@ -2235,9 +2236,20 @@ impl CpuDashboard {
         } else {
             rgba_u32(150, 210, 175, 235)
         };
+        let status_x = if is_rec && self.store.recorder_warning.is_none() {
+            let dot_d = 7.0;
+            canvas.fill_rounded_rect(
+                Rect::new(lx, ly + 5.5, dot_d, dot_d),
+                dot_d * 0.5,
+                rgba_u32(255, 58, 58, 255),
+            );
+            lx + 11.0
+        } else {
+            lx
+        };
         canvas.draw_text_in_rect(
             rasterizer,
-            Rect::new(lx, ly, lw, 18.0),
+            Rect::new(status_x, ly, (lw - (status_x - lx)).max(1.0), 18.0),
             false,
             10.5,
             status_col,
