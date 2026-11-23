@@ -6,24 +6,33 @@
 //! events to this overlay surface with the real native OS cursor (`wp_cursor_shape_v1`),
 //! completely preventing double-input into any native Wayland or XWayland/Proton/Wine game.
 
+#![allow(dead_code)]
+
+use crate::vulkan_video::{DmabufFormatSet, VulkanVideoRenderer};
 use anyhow::{Context, Result, anyhow};
 use fpshud_input::UiInputEvent;
+use fpshud_recorder::player::PlayerFrame;
+use fpshud_recorder::yuv::yuv_frame_to_argb8888;
 use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::os::fd::AsFd;
 use std::os::unix::fs::{FileExt, FileTypeExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_region, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
 };
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
+};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -97,14 +106,62 @@ struct ShmBufferSlot {
     buffer: wl_buffer::WlBuffer,
 }
 
+/// Parses a `zwp_linux_dmabuf_feedback_v1` format table (16-byte entries: `u32 fourcc`, `u32 pad`, `u64 modifier`).
+#[must_use]
+pub fn parse_dmabuf_feedback_table(table_bytes: &[u8], indices: &[u16]) -> Vec<(u32, u64)> {
+    let mut out = Vec::with_capacity(indices.len());
+    for &idx in indices {
+        let off = (idx as usize).saturating_mul(16);
+        if let Some(chunk) = table_bytes.get(off..off + 16) {
+            let fourcc = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let modifier = u64::from_ne_bytes([
+                chunk[8], chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14],
+                chunk[15],
+            ]);
+            out.push((fourcc, modifier));
+        }
+    }
+    out
+}
+
+/// Safe guard for OS cursor auto-hide: only hides when `wp_cursor_shape_manager_v1` is available
+/// so the cursor can never get stuck permanently invisible on older GNOME/Gamescope compositors.
+#[must_use]
+pub const fn should_apply_cursor_hide(
+    has_shape_device: bool,
+    has_pointer: bool,
+    enter_serial: Option<u32>,
+    currently_hidden: bool,
+    target_hidden: bool,
+) -> Option<bool> {
+    if !has_shape_device || !has_pointer || enter_serial.is_none() || currently_hidden == target_hidden
+    {
+        return None;
+    }
+    Some(target_hidden)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoPresentOutcome {
+    pub presented: bool,
+    pub parent_needs_commit: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct BufferTag {
     generation: u64,
     slot_idx: usize,
+    is_video: bool,
 }
 
 struct OverlayState {
     compositor: Option<wl_compositor::WlCompositor>,
+    subcompositor: Option<wl_subcompositor::WlSubcompositor>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+    dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    dmabuf_feedback: Option<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1>,
+    dmabuf_table: Vec<u8>,
+    dmabuf_formats: DmabufFormatSet,
     shm: Option<wl_shm::WlShm>,
     seat: Option<wl_seat::WlSeat>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
@@ -113,6 +170,8 @@ struct OverlayState {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     cursor_shape_device: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
+    last_pointer_enter_serial: Option<u32>,
+    cursor_hidden: bool,
 
     configured: bool,
     size: (u32, u32),
@@ -124,6 +183,8 @@ struct OverlayState {
 
     buffer_generation: u64,
     buffer_busy: [bool; 3],
+    video_buffer_generation: u64,
+    video_buffer_busy: [bool; 3],
 
     ui_events: Vec<UiInputEvent>,
     key_events: Vec<OverlayKeyEvent>,
@@ -133,6 +194,12 @@ impl OverlayState {
     fn new() -> Self {
         Self {
             compositor: None,
+            subcompositor: None,
+            viewporter: None,
+            dmabuf: None,
+            dmabuf_feedback: None,
+            dmabuf_table: Vec::new(),
+            dmabuf_formats: DmabufFormatSet::default(),
             shm: None,
             seat: None,
             layer_shell: None,
@@ -141,6 +208,8 @@ impl OverlayState {
             pointer: None,
             keyboard: None,
             cursor_shape_device: None,
+            last_pointer_enter_serial: None,
+            cursor_hidden: false,
             configured: false,
             size: (DEFAULT_FALLBACK_W, DEFAULT_FALLBACK_H),
             pending_xdg_size: (0, 0),
@@ -150,6 +219,8 @@ impl OverlayState {
             closed: false,
             buffer_generation: 0,
             buffer_busy: [false; 3],
+            video_buffer_generation: 0,
+            video_buffer_busy: [false; 3],
             ui_events: Vec::new(),
             key_events: Vec::new(),
         }
@@ -201,6 +272,21 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OverlayState {
             match interface.as_str() {
                 "wl_compositor" if state.compositor.is_none() => {
                     state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
+                }
+                "wl_subcompositor" if state.subcompositor.is_none() => {
+                    state.subcompositor = Some(registry.bind(name, 1, qh, ()));
+                }
+                "wp_viewporter" if state.viewporter.is_none() => {
+                    state.viewporter = Some(registry.bind(name, 1, qh, ()));
+                }
+                "zwp_linux_dmabuf_v1" if state.dmabuf.is_none() => {
+                    let v = version.min(4);
+                    let dmabuf: zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1 =
+                        registry.bind(name, v, qh, ());
+                    if v >= 4 {
+                        state.dmabuf_feedback = Some(dmabuf.get_default_feedback(qh, ()));
+                    }
+                    state.dmabuf = Some(dmabuf);
                 }
                 "wl_shm" if state.shm.is_none() => {
                     state.shm = Some(registry.bind(name, 1, qh, ()));
@@ -268,11 +354,148 @@ impl Dispatch<wl_buffer::WlBuffer, BufferTag> for OverlayState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if matches!(event, wl_buffer::Event::Release)
-            && tag.generation == state.buffer_generation
-            && tag.slot_idx < state.buffer_busy.len()
+        if matches!(event, wl_buffer::Event::Release) {
+            if tag.is_video {
+                if tag.generation == state.video_buffer_generation
+                    && tag.slot_idx < state.video_buffer_busy.len()
+                {
+                    state.video_buffer_busy[tag.slot_idx] = false;
+                }
+            } else if tag.generation == state.buffer_generation
+                && tag.slot_idx < state.buffer_busy.len()
+            {
+                state.buffer_busy[tag.slot_idx] = false;
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_region::WlRegion, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &wl_region::WlRegion,
+        _: wl_region::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_subcompositor::WlSubcompositor, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &wl_subcompositor::WlSubcompositor,
+        _: wl_subcompositor::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_subsurface::WlSubsurface, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &wl_subsurface::WlSubsurface,
+        _: wl_subsurface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wp_viewporter::WpViewporter, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &wp_viewporter::WpViewporter,
+        _: wp_viewporter::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wp_viewport::WpViewport, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &wp_viewport::WpViewport,
+        _: wp_viewport::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> for OverlayState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+        event: zwp_linux_dmabuf_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_linux_dmabuf_v1::Event::Modifier {
+            format,
+            modifier_hi,
+            modifier_lo,
+        } = event
         {
-            state.buffer_busy[tag.slot_idx] = false;
+            let modifier = (u64::from(modifier_hi) << 32) | u64::from(modifier_lo);
+            state.dmabuf_formats.modifiers.push((format, modifier));
+        }
+    }
+}
+
+impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ()> for OverlayState {
+    fn event(
+        _: &mut Self,
+        _: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
+        _: zwp_linux_buffer_params_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for OverlayState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                if device.len() >= 8 {
+                    let dev = u64::from_ne_bytes([
+                        device[0], device[1], device[2], device[3], device[4], device[5],
+                        device[6], device[7],
+                    ]);
+                    state.dmabuf_formats.main_device = Some(dev);
+                }
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::FormatTable { fd, size } => {
+                let mut file = File::from(fd);
+                let mut buf = vec![0u8; (size as usize).min(4 * 1024 * 1024)];
+                if file.read_exact(&mut buf).is_ok() {
+                    state.dmabuf_table = buf;
+                }
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheFormats { indices } => {
+                let (chunks, _) = indices.as_chunks::<2>();
+                let idx_u16: Vec<u16> = chunks.iter().copied().map(u16::from_ne_bytes).collect();
+                let parsed = parse_dmabuf_feedback_table(&state.dmabuf_table, &idx_u16);
+                state.dmabuf_formats.modifiers.extend(parsed);
+            }
+            _ => {}
         }
     }
 }
@@ -329,6 +552,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for OverlayState {
                 surface_y,
                 ..
             } => {
+                state.last_pointer_enter_serial = Some(serial);
+                state.cursor_hidden = false;
                 state.ensure_cursor_shape_device(qh);
                 if let Some(shape_dev) = &state.cursor_shape_device {
                     shape_dev.set_shape(serial, wp_cursor_shape_device_v1::Shape::Default);
@@ -380,6 +605,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for OverlayState {
             }
             wl_pointer::Event::Leave { .. } => {
                 state.pointer_left = true;
+                state.cursor_hidden = false;
+                state.last_pointer_enter_serial = None;
             }
             _ => {}
         }
@@ -554,6 +781,26 @@ impl Dispatch<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1, ()> for OverlayS
 }
 
 /// Isolated Wayland overlay surface owned by `fpshud-ui` whenever the Settings GUI is open.
+enum VideoPlaneBackend {
+    VulkanDmabuf {
+        renderer: Box<VulkanVideoRenderer>,
+        buffers: Vec<wl_buffer::WlBuffer>,
+    },
+    ShmFallback {
+        slots: Vec<ShmBufferSlot>,
+        scratch_argb: Vec<u8>,
+        size: (u32, u32),
+    },
+}
+
+struct WaylandVideoPlane {
+    surface: wl_surface::WlSurface,
+    subsurface: wl_subsurface::WlSubsurface,
+    viewport: wp_viewport::WpViewport,
+    dst_rect: (i32, i32, u32, u32),
+    backend: VideoPlaneBackend,
+}
+
 pub struct WaylandOverlayPortal {
     conn: Connection,
     event_queue: EventQueue<OverlayState>,
@@ -563,6 +810,7 @@ pub struct WaylandOverlayPortal {
     slots: Vec<ShmBufferSlot>,
     slots_size: (u32, u32),
     scratch_argb: Vec<u8>,
+    video_plane: Option<WaylandVideoPlane>,
 }
 
 /// Discovers live `wayland-*` Unix socket paths in `dir`, excluding `.lock` and non-socket entries.
@@ -721,6 +969,7 @@ impl WaylandOverlayPortal {
             slots: Vec::new(),
             slots_size: (0, 0),
             scratch_argb: Vec::new(),
+            video_plane: None,
         })
     }
 
@@ -829,6 +1078,7 @@ impl WaylandOverlayPortal {
                 BufferTag {
                     generation,
                     slot_idx,
+                    is_video: false,
                 },
             );
             self.slots.push(ShmBufferSlot { file, pool, buffer });
@@ -869,10 +1119,298 @@ impl WaylandOverlayPortal {
         self.conn.flush().context("flush wayland overlay commit")?;
         Ok(true)
     }
+
+    /// Returns `true` when the compositor supports `wl_subcompositor` + `wp_viewporter`
+    /// for independent hardware-scaled video playback (Tier 1 Vulkan DMA-BUF or Tier 2 SHM subsurface).
+    #[must_use]
+    pub fn supports_video_subsurface(&self) -> bool {
+        self.state.subcompositor.is_some() && self.state.viewporter.is_some()
+    }
+
+    /// Safely hides or restores the OS pointer cursor (strictly guarded on `wp_cursor_shape_manager_v1`
+    /// so compositors without cursor-shape protocol never get stuck with an invisible cursor).
+    pub fn set_cursor_hidden(&mut self, hidden: bool) {
+        let Some(apply_hide) = should_apply_cursor_hide(
+            self.state.cursor_shape_device.is_some(),
+            self.state.pointer.is_some(),
+            self.state.last_pointer_enter_serial,
+            self.state.cursor_hidden,
+            hidden,
+        ) else {
+            return;
+        };
+        let Some(serial) = self.state.last_pointer_enter_serial else {
+            return;
+        };
+        if apply_hide {
+            if let Some(ref ptr) = self.state.pointer {
+                ptr.set_cursor(serial, None, 0, 0);
+                self.state.cursor_hidden = true;
+                let _ = self.conn.flush();
+            }
+        } else if let Some(ref shape_dev) = self.state.cursor_shape_device {
+            shape_dev.set_shape(serial, wp_cursor_shape_device_v1::Shape::Default);
+            self.state.cursor_hidden = false;
+            let _ = self.conn.flush();
+        }
+    }
+
+    /// Destroys the video subsurface, Vulkan DMA-BUF ring, and all video buffers (0 MB VRAM/RAM idle).
+    pub fn destroy_video_plane(&mut self) {
+        self.set_cursor_hidden(false);
+        if let Some(plane) = self.video_plane.take() {
+            match plane.backend {
+                VideoPlaneBackend::VulkanDmabuf { buffers, renderer } => {
+                    for b in buffers {
+                        b.destroy();
+                    }
+                    drop(renderer);
+                }
+                VideoPlaneBackend::ShmFallback { slots, .. } => {
+                    for s in slots {
+                        s.buffer.destroy();
+                        s.pool.destroy();
+                    }
+                }
+            }
+            plane.viewport.destroy();
+            plane.subsurface.destroy();
+            plane.surface.destroy();
+            self.state.video_buffer_busy = [false; 3];
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn ensure_video_plane(&mut self, dst_rect: (i32, i32, u32, u32)) -> Result<bool> {
+        if self.video_plane.is_some() {
+            return Ok(false);
+        }
+        let compositor = self
+            .state
+            .compositor
+            .clone()
+            .ok_or_else(|| anyhow!("wl_compositor unavailable"))?;
+        let subcompositor = self
+            .state
+            .subcompositor
+            .clone()
+            .ok_or_else(|| anyhow!("wl_subcompositor unavailable"))?;
+        let viewporter = self
+            .state
+            .viewporter
+            .clone()
+            .ok_or_else(|| anyhow!("wp_viewporter unavailable"))?;
+
+        let qh = self.event_queue.handle();
+        let v_surface = compositor.create_surface(&qh, ());
+        let empty_region = compositor.create_region(&qh, ());
+        v_surface.set_input_region(Some(&empty_region));
+        empty_region.destroy();
+
+        let subsurface = subcompositor.get_subsurface(&v_surface, &self.surface, &qh, ());
+        subsurface.place_below(&self.surface);
+        subsurface.set_desync();
+        subsurface.set_position(dst_rect.0, dst_rect.1);
+
+        let viewport = viewporter.get_viewport(&v_surface, &qh, ());
+        viewport.set_destination(dst_rect.2.max(1) as i32, dst_rect.3.max(1) as i32);
+
+        let backend = if self.state.dmabuf.is_some() {
+            match VulkanVideoRenderer::new(&self.state.dmabuf_formats) {
+                Ok(renderer) => VideoPlaneBackend::VulkanDmabuf {
+                    renderer: Box::new(renderer),
+                    buffers: Vec::new(),
+                },
+                Err(_) => VideoPlaneBackend::ShmFallback {
+                    slots: Vec::new(),
+                    scratch_argb: Vec::new(),
+                    size: (0, 0),
+                },
+            }
+        } else {
+            VideoPlaneBackend::ShmFallback {
+                slots: Vec::new(),
+                scratch_argb: Vec::new(),
+                size: (0, 0),
+            }
+        };
+
+        self.video_plane = Some(WaylandVideoPlane {
+            surface: v_surface,
+            subsurface,
+            viewport,
+            dst_rect,
+            backend,
+        });
+        Ok(true)
+    }
+
+    /// Updates video subsurface position and `wp_viewporter` destination size without restarting FFmpeg.
+    /// Returns `true` when geometry changed and the parent UI surface needs a commit.
+    pub fn update_video_geometry(&mut self, dst_rect: (i32, i32, u32, u32)) -> bool {
+        let Some(ref mut plane) = self.video_plane else {
+            return false;
+        };
+        if plane.dst_rect == dst_rect {
+            return false;
+        }
+        plane.dst_rect = dst_rect;
+        plane.subsurface.set_position(dst_rect.0, dst_rect.1);
+        plane
+            .viewport
+            .set_destination(dst_rect.2.max(1) as i32, dst_rect.3.max(1) as i32);
+        let _ = self.conn.flush();
+        true
+    }
+
+    /// Presents a decoded native YUV/NV12 `PlayerFrame` directly onto the desync video subsurface
+    /// (Tier 1 Vulkan DMA-BUF or Tier 2 `wl_shm` + `wp_viewporter`), without repainting the UI surface.
+    pub fn present_video_frame(
+        &mut self,
+        frame: &PlayerFrame,
+        dst_rect: (i32, i32, u32, u32),
+    ) -> Result<VideoPresentOutcome> {
+        if self.state.closed || frame.width < 2 || frame.height < 2 || frame.data.is_empty() {
+            return Ok(VideoPresentOutcome::default());
+        }
+        let created = self.ensure_video_plane(dst_rect)?;
+        let geom_changed = created || self.update_video_geometry(dst_rect);
+
+        let Some(slot_idx) = pick_free_buffer_slot(&self.state.video_buffer_busy) else {
+            return Ok(VideoPresentOutcome {
+                presented: false,
+                parent_needs_commit: geom_changed,
+            });
+        };
+
+        let qh = self.event_queue.handle();
+        let dmabuf_global = self.state.dmabuf.clone();
+        let shm_global = self.state.shm.clone();
+
+        let Some(plane) = self.video_plane.as_mut() else {
+            return Ok(VideoPresentOutcome::default());
+        };
+
+        match &mut plane.backend {
+            VideoPlaneBackend::VulkanDmabuf { renderer, buffers } => {
+                if let Some(exports) =
+                    renderer.ensure_dimensions(frame.width, frame.height, frame.pixel_format)?
+                {
+                    for old in buffers.drain(..) {
+                        old.destroy();
+                    }
+                    self.state.video_buffer_generation =
+                        self.state.video_buffer_generation.wrapping_add(1);
+                    self.state.video_buffer_busy = [false; 3];
+                    let generation = self.state.video_buffer_generation;
+                    let dmabuf = dmabuf_global
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("zwp_linux_dmabuf_v1 unavailable"))?;
+                    for (idx, ex) in exports.into_iter().enumerate() {
+                        let params = dmabuf.create_params(&qh, ());
+                        let mod_hi = (ex.modifier >> 32) as u32;
+                        let mod_lo = (ex.modifier & 0xffff_ffff) as u32;
+                        params.add(ex.fd.as_fd(), 0, ex.offset, ex.stride, mod_hi, mod_lo);
+                        let buf = params.create_immed(
+                            ex.width as i32,
+                            ex.height as i32,
+                            ex.fourcc,
+                            zwp_linux_buffer_params_v1::Flags::empty(),
+                            &qh,
+                            BufferTag {
+                                generation,
+                                slot_idx: idx,
+                                is_video: true,
+                            },
+                        );
+                        params.destroy();
+                        buffers.push(buf);
+                    }
+                }
+                let use_idx = slot_idx.min(buffers.len().saturating_sub(1));
+                renderer.render_to_slot(use_idx, frame)?;
+                self.state.video_buffer_busy[use_idx] = true;
+                plane.surface.attach(Some(&buffers[use_idx]), 0, 0);
+                plane
+                    .surface
+                    .damage_buffer(0, 0, frame.width as i32, frame.height as i32);
+                plane.surface.commit();
+            }
+            VideoPlaneBackend::ShmFallback {
+                slots,
+                scratch_argb,
+                size,
+            } => {
+                let w = frame.width;
+                let h = frame.height;
+                if *size != (w, h) || slots.len() != 3 {
+                    for s in slots.drain(..) {
+                        s.buffer.destroy();
+                        s.pool.destroy();
+                    }
+                    let shm = shm_global
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("wl_shm unavailable"))?;
+                    let stride = w * 4;
+                    let byte_len = stride * h;
+                    self.state.video_buffer_generation =
+                        self.state.video_buffer_generation.wrapping_add(1);
+                    self.state.video_buffer_busy = [false; 3];
+                    let generation = self.state.video_buffer_generation;
+                    for idx in 0..3 {
+                        let fd = memfd_create(c"fpshud-wl-video", MemfdFlags::CLOEXEC)
+                            .context("memfd_create video shm")?;
+                        ftruncate(&fd, u64::from(byte_len)).context("ftruncate video shm")?;
+                        let file = File::from(fd);
+                        let pool = shm.create_pool(file.as_fd(), byte_len as i32, &qh, ());
+                        let buffer = pool.create_buffer(
+                            0,
+                            w as i32,
+                            h as i32,
+                            stride as i32,
+                            wl_shm::Format::Argb8888,
+                            &qh,
+                            BufferTag {
+                                generation,
+                                slot_idx: idx,
+                                is_video: true,
+                            },
+                        );
+                        slots.push(ShmBufferSlot { file, pool, buffer });
+                    }
+                    *size = (w, h);
+                }
+                yuv_frame_to_argb8888(
+                    w,
+                    h,
+                    frame.pixel_format,
+                    frame.color_space,
+                    &frame.data,
+                    scratch_argb,
+                );
+                let use_idx = slot_idx.min(slots.len().saturating_sub(1));
+                slots[use_idx]
+                    .file
+                    .write_all_at(scratch_argb, 0)
+                    .context("write video shm memfd")?;
+                self.state.video_buffer_busy[use_idx] = true;
+                plane.surface.attach(Some(&slots[use_idx].buffer), 0, 0);
+                plane.surface.damage_buffer(0, 0, w as i32, h as i32);
+                plane.surface.commit();
+            }
+        }
+
+        self.conn.flush().context("flush wayland video commit")?;
+        Ok(VideoPresentOutcome {
+            presented: true,
+            parent_needs_commit: geom_changed,
+        })
+    }
 }
 
 impl Drop for WaylandOverlayPortal {
     fn drop(&mut self) {
+        self.destroy_video_plane();
         self.destroy_slots();
         match &self.role {
             OverlayRole::LayerSurface(ls) => ls.destroy(),
@@ -904,5 +1442,45 @@ impl Drop for WaylandOverlayPortal {
             seat.release();
         }
         let _ = self.conn.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_dmabuf_feedback_table_extracts_fourcc_and_modifiers() {
+        let mut table = Vec::new();
+        // Entry 0: XR24 + modifier 0x0300_0000_0060_6010
+        table.extend_from_slice(&0x3432_5258u32.to_ne_bytes());
+        table.extend_from_slice(&0u32.to_ne_bytes());
+        table.extend_from_slice(&0x0300_0000_0060_6010u64.to_ne_bytes());
+        // Entry 1: AR24 + LINEAR (0)
+        table.extend_from_slice(&0x3432_5241u32.to_ne_bytes());
+        table.extend_from_slice(&0u32.to_ne_bytes());
+        table.extend_from_slice(&0u64.to_ne_bytes());
+
+        // Out-of-bounds index 99 must be ignored without panic
+        let parsed = parse_dmabuf_feedback_table(&table, &[0, 99, 1]);
+        assert_eq!(
+            parsed,
+            vec![
+                (0x3432_5258, 0x0300_0000_0060_6010),
+                (0x3432_5241, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cursor_hide_guard_without_cursor_shape_device() {
+        // Without wp_cursor_shape_manager_v1 (e.g. Ubuntu 22.04 GNOME 42 / Gamescope),
+        // hiding must be a safe no-op so cursor can never get stuck invisible.
+        assert_eq!(should_apply_cursor_hide(false, true, Some(7), false, true), None);
+        // With cursor shape device + pointer + valid enter serial:
+        assert_eq!(should_apply_cursor_hide(true, true, Some(7), false, true), Some(true));
+        assert_eq!(should_apply_cursor_hide(true, true, Some(7), true, true), None);
+        assert_eq!(should_apply_cursor_hide(true, true, Some(7), true, false), Some(false));
+        assert_eq!(should_apply_cursor_hide(true, true, None, false, true), None);
     }
 }
