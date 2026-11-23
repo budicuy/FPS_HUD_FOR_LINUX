@@ -6,7 +6,8 @@ pub mod paths;
 
 pub use config::{
     ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, Keybind, LayoutPosition,
-    MetricType, PresetType, ScreenshotQuality, apply_preset_advance, apply_preset_custom,
+    MetricType, PresetType, RecordAudioMode, RecordBitrate, RecordCodec, RecordFps,
+    RecordResolution, ScreenshotQuality, apply_preset_advance, apply_preset_custom,
     apply_preset_minimal, apply_preset_standard, init_config_from_env, load_config_from_disk,
     load_ini_file, reset_layout_to_default, save_config_to_disk, save_ini_file,
 };

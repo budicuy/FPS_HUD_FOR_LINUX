@@ -6,6 +6,7 @@ pub const KEY_LEFTCTRL: u32 = 29;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_RIGHTSHIFT: u32 = 54;
 pub const KEY_LEFTALT: u32 = 56;
+pub const KEY_F8: u32 = 66;
 pub const KEY_F9: u32 = 67;
 pub const KEY_F10: u32 = 68;
 pub const KEY_F11: u32 = 87;

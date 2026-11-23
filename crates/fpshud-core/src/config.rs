@@ -205,6 +205,214 @@ impl ScreenshotQuality {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordResolution {
+    #[default]
+    Native = 0,
+    P1440 = 1,
+    P1080 = 2,
+    P720 = 3,
+}
+
+impl RecordResolution {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            1 => Self::P1440,
+            2 => Self::P1080,
+            3 => Self::P720,
+            _ => Self::Native,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Native => "Native",
+            Self::P1440 => "1440p",
+            Self::P1080 => "1080p",
+            Self::P720 => "720p",
+        }
+    }
+
+    #[must_use]
+    pub const fn max_height(self) -> Option<u32> {
+        match self {
+            Self::Native => None,
+            Self::P1440 => Some(1440),
+            Self::P1080 => Some(1080),
+            Self::P720 => Some(720),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordFps {
+    Fps30 = 0,
+    #[default]
+    Fps60 = 1,
+    Fps120 = 2,
+}
+
+impl RecordFps {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::Fps30,
+            2 => Self::Fps120,
+            _ => Self::Fps60,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Fps30 => "30 FPS",
+            Self::Fps60 => "60 FPS",
+            Self::Fps120 => "120 FPS",
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            Self::Fps30 => 30,
+            Self::Fps60 => 60,
+            Self::Fps120 => 120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordCodec {
+    #[default]
+    H264 = 0,
+    H265 = 1,
+}
+
+impl RecordCodec {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            1 => Self::H265,
+            _ => Self::H264,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::H264 => "H.264",
+            Self::H265 => "H.265 (HEVC)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordBitrate {
+    #[default]
+    Auto = 0,
+    Mbps8 = 1,
+    Mbps15 = 2,
+    Mbps25 = 3,
+    Mbps40 = 4,
+    Mbps60 = 5,
+}
+
+impl RecordBitrate {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            1 => Self::Mbps8,
+            2 => Self::Mbps15,
+            3 => Self::Mbps25,
+            4 => Self::Mbps40,
+            5 => Self::Mbps60,
+            _ => Self::Auto,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto (CQ 20)",
+            Self::Mbps8 => "8 Mbps",
+            Self::Mbps15 => "15 Mbps",
+            Self::Mbps25 => "25 Mbps",
+            Self::Mbps40 => "40 Mbps",
+            Self::Mbps60 => "60 Mbps",
+        }
+    }
+
+    #[must_use]
+    pub const fn mbps(self) -> Option<u32> {
+        match self {
+            Self::Auto => None,
+            Self::Mbps8 => Some(8),
+            Self::Mbps15 => Some(15),
+            Self::Mbps25 => Some(25),
+            Self::Mbps40 => Some(40),
+            Self::Mbps60 => Some(60),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordAudioMode {
+    Off = 0,
+    #[default]
+    GameAudio = 1,
+    MicOnly = 2,
+    GameAndMic = 3,
+}
+
+impl RecordAudioMode {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[must_use]
+    pub const fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::Off,
+            2 => Self::MicOnly,
+            3 => Self::GameAndMic,
+            _ => Self::GameAudio,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::GameAudio => "Game Audio",
+            Self::MicOnly => "Mic Only",
+            Self::GameAndMic => "Game + Mic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresetType {
     Minimal = 0,
@@ -440,6 +648,16 @@ pub struct HudConfig {
     pub screenshot_quality: ScreenshotQuality,
     pub save_folder: String,
 
+    // Screen Recorder
+    pub record_folder: String,
+    pub record_resolution: RecordResolution,
+    pub record_fps: RecordFps,
+    pub record_codec: RecordCodec,
+    pub record_bitrate: RecordBitrate,
+    pub record_audio_mode: RecordAudioMode,
+    pub record_with_hud: bool,
+    pub bind_record: Keybind,
+
     // Typography & Scale
     pub gui_scale: f32,
     pub font_size_px: f32,
@@ -489,6 +707,14 @@ impl Default for HudConfig {
             screenshot_with_hud: false,
             screenshot_quality: ScreenshotQuality::High,
             save_folder: String::new(),
+            record_folder: String::new(),
+            record_resolution: RecordResolution::Native,
+            record_fps: RecordFps::Fps60,
+            record_codec: RecordCodec::H264,
+            record_bitrate: RecordBitrate::Auto,
+            record_audio_mode: RecordAudioMode::GameAudio,
+            record_with_hud: false,
+            bind_record: Keybind::new(0, 66),
             gui_scale: 1.0,
             font_size_px: 20.0,
             text_opacity: 1.0,
@@ -614,6 +840,17 @@ impl HudConfig {
         let trimmed = self.save_folder.trim();
         if trimmed.is_empty() {
             crate::paths::get_default_screenshot_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    }
+
+    /// Returns the resolved video recording directory (`record_folder` if set, otherwise `<XDG_VIDEOS_DIR>/FPSHUD`).
+    #[must_use]
+    pub fn resolved_record_dir(&self) -> std::path::PathBuf {
+        let trimmed = self.record_folder.trim();
+        if trimmed.is_empty() {
+            crate::paths::get_default_record_dir()
         } else {
             std::path::PathBuf::from(trimmed)
         }
@@ -866,6 +1103,40 @@ pub fn load_ini_file(path: &Path, cfg: &mut HudConfig) -> bool {
                 cfg.save_folder = sanitize_ini_str(val);
                 parsed_any = true;
             }
+            "record_folder" => {
+                cfg.record_folder = sanitize_ini_str(val);
+                parsed_any = true;
+            }
+            "record_resolution" => {
+                cfg.record_resolution = RecordResolution::from_i32(parse_i32_or(val, 0));
+                parsed_any = true;
+            }
+            "record_fps" => {
+                cfg.record_fps = RecordFps::from_i32(parse_i32_or(val, 1));
+                parsed_any = true;
+            }
+            "record_codec" => {
+                cfg.record_codec = RecordCodec::from_i32(parse_i32_or(val, 0));
+                parsed_any = true;
+            }
+            "record_bitrate" => {
+                cfg.record_bitrate = RecordBitrate::from_i32(parse_i32_or(val, 0));
+                parsed_any = true;
+            }
+            "record_audio_mode" => {
+                cfg.record_audio_mode = RecordAudioMode::from_i32(parse_i32_or(val, 1));
+                parsed_any = true;
+            }
+            "record_with_hud" => {
+                cfg.record_with_hud = parse_i32_or(val, 0) != 0;
+                parsed_any = true;
+            }
+            "bind_record" => {
+                if let Some(kb) = parse_keybind(val) {
+                    cfg.bind_record = kb;
+                }
+                parsed_any = true;
+            }
             "metrics" => {
                 let mut next = Vec::new();
                 for token in val.split(',') {
@@ -960,6 +1231,14 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
          screenshot_with_hud={}\n\
          screenshot_quality={}\n\
          save_folder={}\n\
+         record_folder={}\n\
+         record_resolution={}\n\
+         record_fps={}\n\
+         record_codec={}\n\
+         record_bitrate={}\n\
+         record_audio_mode={}\n\
+         record_with_hud={}\n\
+         bind_record={},{}\n\
          metrics={}\n",
         cfg.preset.as_str(),
         cfg.gui_scale,
@@ -1005,6 +1284,15 @@ pub fn save_ini_file(path: &Path, cfg: &HudConfig) -> bool {
         i32::from(cfg.screenshot_with_hud),
         cfg.screenshot_quality.as_i32(),
         sanitize_ini_str(&cfg.save_folder),
+        sanitize_ini_str(&cfg.record_folder),
+        cfg.record_resolution.as_i32(),
+        cfg.record_fps.as_i32(),
+        cfg.record_codec.as_i32(),
+        cfg.record_bitrate.as_i32(),
+        cfg.record_audio_mode.as_i32(),
+        i32::from(cfg.record_with_hud),
+        cfg.bind_record.mod_key,
+        cfg.bind_record.main_key,
         metrics_csv.join(","),
     );
 

@@ -46,6 +46,15 @@ pub struct FrameTickData {
     pub last_benchmark: Option<BenchmarkSummary>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RecorderStatusSnapshot {
+    pub is_recording: bool,
+    pub elapsed_sec: f32,
+    pub dropped_frames: u64,
+    pub active_backend: String,
+    pub active_output_path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LayerToUiMsg {
     Init {
@@ -69,6 +78,7 @@ pub enum LayerToUiMsg {
     },
     SoftwareCursor(bool),
     ToastNotification(String),
+    RecorderStatusUpdate(RecorderStatusSnapshot),
     Shutdown,
 }
 
@@ -80,6 +90,7 @@ pub enum UiToLayerMsg {
     BenchmarkToggle,
     BenchmarkLoads { cpu_load: f32, gpu_load: f32 },
     ScreenshotRequest { with_hud: bool },
+    ToggleRecord,
     OpenSaveFolder,
     KeybindCaptureState { capturing: bool, target: KeybindTarget },
     ExternalOverlayActive(bool),

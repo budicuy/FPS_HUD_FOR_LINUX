@@ -297,3 +297,25 @@ fn protocol_frame_tick_active_gpu_benchmark_loads_and_positioned_shm_slot() {
         (24, 18, 4, 4)
     );
 }
+
+#[test]
+fn test_recorder_ipc_roundtrip() {
+    use fpshud_ipc::protocol::RecorderStatusSnapshot;
+
+    let snap = RecorderStatusSnapshot {
+        is_recording: true,
+        elapsed_sec: 12.5,
+        dropped_frames: 2,
+        active_backend: "NVENC H.264".to_string(),
+        active_output_path: Some("/tmp/fpshud_rec_01.mp4".to_string()),
+    };
+    let msg = LayerToUiMsg::RecorderStatusUpdate(snap);
+    let raw = msg.encode().expect("encode RecorderStatusUpdate");
+    let decoded = LayerToUiMsg::decode(&raw).expect("decode RecorderStatusUpdate");
+    assert_eq!(decoded, msg);
+
+    let toggle = UiToLayerMsg::ToggleRecord;
+    let raw_t = toggle.encode().expect("encode ToggleRecord");
+    let decoded_t = UiToLayerMsg::decode(&raw_t).expect("decode ToggleRecord");
+    assert_eq!(decoded_t, toggle);
+}

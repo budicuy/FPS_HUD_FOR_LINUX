@@ -68,10 +68,51 @@ metrics=fps,cpuhybrid,unknown_metric,gpuload
 
     assert!(save_ini_file(&path, &cfg));
     let saved = fs::read_to_string(&path).unwrap();
-    assert!(!saved.contains("bind_record="));
+    assert!(saved.contains("bind_record=0,65"));
     assert!(!saved.contains("replay_enabled="));
     assert!(saved.contains("bind_toggle_gui=0,110"));
     assert!(!dir.path().join("config.ini.tmp").exists());
+}
+
+#[test]
+fn test_recorder_config_defaults_and_roundtrip() {
+    use fpshud_core::{
+        RecordAudioMode, RecordBitrate, RecordCodec, RecordFps, RecordResolution,
+    };
+
+    let cfg = HudConfig::default();
+    assert_eq!(cfg.bind_record, Keybind::new(0, 66));
+    assert_eq!(cfg.record_resolution, RecordResolution::Native);
+    assert_eq!(cfg.record_fps, RecordFps::Fps60);
+    assert_eq!(cfg.record_codec, RecordCodec::H264);
+    assert_eq!(cfg.record_bitrate, RecordBitrate::Auto);
+    assert_eq!(cfg.record_audio_mode, RecordAudioMode::GameAudio);
+    assert!(!cfg.record_with_hud);
+    assert!(!cfg.resolved_record_dir().as_os_str().is_empty());
+
+    let mut custom = cfg;
+    custom.record_folder = "/tmp/fpshud_custom_rec".to_string();
+    custom.record_resolution = RecordResolution::P1080;
+    custom.record_fps = RecordFps::Fps120;
+    custom.record_codec = RecordCodec::H265;
+    custom.record_bitrate = RecordBitrate::Mbps25;
+    custom.record_audio_mode = RecordAudioMode::GameAndMic;
+    custom.record_with_hud = true;
+    custom.bind_record = Keybind::new(1, 66);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rec.ini");
+    assert!(save_ini_file(&path, &custom));
+    let mut loaded = HudConfig::default();
+    assert!(load_ini_file(&path, &mut loaded));
+    assert_eq!(loaded.record_folder, "/tmp/fpshud_custom_rec");
+    assert_eq!(loaded.record_resolution, RecordResolution::P1080);
+    assert_eq!(loaded.record_fps, RecordFps::Fps120);
+    assert_eq!(loaded.record_codec, RecordCodec::H265);
+    assert_eq!(loaded.record_bitrate, RecordBitrate::Mbps25);
+    assert_eq!(loaded.record_audio_mode, RecordAudioMode::GameAndMic);
+    assert!(loaded.record_with_hud);
+    assert_eq!(loaded.bind_record, Keybind::new(1, 66));
 }
 
 #[test]

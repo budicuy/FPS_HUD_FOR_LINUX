@@ -468,6 +468,7 @@ impl DaemonState {
                 self.overlay_dirty.mark_dirty();
                 self.push_toast(text);
             }
+            LayerToUiMsg::RecorderStatusUpdate(_) => {}
             LayerToUiMsg::Shutdown => return Ok(false),
         }
         Ok(true)
@@ -574,6 +575,9 @@ impl DaemonState {
                                 outgoing.push(UiToLayerMsg::ScreenshotRequest {
                                     with_hud: self.config.screenshot_with_hud,
                                 });
+                            }
+                            InputAction::ToggleRecord => {
+                                outgoing.push(UiToLayerMsg::ToggleRecord);
                             }
                             InputAction::ToggleGui | InputAction::ToggleHud => {}
                         }

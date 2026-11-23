@@ -269,3 +269,25 @@ fn external_overlay_suppresses_in_process_grabs_and_seeds_held_keys() {
         vec![InputAction::ToggleGui]
     );
 }
+
+#[test]
+fn test_record_keybind_trigger_and_capture() {
+    use fpshud_input::keycodes::KEY_F8;
+
+    let mut mgr = InputManager::new_headless();
+    let mut cfg = HudConfig::default();
+
+    // Default F8 triggers ToggleRecord once (edge-trigger anti-repeat)
+    let a1 = mgr.handle_key_event(KEY_F8, true, &mut cfg);
+    assert_eq!(a1, vec![InputAction::ToggleRecord]);
+    let a_repeat = mgr.handle_key_event(KEY_F8, true, &mut cfg);
+    assert!(a_repeat.is_empty());
+    let _ = mgr.handle_key_event(KEY_F8, false, &mut cfg);
+
+    // Interactive capture for KeybindTarget::Record with Ctrl+F8
+    mgr.start_keybind_capture(KeybindTarget::Record);
+    let _ = mgr.handle_key_event(29, true, &mut cfg); // Left Ctrl
+    let _ = mgr.handle_key_event(KEY_F8, true, &mut cfg);
+    assert!(!mgr.is_capturing_keybind());
+    assert_eq!(cfg.bind_record, Keybind::new(1, KEY_F8));
+}

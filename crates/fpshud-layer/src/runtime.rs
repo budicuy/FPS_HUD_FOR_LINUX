@@ -309,7 +309,7 @@ impl LayerRuntime {
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
-                InputAction::ToggleGui | InputAction::ToggleHud => {}
+                InputAction::ToggleRecord | InputAction::ToggleGui | InputAction::ToggleHud => {}
             }
         }
     }
@@ -333,6 +333,7 @@ impl LayerRuntime {
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
+                InputAction::ToggleRecord => {}
             }
         }
         if config_changed {
@@ -471,6 +472,7 @@ impl LayerRuntime {
             UiToLayerMsg::ScreenshotRequest { with_hud } => {
                 self.pending_screenshot = Some(with_hud);
             }
+            UiToLayerMsg::ToggleRecord => {}
             UiToLayerMsg::OpenSaveFolder => {
                 let dir = self.config.resolved_screenshot_dir();
                 let _ = std::fs::create_dir_all(&dir);

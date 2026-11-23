@@ -21,6 +21,7 @@ pub enum KeybindTarget {
     ToggleHud,
     ToggleBenchmark,
     TakeScreenshot,
+    Record,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub enum InputAction {
     ToggleHud,
     ToggleBenchmark,
     TakeScreenshot,
+    ToggleRecord,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -268,6 +270,8 @@ impl InputManager {
 
         if matches_keybind(code, cfg.bind_screenshot, &self.keys_down) {
             actions.push(InputAction::TakeScreenshot);
+        } else if matches_keybind(code, cfg.bind_record, &self.keys_down) {
+            actions.push(InputAction::ToggleRecord);
         } else if matches_keybind(code, cfg.bind_toggle_gui, &self.keys_down)
             || (!has_mod
                 && cfg.bind_toggle_gui.mod_key == 0
@@ -315,6 +319,9 @@ impl InputManager {
             }
             KeybindTarget::TakeScreenshot => {
                 cfg.bind_screenshot = kb;
+            }
+            KeybindTarget::Record => {
+                cfg.bind_record = kb;
             }
             KeybindTarget::None => {}
         }

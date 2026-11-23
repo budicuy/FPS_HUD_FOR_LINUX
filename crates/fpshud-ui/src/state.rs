@@ -745,6 +745,7 @@ impl UiStore {
             KeybindTarget::ToggleHud => self.config.bind_toggle_hud,
             KeybindTarget::ToggleBenchmark => self.config.bind_benchmark,
             KeybindTarget::TakeScreenshot => self.config.bind_screenshot,
+            KeybindTarget::Record => self.config.bind_record,
             KeybindTarget::None => return "None".to_string(),
         };
         format_keybind(kb)
