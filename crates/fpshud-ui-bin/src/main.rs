@@ -549,15 +549,17 @@ impl DaemonState {
                     self.close_external_overlay(c)?;
                     send_ui_msg(c, &UiToLayerMsg::ConfigUpdated(self.config.clone()), None, false)?;
                 }
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(&path)
-                    .env_remove("LD_PRELOAD")
-                    .env_remove("VK_INSTANCE_LAYERS")
-                    .env("DISABLE_FPS_HUD", "1")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
+                if path.is_file() {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&path)
+                        .env_remove("LD_PRELOAD")
+                        .env_remove("VK_INSTANCE_LAYERS")
+                        .env("DISABLE_FPS_HUD", "1")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
             }
         }
         Ok(())
