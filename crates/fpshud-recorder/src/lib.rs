@@ -5,5 +5,6 @@ pub mod capture;
 pub mod library;
 pub mod locate;
 pub mod pacer;
+pub mod player;
 pub mod probe;
 pub mod session;
