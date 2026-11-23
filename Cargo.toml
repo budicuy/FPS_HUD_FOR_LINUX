@@ -5,6 +5,7 @@ members = [
     "crates/fpshud-analytics",
     "crates/fpshud-telemetry",
     "crates/fpshud-screenshot",
+    "crates/fpshud-recorder",
     "crates/fpshud-input",
     "crates/fpshud-ipc",
     "crates/fpshud-ui",

@@ -1,0 +1,17 @@
+[package]
+name = "fpshud-recorder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+fpshud-core = { path = "../fpshud-core" }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
