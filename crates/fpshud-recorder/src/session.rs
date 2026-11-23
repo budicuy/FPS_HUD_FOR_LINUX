@@ -223,6 +223,14 @@ pub fn build_record_ffmpeg_args(
         }
     }
 
+    if encoder.is_vaapi() || encoder.is_vulkan() || matches!(encoder, SelectedEncoder::H264Nvenc | SelectedEncoder::HevcNvenc) {
+        args.extend([
+            "-threads".to_string(),
+            "2".to_string(),
+            "-filter_threads".to_string(),
+            "2".to_string(),
+        ]);
+    }
     args.push("-c:v".to_string());
     args.push(encoder.ffmpeg_name().to_string());
 
@@ -230,9 +238,11 @@ pub fn build_record_ffmpeg_args(
         (SelectedEncoder::H264Nvenc | SelectedEncoder::HevcNvenc, None) => {
             args.extend([
                 "-preset".to_string(),
-                "p4".to_string(),
+                "p3".to_string(),
                 "-tune".to_string(),
                 "hq".to_string(),
+                "-rc-lookahead".to_string(),
+                "0".to_string(),
                 "-rc".to_string(),
                 "vbr".to_string(),
                 "-cq".to_string(),
@@ -244,9 +254,11 @@ pub fn build_record_ffmpeg_args(
         (SelectedEncoder::H264Nvenc | SelectedEncoder::HevcNvenc, Some(mbps)) => {
             args.extend([
                 "-preset".to_string(),
-                "p4".to_string(),
+                "p3".to_string(),
                 "-tune".to_string(),
                 "hq".to_string(),
+                "-rc-lookahead".to_string(),
+                "0".to_string(),
                 "-rc".to_string(),
                 "vbr".to_string(),
                 "-b:v".to_string(),
