@@ -179,43 +179,53 @@ fn test_session_records_valid_fmp4_and_splits_on_resize() {
     .expect("start recorder session");
 
     let pool = PixelBufferPool::new(4);
+    let submit_until_accepted = |w: u32, h: u32, fill: u8| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            let mut buf = pool.take((w * h * 4) as usize);
+            buf.resize((w * h * 4) as usize, fill);
+            if handle.try_submit_frame(SubmittedFrame {
+                cap_w: w,
+                cap_h: h,
+                src_w: w,
+                src_h: h,
+                pix_fmt: RecorderPixelFormat::Rgba8,
+                transfer: ColorTransfer::Sdr,
+                flip_y: false,
+                payload: FramePayload::OwnedBuffer {
+                    data: buf,
+                    pool: Some(pool.clone()),
+                },
+            }) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out submitting frame {w}x{h}");
+    };
+
     for _ in 0..10 {
-        let mut buf = pool.take(320 * 180 * 4);
-        buf.resize(320 * 180 * 4, 0x40);
-        let _ = handle.try_submit_frame(SubmittedFrame {
-            cap_w: 320,
-            cap_h: 180,
-            src_w: 320,
-            src_h: 180,
-            pix_fmt: RecorderPixelFormat::Rgba8,
-            transfer: ColorTransfer::Sdr,
-            flip_y: false,
-            payload: FramePayload::OwnedBuffer {
-                data: buf,
-                pool: Some(pool.clone()),
-            },
-        });
+        submit_until_accepted(320, 180, 0x40);
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
     // Mid-session resize -> triggers segment split (_part2.mp4)
     for _ in 0..10 {
-        let mut buf = pool.take(256 * 144 * 4);
-        buf.resize(256 * 144 * 4, 0x80);
-        let _ = handle.try_submit_frame(SubmittedFrame {
-            cap_w: 256,
-            cap_h: 144,
-            src_w: 256,
-            src_h: 144,
-            pix_fmt: RecorderPixelFormat::Rgba8,
-            transfer: ColorTransfer::Sdr,
-            flip_y: false,
-            payload: FramePayload::OwnedBuffer {
-                data: buf,
-                pool: Some(pool.clone()),
-            },
-        });
+        submit_until_accepted(256, 144, 0x80);
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // Wait briefly for SegmentSplit event before stopping so slow CI runners don't race
+    let split_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < split_deadline {
+        let saw_split = events
+            .lock()
+            .is_ok_and(|g| g.iter().any(|e| matches!(e, RecorderEvent::SegmentSplit { .. })));
+        if saw_split {
+            break;
+        }
+        submit_until_accepted(256, 144, 0x80);
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
 
     handle.request_stop();

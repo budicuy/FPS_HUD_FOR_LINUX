@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-analytics"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fpshud-core",
  "rustix",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "rustix",
  "serde",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-input"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fpshud-core",
  "rustix",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-ipc"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fpshud-analytics",
  "fpshud-core",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-layer"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "ash",
  "ash-layer",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-recorder"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "fpshud-core",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-screenshot"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fpshud-core",
  "png",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-telemetry"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "fpshud-analytics",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-ui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fpshud-analytics",
  "fpshud-core",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "fpshud-ui-bin"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ash",
