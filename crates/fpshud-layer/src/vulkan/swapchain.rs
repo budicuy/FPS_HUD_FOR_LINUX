@@ -1,5 +1,5 @@
 use crate::vulkan::blit::VulkanBlitPipeline;
-use crate::vulkan::capture::FrameCaptureStaging;
+use crate::vulkan::capture::{FrameCaptureStaging, RecorderCaptureRing};
 use ash::vk::{self, Handle};
 use fpshud_input::SurfaceBackendType;
 use std::collections::HashMap;
@@ -79,10 +79,13 @@ pub struct SwapchainData {
     pub swapchain: vk::SwapchainKHR,
     pub device_data: Arc<DeviceData>,
     pub format: vk::Format,
+    pub color_space: vk::ColorSpaceKHR,
     pub extent: vk::Extent2D,
     pub supports_transfer_src: bool,
+    pub supports_linear_blit: bool,
     pub blit: Option<VulkanBlitPipeline>,
     pub frames: Vec<FrameSlot>,
+    pub recorder_ring: RecorderCaptureRing,
     pub initialized: bool,
 }
 
@@ -242,6 +245,7 @@ impl SwapchainData {
     pub fn destroy_resources(&mut self) {
         let dev = &self.device_data.device;
         let _ = unsafe { dev.device_wait_idle() };
+        unsafe { self.recorder_ring.drain_in_flight_slots(dev) };
 
         for slot in &mut self.frames {
             unsafe {

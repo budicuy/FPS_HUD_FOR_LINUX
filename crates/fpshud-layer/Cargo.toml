@@ -16,6 +16,7 @@ fpshud-core = { path = "../fpshud-core" }
 fpshud-analytics = { path = "../fpshud-analytics" }
 fpshud-input = { path = "../fpshud-input" }
 fpshud-screenshot = { path = "../fpshud-screenshot" }
+fpshud-recorder = { path = "../fpshud-recorder" }
 fpshud-ipc = { path = "../fpshud-ipc" }
 glow.workspace = true
 libc.workspace = true

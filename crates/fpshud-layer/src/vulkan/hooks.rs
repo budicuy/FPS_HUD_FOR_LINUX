@@ -188,6 +188,7 @@ pub(crate) unsafe extern "system" fn hook_destroy_instance(
         hit
     });
     if let Ok(mut rt) = LayerRuntime::global().lock() {
+        rt.flush_and_stop_recorders();
         rt.input.attach_wayland_display_hint(false);
         rt.input.reset_surface_hints();
     }
@@ -530,6 +531,9 @@ pub(crate) unsafe extern "system" fn hook_destroy_device(
     if device == vk::Device::null() {
         return;
     }
+    if let Ok(mut rt) = LayerRuntime::global().lock() {
+        rt.flush_and_stop_recorders();
+    }
     let key = unsafe { dispatch_key_from_raw(device.as_raw()) };
     let (removed_dd, swapchains) = registry()
         .lock()
@@ -667,14 +671,28 @@ pub(crate) unsafe extern "system" fn hook_create_swapchain_khr(
         rt.notify_surface_swapchain(backend, win_id as u32);
     }
 
+    let format = unsafe { (*p_create_info).image_format };
+    let color_space = unsafe { (*p_create_info).image_color_space };
+    let fmt_props = unsafe {
+        dd.instance_data
+            .instance
+            .get_physical_device_format_properties(dd.physical_device, format)
+    };
+    let supports_linear_blit = fmt_props
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST);
+
     let mut sd = SwapchainData {
         swapchain,
         device_data: dd,
-        format: unsafe { (*p_create_info).image_format },
+        format,
+        color_space,
         extent: unsafe { (*p_create_info).image_extent },
         supports_transfer_src,
+        supports_linear_blit,
         blit: None,
         frames: Vec::new(),
+        recorder_ring: crate::vulkan::capture::RecorderCaptureRing::default(),
         initialized: false,
     };
     sd.init_resources();
@@ -754,7 +772,7 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
     };
 
-    let (enabled, show_in_game_overlay, take_shot, overlay_frame) = {
+    let (enabled, show_in_game_overlay, take_shot, rec_active, rec_plan, overlay_frame) = {
         let Ok(mut rt) = LayerRuntime::global().lock() else {
             return unsafe { (dd.swapchain_fn.queue_present_khr)(queue, p_present_info) };
         };
@@ -767,15 +785,20 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         } else {
             None
         };
-        let show_overlay = rt.config.hud_visible
-            || (rt.config.gui_open && !rt.input.is_external_overlay_active());
+        let is_rec = rt.is_recorder_active();
+        let plan = if is_rec && sd.supports_transfer_src {
+            rt.recorder_capture_plan(sd.extent.width, sd.extent.height)
+        } else {
+            None
+        };
+        let show_overlay = rt.should_blit_overlay();
         let buf = if show_overlay {
             let l = &rt.overlay_sync.latest;
             (!l.rgba.is_empty()).then(|| l.clone())
         } else {
             None
         };
-        (rt.config.enabled, show_overlay, shot, buf)
+        (rt.config.enabled, show_overlay, shot, is_rec, plan, buf)
     };
 
     if !enabled || !sd.initialized || img_idx >= sd.frames.len() {
@@ -815,6 +838,28 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         sd.frames[img_idx]
             .capture
             .flush_pending_screenshot(dev, extent.width, extent.height, format);
+
+        // Harvest completed GPU recorder slots BEFORE resetting `fence` (100% race-free, zero extra wait!)
+        if sd.recorder_ring.is_allocated() {
+            let frame_fences: Vec<vk::Fence> = sd.frames.iter().map(|f| f.fence).collect();
+            let mut harvested = Vec::new();
+            sd.recorder_ring
+                .harvest_completed_slots(dev, img_idx, &frame_fences, &mut |f| {
+                    harvested.push(f);
+                });
+            if !harvested.is_empty()
+                && let Ok(rt) = LayerRuntime::global().lock()
+            {
+                for f in harvested {
+                    rt.submit_recorder_frame(f);
+                }
+            }
+            if !rec_active {
+                sd.recorder_ring.mark_pending_destroy();
+                sd.recorder_ring.try_cleanup_if_idle(dev);
+            }
+        }
+
         let _ = dev.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty());
     }
 
@@ -850,6 +895,51 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
         clean_recorded = true;
     }
 
+    let color_space = sd.color_space;
+    let supports_linear_blit = sd.supports_linear_blit;
+    let mut rec_recorded = false;
+    if let Some(plan) = rec_plan
+        && !plan.with_hud
+        && let Some(rec_fmt) =
+            crate::vulkan::capture::map_vk_format_to_recorder_format(format.as_raw())
+    {
+        let use_blit = supports_linear_blit
+            && rec_fmt.is_direct_8bit()
+            && (plan.enc_w != extent.width || plan.enc_h != extent.height);
+        let (cap_w, cap_h) = if use_blit {
+            (plan.enc_w, plan.enc_h)
+        } else {
+            (extent.width, extent.height)
+        };
+        if unsafe {
+            sd.recorder_ring.ensure_allocated(
+                dev,
+                &dd.mem_props,
+                cap_w,
+                cap_h,
+                format,
+                rec_fmt,
+                use_blit,
+            )
+        } {
+            let transfer =
+                crate::vulkan::capture::map_vk_color_transfer(color_space.as_raw(), rec_fmt);
+            rec_recorded = unsafe {
+                sd.recorder_ring.record_capture(
+                    dev,
+                    cmd,
+                    image,
+                    extent.width,
+                    extent.height,
+                    img_idx,
+                    plan.pts_ns,
+                    rec_fmt,
+                    transfer,
+                )
+            };
+        }
+    }
+
     if has_overlay && let Some(ref mut blit) = sd.blit {
         let (dx, dy, bw, bh) = if let Some(ref frame_buf) = overlay_frame {
             unsafe {
@@ -883,6 +973,49 @@ pub(crate) unsafe extern "system" fn hook_queue_present_khr(
             );
         }
         sd.frames[img_idx].capture.has_pending_screenshot = true;
+    }
+
+    if !rec_recorded
+        && let Some(plan) = rec_plan
+        && plan.with_hud
+        && let Some(rec_fmt) =
+            crate::vulkan::capture::map_vk_format_to_recorder_format(format.as_raw())
+    {
+        let use_blit = supports_linear_blit
+            && rec_fmt.is_direct_8bit()
+            && (plan.enc_w != extent.width || plan.enc_h != extent.height);
+        let (cap_w, cap_h) = if use_blit {
+            (plan.enc_w, plan.enc_h)
+        } else {
+            (extent.width, extent.height)
+        };
+        if unsafe {
+            sd.recorder_ring.ensure_allocated(
+                dev,
+                &dd.mem_props,
+                cap_w,
+                cap_h,
+                format,
+                rec_fmt,
+                use_blit,
+            )
+        } {
+            let transfer =
+                crate::vulkan::capture::map_vk_color_transfer(color_space.as_raw(), rec_fmt);
+            let _ = unsafe {
+                sd.recorder_ring.record_capture(
+                    dev,
+                    cmd,
+                    image,
+                    extent.width,
+                    extent.height,
+                    img_idx,
+                    plan.pts_ns,
+                    rec_fmt,
+                    transfer,
+                )
+            };
+        }
     }
 
     let _ = unsafe { dev.end_command_buffer(cmd) };

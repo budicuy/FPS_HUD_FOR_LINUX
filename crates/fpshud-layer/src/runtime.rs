@@ -6,14 +6,19 @@ use fpshud_core::config::{HudConfig, init_config_from_env, save_config_to_disk};
 use fpshud_core::paths::{get_default_record_dir, get_secure_runtime_dir};
 use fpshud_input::{InputAction, InputManager, SurfaceBackendType};
 use fpshud_ipc::protocol::{
-    FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, ShmSlotMeta, UiToLayerMsg,
+    FrameTickData, LayerToUiMsg, MAX_IPC_PAYLOAD, RecorderStatusSnapshot, ShmSlotMeta,
+    UiToLayerMsg,
 };
 use fpshud_ipc::{IpcConnection, IpcServer, ShmRingReader};
+use fpshud_recorder::pacer::{FramePacer, compute_target_dimensions};
+use fpshud_recorder::session::{
+    RecorderConfig, RecorderEvent, RecorderHandle, RecorderSession, SubmittedFrame,
+};
 use fpshud_screenshot::{PixelFormat, RawFrameCapture, ScreenshotWorker};
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -132,6 +137,14 @@ impl OverlayFrameSync {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RecorderCapturePlan {
+    pub enc_w: u32,
+    pub enc_h: u32,
+    pub with_hud: bool,
+    pub pts_ns: u64,
+}
+
 pub struct LayerRuntime {
     pub config: HudConfig,
     pub input: InputManager,
@@ -147,6 +160,17 @@ pub struct LayerRuntime {
     active_gpu: Option<(u32, u32)>,
     active_gpu_sent: bool,
     pending_screenshot: Option<bool>,
+    active_recorder: Option<RecorderHandle>,
+    stopping_recorders: Vec<RecorderHandle>,
+    recorder_pacer: FramePacer,
+    recorder_events_rx: Option<mpsc::Receiver<RecorderEvent>>,
+    last_recorder_status_push: Instant,
+    recorder_epoch: Instant,
+    active_toast_until: Option<Instant>,
+    smoke_rec_sec: Option<f32>,
+    smoke_rec_started: bool,
+    smoke_rec_started_at: Option<Instant>,
+    test_recorder_active_override: bool,
     test_mode: bool,
     ipc_server: Option<IpcServer>,
     ipc_conn: Option<IpcConnection>,
@@ -195,6 +219,20 @@ impl LayerRuntime {
                 active_gpu: None,
                 active_gpu_sent: false,
                 pending_screenshot: None,
+                active_recorder: None,
+                stopping_recorders: Vec::new(),
+                recorder_pacer: FramePacer::new(60),
+                recorder_events_rx: None,
+                last_recorder_status_push: Instant::now() - Duration::from_secs(1),
+                recorder_epoch: Instant::now(),
+                active_toast_until: None,
+                smoke_rec_sec: std::env::var("FPS_HUD_REC_SMOKE_SEC")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0),
+                smoke_rec_started: false,
+                smoke_rec_started_at: None,
+                test_recorder_active_override: false,
                 test_mode: false,
                 ipc_server: None,
                 ipc_conn: None,
@@ -235,6 +273,17 @@ impl LayerRuntime {
             active_gpu: None,
             active_gpu_sent: false,
             pending_screenshot: None,
+            active_recorder: None,
+            stopping_recorders: Vec::new(),
+            recorder_pacer: FramePacer::new(60),
+            recorder_events_rx: None,
+            last_recorder_status_push: Instant::now(),
+            recorder_epoch: Instant::now(),
+            active_toast_until: None,
+            smoke_rec_sec: None,
+            smoke_rec_started: false,
+            smoke_rec_started_at: None,
+            test_recorder_active_override: false,
             test_mode: true,
             ipc_server: None,
             ipc_conn: None,
@@ -309,7 +358,8 @@ impl LayerRuntime {
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
-                InputAction::ToggleRecord | InputAction::ToggleGui | InputAction::ToggleHud => {}
+                InputAction::ToggleRecord => self.toggle_recorder(),
+                InputAction::ToggleGui | InputAction::ToggleHud => {}
             }
         }
     }
@@ -324,7 +374,10 @@ impl LayerRuntime {
                 }
                 InputAction::ToggleHud => {
                     self.config.hud_visible = !self.config.hud_visible;
-                    if !self.config.hud_visible {
+                    if !self.config.hud_visible
+                        && !self.is_recorder_active()
+                        && !self.has_active_toast()
+                    {
                         self.overlay_sync.latest.rgba = std::sync::Arc::from([]);
                     }
                     config_changed = true;
@@ -333,13 +386,194 @@ impl LayerRuntime {
                 InputAction::TakeScreenshot => {
                     self.pending_screenshot = Some(self.config.screenshot_with_hud);
                 }
-                InputAction::ToggleRecord => {}
+                InputAction::ToggleRecord => self.toggle_recorder(),
             }
         }
         if config_changed {
             let _ = self.send_to_ui(&LayerToUiMsg::ConfigSync(self.config.clone()));
         }
         config_changed
+    }
+
+    #[must_use]
+    pub fn is_recorder_active(&self) -> bool {
+        self.test_recorder_active_override || self.active_recorder.is_some()
+    }
+
+    pub fn set_recorder_active_for_test(&mut self, active: bool) {
+        self.test_recorder_active_override = active;
+    }
+
+    #[must_use]
+    pub fn has_active_toast(&self) -> bool {
+        self.active_toast_until
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    #[must_use]
+    pub fn should_blit_overlay(&self) -> bool {
+        self.config.hud_visible
+            || self.is_recorder_active()
+            || self.has_active_toast()
+            || (self.config.gui_open && !self.input.is_external_overlay_active())
+    }
+
+    fn emit_toast(&mut self, msg: String) {
+        self.active_toast_until = Some(Instant::now() + Duration::from_secs(4));
+        let _ = self.send_to_ui(&LayerToUiMsg::ToastNotification(msg));
+    }
+
+    fn build_recorder_status(&self) -> RecorderStatusSnapshot {
+        if let Some(ref handle) = self.active_recorder {
+            RecorderStatusSnapshot {
+                is_recording: true,
+                elapsed_sec: handle.elapsed_sec(),
+                dropped_frames: handle.dropped_frames(),
+                active_backend: handle.active_backend().to_string(),
+                active_output_path: handle
+                    .active_output_path()
+                    .map(|p| p.to_string_lossy().into_owned()),
+            }
+        } else {
+            RecorderStatusSnapshot::default()
+        }
+    }
+
+    pub fn toggle_recorder(&mut self) {
+        if let Some(handle) = self.active_recorder.take() {
+            handle.request_stop();
+            self.stopping_recorders.push(handle);
+            self.emit_toast("Stopping recording...".to_string());
+            let snap = self.build_recorder_status();
+            let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+            return;
+        }
+
+        self.reap_finished_recorders();
+        if !self.stopping_recorders.is_empty() {
+            self.emit_toast("Finalizing previous recording...".to_string());
+            return;
+        }
+
+        let (ev_tx, ev_rx) = mpsc::channel::<RecorderEvent>();
+        let cfg = RecorderConfig {
+            output_dir: self.config.resolved_record_dir(),
+            resolution: self.config.record_resolution,
+            fps: self.config.record_fps,
+            codec: self.config.record_codec,
+            bitrate: self.config.record_bitrate,
+            audio_mode: self.config.record_audio_mode,
+            target_gpu: self.active_gpu,
+        };
+
+        match RecorderSession::start(cfg, move |ev| {
+            let _ = ev_tx.send(ev);
+        }) {
+            Ok(handle) => {
+                self.recorder_pacer.reset(self.config.record_fps.as_u32());
+                self.recorder_epoch = Instant::now();
+                let backend = handle.active_backend().to_string();
+                self.active_recorder = Some(handle);
+                self.recorder_events_rx = Some(ev_rx);
+                self.emit_toast(format!("Recording started ({backend})"));
+                let snap = self.build_recorder_status();
+                let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+            }
+            Err(err) => {
+                self.emit_toast(format!("Recorder error: {err}"));
+            }
+        }
+    }
+
+    fn reap_finished_recorders(&mut self) {
+        self.stopping_recorders.retain_mut(|h| {
+            if h.is_finished() {
+                let _ = h.wait_finished();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    pub fn flush_and_stop_recorders(&mut self) {
+        if let Some(mut handle) = self.active_recorder.take() {
+            let _ = handle.wait_finished();
+        }
+        for mut handle in self.stopping_recorders.drain(..) {
+            let _ = handle.wait_finished();
+        }
+        self.drain_recorder_events();
+    }
+
+    fn drain_recorder_events(&mut self) {
+        let mut drained = Vec::new();
+        if let Some(ref rx) = self.recorder_events_rx {
+            while let Ok(ev) = rx.try_recv() {
+                drained.push(ev);
+            }
+        }
+        for ev in drained {
+            match ev {
+                RecorderEvent::Started { .. } => {
+                    let snap = self.build_recorder_status();
+                    let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+                }
+                RecorderEvent::SegmentSplit { new_output_path } => {
+                    let name = new_output_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.emit_toast(format!("Recording split: {name}"));
+                    let snap = self.build_recorder_status();
+                    let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+                }
+                RecorderEvent::Warning(w) => self.emit_toast(w),
+                RecorderEvent::Error(e) => {
+                    self.emit_toast(format!("Recorder error: {e}"));
+                    if let Some(h) = self.active_recorder.take() {
+                        h.request_stop();
+                        self.stopping_recorders.push(h);
+                    }
+                    let snap = self.build_recorder_status();
+                    let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+                }
+                RecorderEvent::Stopped { output_paths } => {
+                    if let Some(first) = output_paths.first()
+                        && let Some(name) = first.file_name()
+                    {
+                        self.emit_toast(format!("Recording saved: {}", name.to_string_lossy()));
+                    }
+                    let snap = self.build_recorder_status();
+                    let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn recorder_capture_plan(&mut self, src_w: u32, src_h: u32) -> Option<RecorderCapturePlan> {
+        if self.active_recorder.is_none() || src_w == 0 || src_h == 0 {
+            return None;
+        }
+        let now_ns = self.recorder_epoch.elapsed().as_nanos() as u64;
+        if !self.recorder_pacer.should_capture(now_ns) {
+            return None;
+        }
+        let (enc_w, enc_h) =
+            compute_target_dimensions(src_w, src_h, self.config.record_resolution);
+        Some(RecorderCapturePlan {
+            enc_w,
+            enc_h,
+            with_hud: self.config.record_with_hud,
+            pts_ns: now_ns,
+        })
+    }
+
+    pub fn submit_recorder_frame(&self, frame: SubmittedFrame) {
+        if let Some(ref handle) = self.active_recorder {
+            let _ = handle.try_submit_frame(frame);
+        }
     }
 
     #[must_use]
@@ -472,7 +706,7 @@ impl LayerRuntime {
             UiToLayerMsg::ScreenshotRequest { with_hud } => {
                 self.pending_screenshot = Some(with_hud);
             }
-            UiToLayerMsg::ToggleRecord => {}
+            UiToLayerMsg::ToggleRecord => self.toggle_recorder(),
             UiToLayerMsg::OpenSaveFolder => {
                 let dir = self.config.resolved_screenshot_dir();
                 let _ = std::fs::create_dir_all(&dir);
@@ -636,6 +870,30 @@ impl LayerRuntime {
         }
 
         self.drain_ui_messages();
+        self.reap_finished_recorders();
+        self.drain_recorder_events();
+
+        // Automated live recording smoke test hook (`FPS_HUD_REC_SMOKE_SEC=<N>`)
+        if let Some(smoke_sec) = self.smoke_rec_sec {
+            if !self.smoke_rec_started {
+                self.smoke_rec_started = true;
+                self.smoke_rec_started_at = Some(now);
+                self.toggle_recorder();
+            } else if let Some(started_at) = self.smoke_rec_started_at
+                && started_at.elapsed().as_secs_f32() >= smoke_sec
+            {
+                self.smoke_rec_sec = None;
+                self.flush_and_stop_recorders();
+            }
+        }
+
+        if self.is_recorder_active()
+            && now.duration_since(self.last_recorder_status_push) >= Duration::from_millis(400)
+        {
+            self.last_recorder_status_push = now;
+            let snap = self.build_recorder_status();
+            let _ = self.send_to_ui(&LayerToUiMsg::RecorderStatusUpdate(snap));
+        }
 
         let telemetry_interval = if self.config.hud_graph_enabled {
             Duration::from_millis(333)
