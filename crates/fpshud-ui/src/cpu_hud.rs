@@ -406,16 +406,41 @@ impl CpuHudRenderer {
             let total = store.recorder_status.elapsed_sec.max(0.0).floor() as u64;
             let text = format!("REC {:02}:{:02}", total / 60, total % 60);
             let dot_space = (font_size * 0.9).round();
-            let spans = vec![TextSpan {
-                text,
-                color: rgba_u32(255, 70, 70, 255),
-            }];
-            let w = dot_space + Self::measure_spans(rasterizer, font, font_size, &spans);
-            lines.push(MeasuredLine {
-                prefix: None,
-                cells: vec![MeasuredCell { spans, width: w }],
-                width: w,
-            });
+            if store.config.arrangement == ArrangementMode::Linear
+                && let Some(first_line) = lines.first_mut()
+                && let Some(first_cell) = first_line.cells.first_mut()
+            {
+                let sep = TextSpan {
+                    text: "  |  ".to_string(),
+                    color: rgba_u32(130, 145, 168, alpha),
+                };
+                let sep_w = Self::measure_spans(rasterizer, font, font_size, std::slice::from_ref(&sep));
+                first_cell.spans.push(sep);
+                first_cell.width += sep_w;
+                first_line.width += sep_w;
+
+                let rec_spans = vec![TextSpan {
+                    text,
+                    color: rgba_u32(255, 70, 70, 255),
+                }];
+                let rec_w = dot_space + Self::measure_spans(rasterizer, font, font_size, &rec_spans);
+                first_line.cells.push(MeasuredCell {
+                    spans: rec_spans,
+                    width: rec_w,
+                });
+                first_line.width += rec_w;
+            } else {
+                let spans = vec![TextSpan {
+                    text,
+                    color: rgba_u32(255, 70, 70, 255),
+                }];
+                let w = dot_space + Self::measure_spans(rasterizer, font, font_size, &spans);
+                lines.push(MeasuredLine {
+                    prefix: None,
+                    cells: vec![MeasuredCell { spans, width: w }],
+                    width: w,
+                });
+            }
         }
 
         let col_gap = if right_lines.is_empty() {
@@ -506,29 +531,11 @@ impl CpuHudRenderer {
         for (idx, line) in layout.lines.iter().enumerate() {
             let by =
                 oy + layout.pad_y + (idx as f32) * (layout.line_h + layout.row_gap) + baseline_off;
-            let is_rec_line = line
-                .cells
-                .first()
-                .and_then(|c| c.spans.first())
-                .is_some_and(|s| s.text.starts_with("REC "));
-            let line_x = if is_rec_line {
-                let dot_d = (layout.font_size * 0.54).clamp(6.0, 16.0);
-                let dot_x = ox + layout.pad_x;
-                let dot_y = by - layout.font_size * 0.64;
-                canvas.fill_rounded_rect(
-                    Rect::new(dot_x, dot_y, dot_d, dot_d),
-                    dot_d * 0.5,
-                    rgba_u32(255, 58, 58, 255),
-                );
-                ox + layout.pad_x + (layout.font_size * 0.9).round()
-            } else {
-                ox + layout.pad_x
-            };
             paint_measured_line(
                 canvas,
                 rasterizer,
                 layout,
-                line_x,
+                ox + layout.pad_x,
                 by,
                 line,
                 &layout.left_col_widths,
@@ -735,17 +742,38 @@ fn paint_measured_line(
     };
 
     for (ci, cell) in line.cells.iter().enumerate() {
+        let is_rec_cell = cell
+            .spans
+            .first()
+            .is_some_and(|s| s.text.starts_with("REC "));
+        let draw_x = if is_rec_cell {
+            let dot_d = (layout.font_size * 0.54).clamp(6.0, 16.0);
+            let dot_y = by - layout.font_size * 0.64;
+            canvas.fill_rounded_rect(
+                Rect::new(x, dot_y, dot_d, dot_d),
+                dot_d * 0.5,
+                rgba_u32(255, 58, 58, 255),
+            );
+            x + (layout.font_size * 0.9).round()
+        } else {
+            x
+        };
         CpuHudRenderer::draw_spans(
             canvas,
             rasterizer,
             layout.font,
             layout.font_size,
-            x,
+            draw_x,
             by,
             &cell.spans,
         );
         let col_w = col_widths.get(ci).copied().unwrap_or(cell.width);
-        x += col_w + layout.cell_gap;
+        let gap = if col_widths.is_empty() {
+            0.0
+        } else {
+            layout.cell_gap
+        };
+        x += col_w + gap;
     }
 }
 
