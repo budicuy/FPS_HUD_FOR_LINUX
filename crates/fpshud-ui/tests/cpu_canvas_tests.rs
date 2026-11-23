@@ -111,3 +111,26 @@ fn cpu_hud_renders_into_shared_canvas_with_hud_and_toast() {
     assert!(top_alpha > 200);
     assert!(bot_alpha > 200);
 }
+
+#[test]
+fn test_blit_rgba_aspect_fit_fast_path_and_letterbox() {
+    use fpshud_ui::{CpuCanvas, Rect};
+
+    let mut dst = vec![0_u8; 8 * 8 * 4];
+    let mut canvas = CpuCanvas::new(&mut dst, 8, 8, 1.0);
+    // 1:1 exact fast path
+    let src_exact = vec![120_u8, 200, 50, 255].repeat(4 * 4);
+    canvas.blit_rgba_aspect_fit(Rect::new(2.0, 2.0, 4.0, 4.0), 4, 4, &src_exact);
+    let idx = (2 * 8 + 2) * 4;
+    assert_eq!(&dst[idx..idx + 4], &[120, 200, 50, 255]);
+
+    // Aspect-fit letterbox (4x2 inside 8x8 -> centered vertically)
+    let mut dst2 = vec![0_u8; 8 * 8 * 4];
+    let mut canvas2 = CpuCanvas::new(&mut dst2, 8, 8, 1.0);
+    let src_wide = vec![10_u8, 20, 30, 255].repeat(4 * 2);
+    canvas2.blit_rgba_aspect_fit(Rect::new(0.0, 0.0, 8.0, 8.0), 4, 2, &src_wide);
+    // Top row (y=0) is letterbox (black/zero), middle row (y=4) has video pixels
+    assert_eq!(&dst2[0..4], &[0, 0, 0, 0]);
+    let mid = (4 * 8 + 4) * 4;
+    assert_eq!(&dst2[mid..mid + 4], &[10, 20, 30, 255]);
+}

@@ -800,6 +800,75 @@ impl<'a> CpuCanvas<'a> {
         );
     }
 
+    /// Blits an RGBA8888 video frame into `dst` preserving aspect ratio, using a 1:1 row-copy fast path
+    /// whenever the source dimensions match the physical destination rect.
+    pub fn blit_rgba_aspect_fit(&mut self, dst: Rect, src_w: u32, src_h: u32, src_rgba: &[u8]) {
+        if src_w == 0 || src_h == 0 || dst.w <= 0.0 || dst.h <= 0.0 {
+            return;
+        }
+        let expected = (src_w as usize).saturating_mul(src_h as usize).saturating_mul(4);
+        if src_rgba.len() < expected {
+            return;
+        }
+
+        let dst_x0 = (dst.x * self.scale).round().max(0.0) as i32;
+        let dst_y0 = (dst.y * self.scale).round().max(0.0) as i32;
+        let dst_w_px = (dst.w * self.scale).round().max(1.0) as u32;
+        let dst_h_px = (dst.h * self.scale).round().max(1.0) as u32;
+
+        let scale = (dst_w_px as f32 / src_w as f32).min(dst_h_px as f32 / src_h as f32);
+        let fit_w = ((src_w as f32 * scale).round() as u32).clamp(1, dst_w_px);
+        let fit_h = ((src_h as f32 * scale).round() as u32).clamp(1, dst_h_px);
+        let off_x = dst_x0 + ((dst_w_px - fit_w) / 2) as i32;
+        let off_y = dst_y0 + ((dst_h_px - fit_h) / 2) as i32;
+
+        let canvas_w = self.width as i32;
+        let canvas_h = self.height as i32;
+
+        // 1:1 fast path: direct row-by-row copy_from_slice (zero per-pixel division!)
+        if fit_w == src_w && fit_h == src_h {
+            for sy in 0..src_h {
+                let py = off_y + sy as i32;
+                if py < 0 || py >= canvas_h {
+                    continue;
+                }
+                let x_start = off_x.max(0);
+                let x_end = (off_x + src_w as i32).min(canvas_w);
+                if x_end <= x_start {
+                    continue;
+                }
+                let src_x0 = (x_start - off_x) as usize;
+                let copy_px = (x_end - x_start) as usize;
+                let src_off = ((sy as usize) * (src_w as usize) + src_x0) * 4;
+                let dst_off = ((py as usize) * (self.width as usize) + (x_start as usize)) * 4;
+                self.pixels[dst_off..dst_off + copy_px * 4]
+                    .copy_from_slice(&src_rgba[src_off..src_off + copy_px * 4]);
+            }
+            return;
+        }
+
+        // Aspect-fit nearest fallback
+        for dy in 0..fit_h {
+            let py = off_y + dy as i32;
+            if py < 0 || py >= canvas_h {
+                continue;
+            }
+            let sy = ((u64::from(dy) * u64::from(src_h)) / u64::from(fit_h)).min(u64::from(src_h - 1)) as usize;
+            let src_row = sy * (src_w as usize) * 4;
+            let dst_row = (py as usize) * (self.width as usize) * 4;
+            for dx in 0..fit_w {
+                let px = off_x + dx as i32;
+                if px < 0 || px >= canvas_w {
+                    continue;
+                }
+                let sx = ((u64::from(dx) * u64::from(src_w)) / u64::from(fit_w)).min(u64::from(src_w - 1)) as usize;
+                let s = src_row + sx * 4;
+                let d = dst_row + (px as usize) * 4;
+                self.pixels[d..d + 4].copy_from_slice(&src_rgba[s..s + 4]);
+            }
+        }
+    }
+
     /// Draws the pure-X11 software cursor indicator, safely clamped inside the viewport.
     pub fn draw_software_cursor(&mut self, x_logical: f32, y_logical: f32) {
         let max_x = (self.width as f32 / self.scale - 6.0).max(0.0);

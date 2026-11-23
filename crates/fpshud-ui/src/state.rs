@@ -1,12 +1,15 @@
 use fpshud_analytics::BenchmarkSummary;
 use fpshud_core::{
     ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, Keybind, LayoutPosition,
-    MetricType, PresetType, apply_preset_advance, apply_preset_custom, apply_preset_minimal,
+    MetricType, PresetType, RecordAudioMode, RecordBitrate, RecordCodec, RecordFps,
+    RecordResolution, apply_preset_advance, apply_preset_custom, apply_preset_minimal,
     apply_preset_standard, keybind::format_keybind, reset_layout_to_default, save_config_to_disk,
 };
 use fpshud_input::KeybindTarget;
 use fpshud_ipc::UiToLayerMsg;
+use fpshud_ipc::protocol::RecorderStatusSnapshot;
 use fpshud_telemetry::TelemetrySnapshot;
+use std::path::PathBuf;
 
 pub const DEFAULT_ACCENT_TEXT_COLOR: ColorRgba = ColorRgba::new(140, 225, 255, 255);
 
@@ -28,6 +31,63 @@ pub enum UiRenderMode {
     HudOnly,
     /// Renders only the interactive Settings dashboard inside the isolated Wayland overlay surface.
     DashboardOnly,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SettingsTab {
+    #[default]
+    HudSettings,
+    Recorder,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiRecordingItem {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub duration_sec: f64,
+    pub size_bytes: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f32,
+    pub video_codec: String,
+    pub audio_codec: Option<String>,
+    pub in_progress: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VideoPlayerUiState {
+    pub open: bool,
+    pub path: Option<PathBuf>,
+    pub title: String,
+    pub playing: bool,
+    pub at_eof: bool,
+    pub muted: bool,
+    pub has_audio: bool,
+    pub fullscreen: bool,
+    pub duration_sec: f64,
+    pub current_sec: f64,
+    pub scrub_preview_sec: Option<f64>,
+    pub frame_w: u32,
+    pub frame_h: u32,
+    pub frame_rgba: Vec<u8>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecorderUiAction {
+    ChooseRecordFolder,
+    OpenRecordFolder,
+    RefreshRecordings,
+    DeleteRecording(PathBuf),
+    OpenPlayer(PathBuf),
+    ClosePlayer,
+    PlayerTogglePlay,
+    PlayerSeek(f64),
+    PlayerSeekRelative(f64),
+    PlayerToggleMute,
+    PlayerToggleFullscreen,
+    PlayerResize(u32, u32),
+    OpenInSystemPlayer(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,6 +493,14 @@ pub struct UiStore {
     pub active_toast_text: Option<String>,
     pub active_toast_until_sec: f32,
     pub pending_pick_screenshot_folder: bool,
+    pub active_tab: SettingsTab,
+    pub recorder_status: RecorderStatusSnapshot,
+    pub recorder_warning: Option<String>,
+    pub recordings: Vec<UiRecordingItem>,
+    pub recordings_loading: bool,
+    pub pending_delete_path: Option<PathBuf>,
+    pub player_ui: VideoPlayerUiState,
+    recorder_actions: Vec<RecorderUiAction>,
     outgoing: Vec<UiToLayerMsg>,
 }
 
@@ -449,7 +517,78 @@ impl UiStore {
             active_toast_text: None,
             active_toast_until_sec: 0.0,
             pending_pick_screenshot_folder: false,
+            active_tab: SettingsTab::HudSettings,
+            recorder_status: RecorderStatusSnapshot::default(),
+            recorder_warning: None,
+            recordings: Vec::new(),
+            recordings_loading: false,
+            pending_delete_path: None,
+            player_ui: VideoPlayerUiState::default(),
+            recorder_actions: Vec::new(),
             outgoing: Vec::new(),
+        }
+    }
+
+    pub fn push_recorder_action(&mut self, action: RecorderUiAction) {
+        self.recorder_actions.push(action);
+    }
+
+    pub fn take_recorder_actions(&mut self) -> Vec<RecorderUiAction> {
+        std::mem::take(&mut self.recorder_actions)
+    }
+
+    pub fn trigger_toggle_record(&mut self) {
+        self.outgoing.push(UiToLayerMsg::ToggleRecord);
+    }
+
+    pub fn set_record_resolution(&mut self, v: RecordResolution) {
+        self.config.record_resolution = v;
+        self.emit_config_updated();
+    }
+
+    pub fn set_record_fps(&mut self, v: RecordFps) {
+        self.config.record_fps = v;
+        self.emit_config_updated();
+    }
+
+    pub fn set_record_codec(&mut self, v: RecordCodec) {
+        self.config.record_codec = v;
+        self.emit_config_updated();
+    }
+
+    pub fn set_record_bitrate(&mut self, v: RecordBitrate) {
+        self.config.record_bitrate = v;
+        self.emit_config_updated();
+    }
+
+    pub fn set_record_audio_mode(&mut self, v: RecordAudioMode) {
+        self.config.record_audio_mode = v;
+        self.emit_config_updated();
+    }
+
+    pub fn set_record_with_hud(&mut self, with_hud: bool) {
+        self.config.record_with_hud = with_hud;
+        self.emit_config_updated();
+    }
+
+    pub fn open_player_modal(&mut self, path: PathBuf, title: String) {
+        self.player_ui = VideoPlayerUiState {
+            open: true,
+            path: Some(path.clone()),
+            title,
+            playing: true,
+            ..VideoPlayerUiState::default()
+        };
+        self.push_recorder_action(RecorderUiAction::OpenPlayer(path));
+    }
+
+    pub fn close_player_modal(&mut self) {
+        if self.player_ui.open {
+            self.player_ui.open = false;
+            self.player_ui.fullscreen = false;
+            self.player_ui.frame_rgba.clear();
+            self.player_ui.frame_rgba.shrink_to_fit();
+            self.push_recorder_action(RecorderUiAction::ClosePlayer);
         }
     }
 

@@ -390,3 +390,76 @@ fn conditional_bg_opacity_and_border_suboptions_hide_when_inactive() {
     assert_eq!(dash.dropdown_anchor(DropdownId::BgOpacity).w, 0.0);
     assert_eq!(dash.dropdown_anchor(DropdownId::BorderOpacity).w, 0.0);
 }
+
+#[test]
+fn test_recorder_tab_and_video_player_modal_state_and_controls() {
+    use fpshud_core::HudConfig;
+    use fpshud_input::UiInputEvent;
+    use fpshud_telemetry::TelemetrySnapshot;
+    use fpshud_ui::state::{RecorderUiAction, SettingsTab, UiRecordingItem};
+    use fpshud_ui::{CpuDashboard, TextRasterizer, UiStore};
+    use std::path::PathBuf;
+
+    let cfg = HudConfig {
+        gui_open: true,
+        ..HudConfig::default()
+    };
+    let mut store = UiStore::new(cfg, TelemetrySnapshot::default());
+    store.active_tab = SettingsTab::Recorder;
+    store.recordings.push(UiRecordingItem {
+        path: PathBuf::from("/tmp/rec_active.mp4"),
+        file_name: "rec_active.mp4".to_string(),
+        duration_sec: 5.0,
+        size_bytes: 1_000_000,
+        width: 1920,
+        height: 1080,
+        fps: 60.0,
+        video_codec: "h264".to_string(),
+        audio_codec: Some("aac".to_string()),
+        in_progress: true,
+    });
+    let mut dash = CpuDashboard::new(store);
+    let mut rast = TextRasterizer::new();
+    let mut buf = Vec::new();
+    dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut buf);
+    assert_eq!(buf.len(), 1280 * 720 * 4);
+
+    // Video player modal open with no audio -> mute key M must not emit toggle mute
+    dash.store.open_player_modal(PathBuf::from("/tmp/no_audio.mp4"), "no_audio.mp4".to_string());
+    dash.store.player_ui.has_audio = false;
+    dash.store.player_ui.duration_sec = 10.0;
+    dash.render_rgba(&mut rast, 1280, 720, 1.0, &mut buf);
+
+    // Key F toggles fullscreen, ESC exits fullscreen first without closing modal
+    dash.dispatch_input(
+        &[UiInputEvent::KeyDown { code: 33, mod_mask: 0 }], // F
+        1280,
+        720,
+        1.0,
+    );
+    let acts_f = dash.store.take_recorder_actions();
+    assert!(acts_f.iter().any(|a| matches!(a, RecorderUiAction::PlayerToggleFullscreen)));
+    assert!(dash.is_player_fullscreen());
+
+    dash.dispatch_input(
+        &[UiInputEvent::KeyDown { code: 1, mod_mask: 0 }], // ESC
+        1280,
+        720,
+        1.0,
+    );
+    assert!(!dash.is_player_fullscreen());
+    assert!(dash.store.player_ui.open, "ESC from fullscreen must keep modal open");
+
+    // Key M on video without audio must not emit PlayerToggleMute
+    let _ = dash.store.take_recorder_actions();
+    dash.dispatch_input(
+        &[UiInputEvent::KeyDown { code: 50, mod_mask: 0 }], // M
+        1280,
+        720,
+        1.0,
+    );
+    assert!(!dash.store.take_recorder_actions().iter().any(|a| matches!(a, RecorderUiAction::PlayerToggleMute)));
+
+    // cancel_active_drags releases scrub drag cleanly
+    dash.cancel_active_drags();
+}

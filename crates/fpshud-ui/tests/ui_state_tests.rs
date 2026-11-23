@@ -178,3 +178,36 @@ fn toast_visibility_countdown_and_cpu_hud_bounding_box() {
     let non_zero = frame.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
     assert!(non_zero > 100);
 }
+
+#[test]
+fn test_hud_renders_persistent_rec_badge_when_hud_hidden() {
+    use fpshud_core::HudConfig;
+    use fpshud_ipc::protocol::RecorderStatusSnapshot;
+    use fpshud_telemetry::TelemetrySnapshot;
+    use fpshud_ui::{CpuHudRenderer, UiStore};
+
+    let cfg = HudConfig {
+        hud_visible: false,
+        gui_open: false,
+        ..HudConfig::default()
+    };
+    let mut store = UiStore::new(cfg, TelemetrySnapshot::default());
+    store.elapsed_sec = 10.0; // launch toast expired
+    store.recorder_status = RecorderStatusSnapshot {
+        is_recording: true,
+        elapsed_sec: 12.0,
+        dropped_frames: 0,
+        active_backend: "NVENC H.264".to_string(),
+        active_output_path: None,
+    };
+
+    let mut hud = CpuHudRenderer::new();
+    let frame = hud.render(&store, 1280, 720, 1.0);
+    assert!(
+        frame.is_some(),
+        "must render persistent REC badge even when hud_visible == false"
+    );
+
+    store.recorder_status.is_recording = false;
+    assert!(hud.render(&store, 1280, 720, 1.0).is_none());
+}

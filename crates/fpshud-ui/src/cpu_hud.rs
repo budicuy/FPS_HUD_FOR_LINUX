@@ -128,6 +128,16 @@ impl CpuHudRenderer {
         };
 
         if !store.config.hud_visible {
+            if store.recorder_status.is_recording {
+                return Some(self.render_rec_badge_only(
+                    rasterizer,
+                    store.recorder_status.elapsed_sec,
+                    toast_text.as_deref(),
+                    vp_w,
+                    vp_h,
+                    eff_scale,
+                ));
+            }
             let text = toast_text?;
             return Some(self.render_toast_only(rasterizer, &text, vp_w, vp_h, eff_scale));
         }
@@ -379,10 +389,25 @@ impl CpuHudRenderer {
         }
 
         if store.telemetry.benchmark_active {
-            let text = format!("REC {:.1}s", store.telemetry.benchmark_elapsed_sec);
+            let text = format!("● BENCH {:.1}s", store.telemetry.benchmark_elapsed_sec);
             let spans = vec![TextSpan {
                 text,
-                color: rgba_u32(255, 95, 95, 255),
+                color: rgba_u32(255, 195, 65, 255),
+            }];
+            let w = Self::measure_spans(rasterizer, font, font_size, &spans);
+            lines.push(MeasuredLine {
+                prefix: None,
+                cells: vec![MeasuredCell { spans, width: w }],
+                width: w,
+            });
+        }
+
+        if store.recorder_status.is_recording {
+            let total = store.recorder_status.elapsed_sec.max(0.0).floor() as u64;
+            let text = format!("● REC {:02}:{:02}", total / 60, total % 60);
+            let spans = vec![TextSpan {
+                text,
+                color: rgba_u32(255, 70, 70, 255),
             }];
             let w = Self::measure_spans(rasterizer, font, font_size, &spans);
             lines.push(MeasuredLine {
@@ -514,6 +539,77 @@ impl CpuHudRenderer {
                 &store.telemetry,
                 rgba_u32(72, 140, 220, 150),
             );
+        }
+    }
+
+    fn render_rec_badge_only(
+        &self,
+        rasterizer: &mut TextRasterizer,
+        elapsed_sec: f32,
+        toast_text: Option<&str>,
+        vp_w: u32,
+        vp_h: u32,
+        eff_scale: f32,
+    ) -> CpuHudFrame {
+        let total = elapsed_sec.max(0.0).floor() as u64;
+        let rec_label = format!("● REC {:02}:{:02}", total / 60, total % 60);
+        let font_size = (13.0 * eff_scale).clamp(10.0, 28.0);
+        let pad_x = (10.0 * eff_scale).round();
+        let pad_y = (5.0 * eff_scale).round();
+        let rec_w = ((rasterizer.measure_text(true, font_size, &rec_label) + pad_x * 2.0).ceil() as u32)
+            .clamp(1, vp_w);
+        let rec_h = (((font_size * 1.35) + pad_y * 2.0).ceil() as u32).clamp(1, vp_h);
+        let gap = (6.0 * eff_scale).round() as u32;
+
+        let toast_dims = toast_text.map(|t| {
+            let tw = ((rasterizer.measure_text(false, font_size, t) + pad_x * 2.0).ceil() as u32)
+                .clamp(1, vp_w);
+            let th = rec_h;
+            (t, tw, th)
+        });
+
+        let total_w = toast_dims.map_or(rec_w, |(_, tw, _)| rec_w.max(tw)).clamp(1, vp_w);
+        let total_h = toast_dims
+            .map_or(rec_h, |(_, _, th)| rec_h.saturating_add(gap).saturating_add(th))
+            .clamp(1, vp_h);
+
+        let mut rgba = vec![0_u8; (total_w as usize) * (total_h as usize) * 4];
+        let mut canvas = CpuCanvas::new(&mut rgba, total_w, total_h, 1.0);
+        let badge_rect = Rect::new(0.0, 0.0, rec_w as f32, rec_h as f32);
+        canvas.fill_rounded_rect(badge_rect, 6.0 * eff_scale, rgba_u32(18, 12, 14, 225));
+        canvas.stroke_rounded_rect(badge_rect, 6.0 * eff_scale, 1.5, rgba_u32(255, 65, 65, 240));
+        canvas.draw_text_in_rect(
+            rasterizer,
+            badge_rect,
+            true,
+            font_size,
+            rgba_u32(255, 78, 78, 255),
+            &rec_label,
+            true,
+        );
+
+        if let Some((t, tw, th)) = toast_dims {
+            let tr = Rect::new(0.0, (rec_h + gap) as f32, tw as f32, th as f32);
+            canvas.fill_rounded_rect(tr, 6.0 * eff_scale, rgba_u32(14, 18, 26, 220));
+            canvas.stroke_rounded_rect(tr, 6.0 * eff_scale, 1.0, rgba_u32(95, 205, 255, 190));
+            canvas.draw_text_in_rect(
+                rasterizer,
+                tr,
+                false,
+                font_size,
+                rgba_u32(235, 245, 255, 255),
+                t,
+                true,
+            );
+        }
+
+        let margin = (16.0 * eff_scale).round() as i32;
+        CpuHudFrame {
+            dst_x: margin,
+            dst_y: margin,
+            width: total_w,
+            height: total_h,
+            rgba,
         }
     }
 

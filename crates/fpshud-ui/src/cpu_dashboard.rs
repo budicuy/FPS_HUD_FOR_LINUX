@@ -7,14 +7,18 @@
 use crate::cpu_canvas::{CpuCanvas, Rect, TextRasterizer};
 use crate::cpu_hud::CpuHudRenderer;
 use crate::state::{
-    DEFAULT_ACCENT_TEXT_COLOR, MetricCategory, SensorFilter, UiRenderMode, UiStore,
-    arrangement_display_name, bg_style_display_name, category_color_rgba, category_display_title,
-    font_dropdown_label, format_benchmark_summary, hud_metric_short_label, metric_category,
-    position_display_name, rgba_u32,
+    DEFAULT_ACCENT_TEXT_COLOR, MetricCategory, RecorderUiAction, SensorFilter, SettingsTab,
+    UiRenderMode, UiStore, arrangement_display_name, bg_style_display_name, category_color_rgba,
+    category_display_title, font_dropdown_label, format_benchmark_summary, hud_metric_short_label,
+    metric_category, position_display_name, rgba_u32,
+};
+use crate::video_player_modal::{
+    PlayerHitAction, VideoPlayerModalLayout, render_video_player_modal,
 };
 use fpshud_core::{
     ArrangementMode, BackgroundStyle, ColorRgba, FontFamily, HudConfig, LayoutPosition, MetricType,
-    PresetType, ScreenshotQuality,
+    PresetType, RecordAudioMode, RecordBitrate, RecordCodec, RecordFps, RecordResolution,
+    ScreenshotQuality,
 };
 use fpshud_input::{KeybindTarget, UiInputEvent};
 use fpshud_ipc::UiToLayerMsg;
@@ -39,10 +43,15 @@ pub enum DropdownId {
     BgOpacity = 7,
     BorderOpacity = 8,
     ScreenshotQuality = 9,
+    RecordResolution = 10,
+    RecordFps = 11,
+    RecordCodec = 12,
+    RecordBitrate = 13,
+    RecordAudioMode = 14,
 }
 
 impl DropdownId {
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 15;
 
     #[must_use]
     pub const fn index(self) -> usize {
@@ -231,6 +240,21 @@ enum HitAction {
     SelectScreenshotQuality(ScreenshotQuality),
     ResetSettings,
     CaptureKeybind(KeybindTarget),
+    SwitchTab(SettingsTab),
+    ToggleRecord,
+    SetRecordResolution(RecordResolution),
+    SetRecordFps(RecordFps),
+    SetRecordCodec(RecordCodec),
+    SetRecordBitrate(RecordBitrate),
+    SetRecordAudioMode(RecordAudioMode),
+    SetRecordWithHud(bool),
+    ChooseRecordFolder,
+    OpenRecordFolder,
+    RefreshRecordings,
+    PlayRecording(usize),
+    RequestDeleteRecording(usize),
+    ConfirmDelete,
+    CancelDelete,
 }
 
 /// Stateful 100% CPU Settings dashboard + optional pure-X11 `Full` compositor.
@@ -257,6 +281,12 @@ pub struct CpuDashboard {
     last_hovered_hit: Option<(bool, usize)>,
     last_eff_scale: f32,
     last_panel_size: (f32, f32),
+    player_hits: Vec<(Rect, PlayerHitAction)>,
+    player_layout: VideoPlayerModalLayout,
+    dragging_scrub: bool,
+    rec_list_scroll: f32,
+    rec_list_rect: Rect,
+    last_player_viewport: (u32, u32),
 }
 
 impl CpuDashboard {
@@ -285,7 +315,29 @@ impl CpuDashboard {
             last_hovered_hit: None,
             last_eff_scale: 1.0,
             last_panel_size: (960.0, 580.0),
+            player_hits: Vec::with_capacity(12),
+            player_layout: VideoPlayerModalLayout::default(),
+            dragging_scrub: false,
+            rec_list_scroll: 0.0,
+            rec_list_rect: Rect::default(),
+            last_player_viewport: (0, 0),
         }
+    }
+
+    pub fn cancel_active_drags(&mut self) {
+        self.dragging_gui = false;
+        self.dragging_preview = false;
+        if self.dragging_scrub {
+            self.dragging_scrub = false;
+            if let Some(sec) = self.store.player_ui.scrub_preview_sec.take() {
+                self.store.push_recorder_action(RecorderUiAction::PlayerSeek(sec));
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_player_fullscreen(&self) -> bool {
+        self.store.player_ui.open && self.store.player_ui.fullscreen
     }
 
     pub fn sync_all(&mut self, config: HudConfig, telemetry: TelemetrySnapshot) {
@@ -432,6 +484,15 @@ impl CpuDashboard {
                         ));
                         dirty = true;
                     }
+                    if self.dragging_scrub {
+                        let r = self.player_layout.scrub_rect;
+                        if r.w > 1.0 && self.store.player_ui.duration_sec > 0.0 {
+                            let frac = ((lx - r.x) / r.w).clamp(0.0, 1.0);
+                            self.store.player_ui.scrub_preview_sec =
+                                Some(f64::from(frac) * self.store.player_ui.duration_sec);
+                            dirty = true;
+                        }
+                    }
                     if self.dragging_preview {
                         let (nx, ny) = map_preview_point_to_norm(
                             lx,
@@ -452,11 +513,78 @@ impl CpuDashboard {
                     }
                 }
                 UiInputEvent::MouseUp { button: 0 }
-                    if self.dragging_gui || self.dragging_preview =>
+                    if self.dragging_gui || self.dragging_preview || self.dragging_scrub =>
                 {
                     self.dragging_gui = false;
                     self.dragging_preview = false;
+                    if self.dragging_scrub {
+                        self.dragging_scrub = false;
+                        if let Some(sec) = self.store.player_ui.scrub_preview_sec.take() {
+                            self.store.push_recorder_action(RecorderUiAction::PlayerSeek(sec));
+                        }
+                    }
                     dirty = true;
+                }
+                UiInputEvent::ScrollWheel { delta_y, .. } => {
+                    if self.store.active_tab == SettingsTab::Recorder
+                        && !self.store.player_ui.open
+                        && self.rec_list_rect.contains(self.cursor_logical.0, self.cursor_logical.1)
+                    {
+                        let max_scroll = ((self.store.recordings.len() as f32) * 34.0
+                            - self.rec_list_rect.h)
+                            .max(0.0);
+                        self.rec_list_scroll =
+                            (self.rec_list_scroll - delta_y * 28.0).clamp(0.0, max_scroll);
+                        dirty = true;
+                    }
+                }
+                UiInputEvent::KeyDown { code, .. } if self.store.player_ui.open => {
+                    match code {
+                        57 => {
+                            // Space
+                            self.store.push_recorder_action(RecorderUiAction::PlayerTogglePlay);
+                            dirty = true;
+                        }
+                        105 => {
+                            // Left
+                            self.store
+                                .push_recorder_action(RecorderUiAction::PlayerSeekRelative(-5.0));
+                            dirty = true;
+                        }
+                        106 => {
+                            // Right
+                            self.store
+                                .push_recorder_action(RecorderUiAction::PlayerSeekRelative(5.0));
+                            dirty = true;
+                        }
+                        50 => {
+                            // M
+                            if self.store.player_ui.has_audio {
+                                self.store
+                                    .push_recorder_action(RecorderUiAction::PlayerToggleMute);
+                                dirty = true;
+                            }
+                        }
+                        33 => {
+                            // F
+                            self.store.player_ui.fullscreen = !self.store.player_ui.fullscreen;
+                            self.store
+                                .push_recorder_action(RecorderUiAction::PlayerToggleFullscreen);
+                            dirty = true;
+                        }
+                        1 => {
+                            // ESC: exit fullscreen first, then close modal
+                            if self.store.player_ui.fullscreen {
+                                self.store.player_ui.fullscreen = false;
+                                self.store
+                                    .push_recorder_action(RecorderUiAction::PlayerToggleFullscreen);
+                            } else {
+                                self.store.close_player_modal();
+                            }
+                            dirty = true;
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -466,6 +594,14 @@ impl CpuDashboard {
 
     fn resolve_hovered_hit(&self, lx: f32, ly: f32) -> Option<(bool, usize)> {
         if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
+            return None;
+        }
+        if self.store.player_ui.open {
+            for (idx, &(rect, _)) in self.player_hits.iter().enumerate().rev() {
+                if rect.contains(lx, ly) {
+                    return Some((true, 1000 + idx));
+                }
+            }
             return None;
         }
         if self.open_dropdown.is_some() {
@@ -489,6 +625,60 @@ impl CpuDashboard {
 
     fn handle_left_down(&mut self, lx: f32, ly: f32) -> bool {
         if !self.store.config.gui_open || self.render_mode == UiRenderMode::HudOnly {
+            return false;
+        }
+        // Layer 3 (highest Z-order): Built-in Video Player modal
+        if self.store.player_ui.open {
+            let hit = self
+                .player_hits
+                .iter()
+                .rev()
+                .find(|(r, _)| r.contains(lx, ly))
+                .map(|(_, a)| *a);
+            if let Some(action) = hit {
+                match action {
+                    PlayerHitAction::TogglePlay => {
+                        self.store.push_recorder_action(RecorderUiAction::PlayerTogglePlay);
+                    }
+                    PlayerHitAction::SeekBack => {
+                        self.store
+                            .push_recorder_action(RecorderUiAction::PlayerSeekRelative(-5.0));
+                    }
+                    PlayerHitAction::SeekForward => {
+                        self.store
+                            .push_recorder_action(RecorderUiAction::PlayerSeekRelative(5.0));
+                    }
+                    PlayerHitAction::ScrubBar => {
+                        let r = self.player_layout.scrub_rect;
+                        if r.w > 1.0 && self.store.player_ui.duration_sec > 0.0 {
+                            let frac = ((lx - r.x) / r.w).clamp(0.0, 1.0);
+                            self.store.player_ui.scrub_preview_sec =
+                                Some(f64::from(frac) * self.store.player_ui.duration_sec);
+                            self.dragging_scrub = true;
+                        }
+                    }
+                    PlayerHitAction::ToggleMute => {
+                        if self.store.player_ui.has_audio {
+                            self.store.push_recorder_action(RecorderUiAction::PlayerToggleMute);
+                        }
+                    }
+                    PlayerHitAction::ToggleFullscreen => {
+                        self.store.player_ui.fullscreen = !self.store.player_ui.fullscreen;
+                        self.store
+                            .push_recorder_action(RecorderUiAction::PlayerToggleFullscreen);
+                    }
+                    PlayerHitAction::OpenSystemPlayer => {
+                        if let Some(p) = self.store.player_ui.path.clone() {
+                            self.store
+                                .push_recorder_action(RecorderUiAction::OpenInSystemPlayer(p));
+                        }
+                    }
+                    PlayerHitAction::CloseModal => {
+                        self.store.close_player_modal();
+                    }
+                }
+                return true;
+            }
             return false;
         }
         // Layer 2 (top Z-order): active dropdown popover occludes everything underneath
@@ -625,6 +815,65 @@ impl CpuDashboard {
                 self.open_dropdown = None;
                 self.store.request_keybind_capture(target);
             }
+            HitAction::SwitchTab(tab) => {
+                self.open_dropdown = None;
+                self.store.active_tab = tab;
+                if tab == SettingsTab::Recorder {
+                    self.store.push_recorder_action(RecorderUiAction::RefreshRecordings);
+                }
+            }
+            HitAction::ToggleRecord => self.store.trigger_toggle_record(),
+            HitAction::SetRecordResolution(v) => {
+                self.store.set_record_resolution(v);
+                self.open_dropdown = None;
+            }
+            HitAction::SetRecordFps(v) => {
+                self.store.set_record_fps(v);
+                self.open_dropdown = None;
+            }
+            HitAction::SetRecordCodec(v) => {
+                self.store.set_record_codec(v);
+                self.open_dropdown = None;
+            }
+            HitAction::SetRecordBitrate(v) => {
+                self.store.set_record_bitrate(v);
+                self.open_dropdown = None;
+            }
+            HitAction::SetRecordAudioMode(v) => {
+                self.store.set_record_audio_mode(v);
+                self.open_dropdown = None;
+            }
+            HitAction::SetRecordWithHud(v) => self.store.set_record_with_hud(v),
+            HitAction::ChooseRecordFolder => {
+                self.store.push_recorder_action(RecorderUiAction::ChooseRecordFolder);
+            }
+            HitAction::OpenRecordFolder => {
+                self.store.push_recorder_action(RecorderUiAction::OpenRecordFolder);
+            }
+            HitAction::RefreshRecordings => {
+                self.store.push_recorder_action(RecorderUiAction::RefreshRecordings);
+            }
+            HitAction::PlayRecording(idx) => {
+                if let Some(item) = self.store.recordings.get(idx).cloned() {
+                    self.store.open_player_modal(item.path, item.file_name);
+                }
+            }
+            HitAction::RequestDeleteRecording(idx) => {
+                if let Some(item) = self.store.recordings.get(idx)
+                    && !item.in_progress
+                {
+                    self.store.pending_delete_path = Some(item.path.clone());
+                }
+            }
+            HitAction::ConfirmDelete => {
+                if let Some(path) = self.store.pending_delete_path.take() {
+                    self.store
+                        .push_recorder_action(RecorderUiAction::DeleteRecording(path));
+                }
+            }
+            HitAction::CancelDelete => {
+                self.store.pending_delete_path = None;
+            }
         }
     }
 
@@ -725,6 +974,31 @@ impl CpuDashboard {
             false,
         );
         self.base_hits.push((title_rect, HitAction::DragHeader));
+        // 2-Tab Switcher inside title bar: HUD Settings | Recorder
+        let tab_hud = Rect::new(title_rect.x + 150.0, title_rect.y + 3.0, 102.0, 20.0);
+        let tab_rec = Rect::new(tab_hud.right() + 6.0, title_rect.y + 3.0, 86.0, 20.0);
+        self.paint_button(
+            &mut canvas,
+            rasterizer,
+            tab_hud,
+            "HUD Settings",
+            self.store.active_tab == SettingsTab::HudSettings,
+            rgba_u32(45, 98, 165, 245),
+            true,
+            HitAction::SwitchTab(SettingsTab::HudSettings),
+            false,
+        );
+        self.paint_button(
+            &mut canvas,
+            rasterizer,
+            tab_rec,
+            "Recorder",
+            self.store.active_tab == SettingsTab::Recorder,
+            rgba_u32(175, 48, 56, 245),
+            true,
+            HitAction::SwitchTab(SettingsTab::Recorder),
+            false,
+        );
         cy += 32.0;
 
         // Header bar (Presets + live FPS/sparkline + Close)
@@ -734,19 +1008,113 @@ impl CpuDashboard {
         canvas.draw_h_line(inner_x, header_rect.bottom(), inner_w, 1.0, rgba_u32(55, 70, 92, 180));
         cy += 36.0;
 
-        // 3 Columns
+        // Body: HUD Settings (3 columns) OR Recorder Tab (2 columns)
         let col_h = (dash_y + dash_h - 8.0 - cy).max(320.0);
-        let col1_rect = Rect::new(inner_x, cy, COL1_WIDTH_PX, col_h);
-        let col2_rect = Rect::new(col1_rect.right() + 8.0, cy, col2_w, col_h);
-        let col3_rect = Rect::new(col2_rect.right() + 8.0, cy, COL3_WIDTH_PX, col_h);
+        if self.store.active_tab == SettingsTab::HudSettings {
+            let col1_rect = Rect::new(inner_x, cy, COL1_WIDTH_PX, col_h);
+            let col2_rect = Rect::new(col1_rect.right() + 8.0, cy, col2_w, col_h);
+            let col3_rect = Rect::new(col2_rect.right() + 8.0, cy, COL3_WIDTH_PX, col_h);
 
-        self.paint_column_layout(&mut canvas, rasterizer, col1_rect);
-        self.paint_column_sensors(&mut canvas, rasterizer, col2_rect);
-        self.paint_column_actions(&mut canvas, rasterizer, col3_rect);
+            self.paint_column_layout(&mut canvas, rasterizer, col1_rect);
+            self.paint_column_sensors(&mut canvas, rasterizer, col2_rect);
+            self.paint_column_actions(&mut canvas, rasterizer, col3_rect);
+        } else {
+            let body_rect = Rect::new(inner_x, cy, inner_w, col_h);
+            self.paint_recorder_tab(&mut canvas, rasterizer, body_rect);
+        }
 
         // Floating dropdown popover (Z-order layer 2)
         if let Some(id) = self.open_dropdown {
             self.paint_dropdown_popover(&mut canvas, rasterizer, id, logical_w, logical_h);
+        }
+
+        // Delete confirmation dialog (Z-order layer 2.5)
+        if let Some(del_path) = self.store.pending_delete_path.clone() {
+            let dw = 340.0;
+            let dh = 112.0;
+            let dr = Rect::new(
+                (logical_w - dw) * 0.5,
+                (logical_h - dh) * 0.5,
+                dw,
+                dh,
+            );
+            canvas.fill_rounded_rect(dr, 8.0, rgba_u32(22, 26, 36, 250));
+            canvas.stroke_rounded_rect(dr, 8.0, 1.5, rgba_u32(230, 80, 80, 235));
+            let fname = del_path
+                .file_name()
+                .map(|n| truncate_chars(&n.to_string_lossy(), 36))
+                .unwrap_or_default();
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(dr.x + 12.0, dr.y + 12.0, dr.w - 24.0, 22.0),
+                false,
+                12.0,
+                rgba_u32(255, 190, 190, 255),
+                "Delete recording?",
+                true,
+            );
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(dr.x + 12.0, dr.y + 38.0, dr.w - 24.0, 20.0),
+                true,
+                11.0,
+                rgba_u32(210, 220, 235, 240),
+                &fname,
+                true,
+            );
+            let btn_cancel = Rect::new(dr.x + 24.0, dr.bottom() - 36.0, 130.0, 24.0);
+            let btn_ok = Rect::new(dr.right() - 154.0, dr.bottom() - 36.0, 130.0, 24.0);
+            self.paint_button(
+                &mut canvas,
+                rasterizer,
+                btn_cancel,
+                "Cancel",
+                false,
+                rgba_u32(60, 70, 90, 240),
+                true,
+                HitAction::CancelDelete,
+                false,
+            );
+            self.paint_button(
+                &mut canvas,
+                rasterizer,
+                btn_ok,
+                "Delete",
+                true,
+                rgba_u32(195, 48, 56, 245),
+                true,
+                HitAction::ConfirmDelete,
+                false,
+            );
+        }
+
+        // Built-in Video Player Modal (Z-order layer 3 - highest)
+        if self.store.player_ui.open {
+            let hovered_player = self
+                .player_hits
+                .iter()
+                .rev()
+                .find(|(r, _)| r.contains(self.cursor_logical.0, self.cursor_logical.1))
+                .map(|(_, a)| *a);
+            self.player_layout = render_video_player_modal(
+                &mut canvas,
+                rasterizer,
+                &self.store.player_ui,
+                logical_w,
+                logical_h,
+                hovered_player,
+                &mut self.player_hits,
+            );
+            let phys_vw = (self.player_layout.video_rect.w * eff_scale).round().max(64.0) as u32;
+            let phys_vh = (self.player_layout.video_rect.h * eff_scale).round().max(64.0) as u32;
+            if (phys_vw, phys_vh) != self.last_player_viewport {
+                self.last_player_viewport = (phys_vw, phys_vh);
+                self.store
+                    .push_recorder_action(RecorderUiAction::PlayerResize(phys_vw, phys_vh));
+            }
+        } else {
+            self.player_hits.clear();
+            self.last_player_viewport = (0, 0);
         }
 
         // Software cursor (pure-X11 Full mode only)
@@ -1682,6 +2050,320 @@ impl CpuDashboard {
         }
     }
 
+    fn paint_recorder_tab(
+        &mut self,
+        canvas: &mut CpuCanvas<'_>,
+        rasterizer: &mut TextRasterizer,
+        area: Rect,
+    ) {
+        let left_w = 300.0_f32.min(area.w * 0.42);
+        let left_rect = Rect::new(area.x, area.y, left_w, area.h);
+        let right_rect = Rect::new(left_rect.right() + 10.0, area.y, (area.w - left_w - 10.0).max(200.0), area.h);
+
+        canvas.fill_rounded_rect(left_rect, 6.0, rgba_u32(19, 25, 36, 225));
+        canvas.stroke_rounded_rect(left_rect, 6.0, 1.0, rgba_u32(58, 76, 102, 180));
+        canvas.fill_rounded_rect(right_rect, 6.0, rgba_u32(19, 25, 36, 225));
+        canvas.stroke_rounded_rect(right_rect, 6.0, 1.0, rgba_u32(58, 76, 102, 180));
+
+        // Left column: Controls & Settings
+        let lx = left_rect.x + 10.0;
+        let lw = left_rect.w - 20.0;
+        let mut ly = left_rect.y + 10.0;
+
+        let kb = self.store.keybind_label(KeybindTarget::Record);
+        let is_rec = self.store.recorder_status.is_recording;
+        let rec_btn_label = if is_rec {
+            format!("Stop Recording ({kb})")
+        } else {
+            format!("Start Recording ({kb})")
+        };
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(lx, ly, lw, 28.0),
+            &rec_btn_label,
+            is_rec,
+            rgba_u32(195, 48, 56, 245),
+            true,
+            HitAction::ToggleRecord,
+            false,
+        );
+        ly += 34.0;
+
+        // Status / warning banner
+        let status_txt = if let Some(ref w) = self.store.recorder_warning {
+            truncate_chars(w, 42)
+        } else if is_rec {
+            let secs = self.store.recorder_status.elapsed_sec.max(0.0).floor() as u64;
+            format!(
+                "● REC {:02}:{:02} | {} | drop {}",
+                secs / 60,
+                secs % 60,
+                self.store.recorder_status.active_backend,
+                self.store.recorder_status.dropped_frames
+            )
+        } else {
+            "Ready (Bundled FFmpeg n9.1)".to_string()
+        };
+        let status_col = if self.store.recorder_warning.is_some() {
+            rgba_u32(255, 185, 70, 255)
+        } else if is_rec {
+            rgba_u32(255, 95, 95, 255)
+        } else {
+            rgba_u32(150, 210, 175, 235)
+        };
+        canvas.draw_text_in_rect(
+            rasterizer,
+            Rect::new(lx, ly, lw, 18.0),
+            false,
+            10.5,
+            status_col,
+            &status_txt,
+            false,
+        );
+        ly += 24.0;
+
+        // 5 Dropdowns
+        let dropdown_rows = [
+            ("Resolution", self.store.config.record_resolution.display_name(), DropdownId::RecordResolution),
+            ("Frame Rate", self.store.config.record_fps.display_name(), DropdownId::RecordFps),
+            ("Codec", self.store.config.record_codec.display_name(), DropdownId::RecordCodec),
+            ("Bitrate", self.store.config.record_bitrate.display_name(), DropdownId::RecordBitrate),
+            ("Audio", self.store.config.record_audio_mode.display_name(), DropdownId::RecordAudioMode),
+        ];
+        for (lbl, val, id) in dropdown_rows {
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(lx, ly, 92.0, 22.0),
+                false,
+                11.0,
+                rgba_u32(185, 200, 220, 240),
+                lbl,
+                false,
+            );
+            let anchor = Rect::new(lx + 96.0, ly, lw - 96.0, 22.0);
+            self.dropdown_anchors[id.index()] = anchor;
+            self.paint_button(
+                canvas,
+                rasterizer,
+                anchor,
+                val,
+                self.open_dropdown == Some(id),
+                rgba_u32(45, 98, 165, 240),
+                false,
+                HitAction::ToggleDropdown(id),
+                false,
+            );
+            ly += 28.0;
+        }
+
+        // Clean Game / With HUD toggle
+        let half_w = (lw - 6.0) * 0.5;
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(lx, ly, half_w, 24.0),
+            "Clean Game",
+            !self.store.config.record_with_hud,
+            rgba_u32(45, 98, 165, 240),
+            true,
+            HitAction::SetRecordWithHud(false),
+            false,
+        );
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(lx + half_w + 6.0, ly, half_w, 24.0),
+            "With HUD",
+            self.store.config.record_with_hud,
+            rgba_u32(45, 98, 165, 240),
+            true,
+            HitAction::SetRecordWithHud(true),
+            false,
+        );
+        ly += 30.0;
+
+        // Keybind rebind button
+        let kb_capturing = self.store.active_keybind_capture == KeybindTarget::Record;
+        let kb_btn = if kb_capturing {
+            "Press key... (ESC cancel)".to_string()
+        } else {
+            format!("Record Keybind: {kb}")
+        };
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(lx, ly, lw, 24.0),
+            &kb_btn,
+            kb_capturing,
+            rgba_u32(165, 110, 35, 240),
+            true,
+            HitAction::CaptureKeybind(KeybindTarget::Record),
+            false,
+        );
+
+        // Right column: Folder controls + Scrollable Recordings List
+        let rx = right_rect.x + 10.0;
+        let rw = right_rect.w - 20.0;
+        let mut ry = right_rect.y + 10.0;
+
+        let btn_w = ((rw - 12.0) / 3.0).max(70.0);
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(rx, ry, btn_w, 24.0),
+            "Choose Folder",
+            false,
+            rgba_u32(45, 98, 165, 240),
+            true,
+            HitAction::ChooseRecordFolder,
+            false,
+        );
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(rx + btn_w + 6.0, ry, btn_w, 24.0),
+            "Open Folder",
+            false,
+            rgba_u32(45, 98, 165, 240),
+            true,
+            HitAction::OpenRecordFolder,
+            false,
+        );
+        self.paint_button(
+            canvas,
+            rasterizer,
+            Rect::new(rx + (btn_w + 6.0) * 2.0, ry, btn_w, 24.0),
+            "Refresh",
+            false,
+            rgba_u32(45, 98, 165, 240),
+            true,
+            HitAction::RefreshRecordings,
+            false,
+        );
+        ry += 30.0;
+
+        let list_rect = Rect::new(rx, ry, rw, (right_rect.bottom() - ry - 10.0).max(80.0));
+        self.rec_list_rect = list_rect;
+        canvas.fill_rounded_rect(list_rect, 4.0, rgba_u32(13, 17, 24, 220));
+        canvas.stroke_rounded_rect(list_rect, 4.0, 1.0, rgba_u32(48, 62, 84, 170));
+
+        if self.store.recordings_loading {
+            canvas.draw_text_in_rect(
+                rasterizer,
+                list_rect,
+                false,
+                11.5,
+                rgba_u32(160, 180, 205, 220),
+                "Scanning recordings...",
+                true,
+            );
+            return;
+        }
+        if self.store.recordings.is_empty() {
+            canvas.draw_text_in_rect(
+                rasterizer,
+                list_rect,
+                false,
+                11.5,
+                rgba_u32(150, 165, 185, 210),
+                "No recordings found in folder.",
+                true,
+            );
+            return;
+        }
+
+        let row_h = 34.0;
+        let items: Vec<_> = self
+            .store
+            .recordings
+            .iter()
+            .enumerate()
+            .map(|(i, it)| {
+                let dur = it.duration_sec.max(0.0).floor() as u64;
+                let mb = it.size_bytes as f64 / (1024.0 * 1024.0);
+                (
+                    i,
+                    truncate_chars(&it.file_name, 30),
+                    format!("{:02}:{:02} | {:.1} MB | {}x{}", dur / 60, dur % 60, mb, it.width, it.height),
+                    it.in_progress,
+                )
+            })
+            .collect();
+
+        for (idx, name, sub, in_progress) in items {
+            let y = list_rect.y + 4.0 + (idx as f32) * row_h - self.rec_list_scroll;
+            let row_rect = Rect::new(list_rect.x + 4.0, y, list_rect.w - 8.0, row_h - 4.0);
+            let Some(clipped) = row_rect.intersect(list_rect) else {
+                continue;
+            };
+            if clipped.h < 18.0 {
+                continue;
+            }
+            canvas.fill_rounded_rect(clipped, 4.0, rgba_u32(24, 31, 44, 230));
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(clipped.x + 6.0, clipped.y + 1.0, (clipped.w - 104.0).max(40.0), 14.0),
+                false,
+                10.5,
+                rgba_u32(230, 238, 250, 255),
+                &name,
+                false,
+            );
+            canvas.draw_text_in_rect(
+                rasterizer,
+                Rect::new(clipped.x + 6.0, clipped.y + 15.0, (clipped.w - 104.0).max(40.0), 13.0),
+                true,
+                9.5,
+                rgba_u32(150, 170, 195, 220),
+                &sub,
+                false,
+            );
+
+            let play_rect = Rect::new(clipped.right() - 88.0, clipped.y + 3.0, 50.0, 22.0);
+            if let Some(play_clip) = play_rect.intersect(list_rect) {
+                self.paint_button(
+                    canvas,
+                    rasterizer,
+                    play_clip,
+                    "Play",
+                    false,
+                    rgba_u32(45, 130, 85, 240),
+                    true,
+                    HitAction::PlayRecording(idx),
+                    false,
+                );
+            }
+            let del_rect = Rect::new(clipped.right() - 32.0, clipped.y + 3.0, 26.0, 22.0);
+            if let Some(del_clip) = del_rect.intersect(list_rect) {
+                if in_progress {
+                    canvas.fill_rounded_rect(del_clip, 4.0, rgba_u32(40, 44, 52, 160));
+                    canvas.draw_text_in_rect(
+                        rasterizer,
+                        del_clip,
+                        false,
+                        10.0,
+                        rgba_u32(110, 115, 125, 180),
+                        "X",
+                        true,
+                    );
+                } else {
+                    self.paint_button(
+                        canvas,
+                        rasterizer,
+                        del_clip,
+                        "X",
+                        false,
+                        rgba_u32(180, 48, 56, 240),
+                        true,
+                        HitAction::RequestDeleteRecording(idx),
+                        false,
+                    );
+                }
+            }
+        }
+    }
+
     fn paint_dropdown_popover(
         &mut self,
         canvas: &mut CpuCanvas<'_>,
@@ -1830,6 +2512,93 @@ impl CpuDashboard {
                         q.display_name().to_string(),
                         cfg.screenshot_quality == q,
                         HitAction::SelectScreenshotQuality(q),
+                    )
+                })
+                .collect(),
+            ),
+            DropdownId::RecordResolution => (
+                156.0,
+                1,
+                [
+                    RecordResolution::Native,
+                    RecordResolution::P1440,
+                    RecordResolution::P1080,
+                    RecordResolution::P720,
+                ]
+                .into_iter()
+                .map(|v| {
+                    (
+                        v.display_name().to_string(),
+                        cfg.record_resolution == v,
+                        HitAction::SetRecordResolution(v),
+                    )
+                })
+                .collect(),
+            ),
+            DropdownId::RecordFps => (
+                140.0,
+                1,
+                [RecordFps::Fps30, RecordFps::Fps60, RecordFps::Fps120]
+                    .into_iter()
+                    .map(|v| {
+                        (
+                            v.display_name().to_string(),
+                            cfg.record_fps == v,
+                            HitAction::SetRecordFps(v),
+                        )
+                    })
+                    .collect(),
+            ),
+            DropdownId::RecordCodec => (
+                156.0,
+                1,
+                [RecordCodec::H264, RecordCodec::H265]
+                    .into_iter()
+                    .map(|v| {
+                        (
+                            v.display_name().to_string(),
+                            cfg.record_codec == v,
+                            HitAction::SetRecordCodec(v),
+                        )
+                    })
+                    .collect(),
+            ),
+            DropdownId::RecordBitrate => (
+                156.0,
+                1,
+                [
+                    RecordBitrate::Auto,
+                    RecordBitrate::Mbps8,
+                    RecordBitrate::Mbps15,
+                    RecordBitrate::Mbps25,
+                    RecordBitrate::Mbps40,
+                    RecordBitrate::Mbps60,
+                ]
+                .into_iter()
+                .map(|v| {
+                    (
+                        v.display_name().to_string(),
+                        cfg.record_bitrate == v,
+                        HitAction::SetRecordBitrate(v),
+                    )
+                })
+                .collect(),
+            ),
+            DropdownId::RecordAudioMode => (
+                156.0,
+                1,
+                [
+                    RecordAudioMode::Off,
+                    RecordAudioMode::GameAudio,
+                    RecordAudioMode::MicOnly,
+                    RecordAudioMode::GameAndMic,
+                ]
+                .into_iter()
+                .map(|v| {
+                    (
+                        v.display_name().to_string(),
+                        cfg.record_audio_mode == v,
+                        HitAction::SetRecordAudioMode(v),
                     )
                 })
                 .collect(),
