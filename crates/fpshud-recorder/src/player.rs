@@ -74,7 +74,7 @@ pub fn build_player_ffmpeg_args(
         "-map".to_string(),
         "0:v:0".to_string(),
         "-vf".to_string(),
-        format!("scale={out_w}:{out_h}:flags=fast_bilinear,format=rgba"),
+        format!("scale={out_w}:{out_h}:flags=bicubic,format=rgba"),
     ]);
 
     if single_frame {
@@ -204,7 +204,14 @@ impl VideoPlayerSession {
         })
     }
 
-    fn kill_active_child_locked(st: &mut SharedPlayerState) {
+    /// Sends non-blocking SIGKILL to the active child; the worker thread reaps `wait()` so the UI thread never blocks!
+    fn signal_kill_active_child_locked(st: &mut SharedPlayerState) {
+        if let Some(ref mut child) = st.active_child {
+            let _ = child.kill();
+        }
+    }
+
+    fn kill_and_reap_active_child_locked(st: &mut SharedPlayerState) {
         if let Some(mut child) = st.active_child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -223,7 +230,7 @@ impl VideoPlayerSession {
                 st.single_frame_requested = true;
             }
             self.generation.fetch_add(1, Ordering::AcqRel);
-            Self::kill_active_child_locked(&mut st);
+            Self::signal_kill_active_child_locked(&mut st);
             cvar.notify_all();
         }
     }
@@ -241,7 +248,7 @@ impl VideoPlayerSession {
             st.snapshot.playing = true;
             st.single_frame_requested = false;
             self.generation.fetch_add(1, Ordering::AcqRel);
-            Self::kill_active_child_locked(&mut st);
+            Self::signal_kill_active_child_locked(&mut st);
             cvar.notify_all();
         }
     }
@@ -252,7 +259,7 @@ impl VideoPlayerSession {
             st.snapshot.playing = false;
             st.desired_seek_sec = st.snapshot.current_sec;
             self.generation.fetch_add(1, Ordering::AcqRel);
-            Self::kill_active_child_locked(&mut st);
+            Self::signal_kill_active_child_locked(&mut st);
             cvar.notify_all();
         }
     }
@@ -282,7 +289,7 @@ impl VideoPlayerSession {
                 st.single_frame_requested = true;
             }
             self.generation.fetch_add(1, Ordering::AcqRel);
-            Self::kill_active_child_locked(&mut st);
+            Self::signal_kill_active_child_locked(&mut st);
             cvar.notify_all();
         }
     }
@@ -302,7 +309,7 @@ impl VideoPlayerSession {
             if st.snapshot.playing {
                 st.desired_seek_sec = st.snapshot.current_sec;
                 self.generation.fetch_add(1, Ordering::AcqRel);
-                Self::kill_active_child_locked(&mut st);
+                Self::signal_kill_active_child_locked(&mut st);
                 cvar.notify_all();
             }
         }
@@ -346,7 +353,7 @@ impl Drop for VideoPlayerSession {
         if let Ok(mut st) = lock.lock() {
             st.quit = true;
             st.snapshot.playing = false;
-            Self::kill_active_child_locked(&mut st);
+            Self::kill_and_reap_active_child_locked(&mut st);
             cvar.notify_all();
         }
         if let Some(handle) = self.worker.take() {

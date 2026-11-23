@@ -13,6 +13,8 @@ fn test_build_player_ffmpeg_args_live_and_single_frame_and_muted() {
     let p = Path::new("/tmp/sample.mp4");
     let live_audio = build_player_ffmpeg_args(p, 1.5, 640, 360, 30.0, true, false);
     assert!(live_audio.iter().any(|a| a == "-re"));
+    assert!(live_audio.iter().any(|a| a.contains("flags=bicubic")));
+    assert!(!live_audio.iter().any(|a| a.contains("fast_bilinear")));
     assert!(live_audio.iter().any(|a| a == "pipe:1"));
     assert!(live_audio.iter().any(|a| a == "pulse"));
     assert!(live_audio.iter().any(|a| a == "FPSHUD Player"));
