@@ -55,7 +55,7 @@ curl -fL "$RELEASE_SHA_URL" -o "${TMP_DIR}/fpshud.tar.gz.sha256"
 verify_sha256 "${TMP_DIR}/fpshud.tar.gz" "${TMP_DIR}/fpshud.tar.gz.sha256"
 
 tar -xzf "${TMP_DIR}/fpshud.tar.gz" -C "$TMP_DIR"
-for required in libfpshud.so fpshud-ui VkLayer_FPSHUD_overlay.json.in; do
+for required in libfpshud.so fpshud-ui fpshud-ffmpeg VkLayer_FPSHUD_overlay.json.in; do
     if [ ! -f "${TMP_DIR}/${required}" ]; then
         echo "[!] ERROR: Release archive missing ${required}." >&2
         exit 1
@@ -65,7 +65,12 @@ done
 mkdir -p "$LIB_DIR" "$VULKAN_LAYER_DIR"
 cp -f "${TMP_DIR}/libfpshud.so" "${LIB_DIR}/libfpshud.so"
 cp -f "${TMP_DIR}/fpshud-ui" "${LIB_DIR}/fpshud-ui"
-chmod 755 "${LIB_DIR}/libfpshud.so" "${LIB_DIR}/fpshud-ui"
+cp -f "${TMP_DIR}/fpshud-ffmpeg" "${LIB_DIR}/fpshud-ffmpeg"
+chmod 755 "${LIB_DIR}/libfpshud.so" "${LIB_DIR}/fpshud-ui" "${LIB_DIR}/fpshud-ffmpeg"
+
+if [ -f "${TMP_DIR}/LICENSE.ffmpeg-gpl" ]; then
+    cp -f "${TMP_DIR}/LICENSE.ffmpeg-gpl" "${LIB_DIR}/LICENSE.ffmpeg-gpl"
+fi
 
 if [ -f "${TMP_DIR}/uninstall.sh" ]; then
     cp -f "${TMP_DIR}/uninstall.sh" "${LIB_DIR}/uninstall.sh"

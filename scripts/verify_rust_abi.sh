@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 LIB_SO="${1:-${PROJECT_DIR}/target/release/libfpshud.so}"
 UI_BIN="${2:-${PROJECT_DIR}/target/release/fpshud-ui}"
+FFMPEG_BIN="${3:-${PROJECT_DIR}/target/release/fpshud-ffmpeg}"
 
 for artifact in "$LIB_SO" "$UI_BIN"; do
     if [ ! -f "$artifact" ]; then
@@ -97,4 +98,39 @@ if [ -n "$BAD_ANY" ]; then
     echo "[i] Note: libfpshud.so has 0 hard GLIBC >= 2.36 symbols; CI Ubuntu 22.04 / cargo-zigbuild enforces FPSHUD_STRICT_GLIBC=1."
 else
     echo "[✓] GLIBC <= 2.35 portability gate PASSED (0 symbols >= GLIBC_2.36)."
+fi
+
+# 4. Bundled fpshud-ffmpeg portability gate (when present or required)
+if [ -f "$FFMPEG_BIN" ] || [ "${FPSHUD_REQUIRE_FFMPEG:-0}" = "1" ]; then
+    if [ ! -x "$FFMPEG_BIN" ]; then
+        echo "[!] ERROR: Required bundled fpshud-ffmpeg missing or not executable: $FFMPEG_BIN" >&2
+        exit 1
+    fi
+    FF_NEEDED="$(LC_ALL=C readelf -d "$FFMPEG_BIN" | grep 'NEEDED' | sed -E 's/.*\[([^]]+)\].*/\1/')"
+    FF_BANNED="$(printf '%s\n' "$FF_NEEDED" | grep -E 'libstdc\+\+|libx264|libx265|libavcodec|libavformat|libavutil|libavfilter|libswscale|libswresample' || true)"
+    if [ -n "$FF_BANNED" ]; then
+        echo "[!] ERROR: Banned DT_NEEDED dependencies found in fpshud-ffmpeg:" >&2
+        printf '%s\n' "$FF_BANNED" >&2
+        exit 1
+    fi
+    FF_ALLOWED_RE='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|libgcc_s\.so\.1|ld-linux-x86-64\.so\.2|libva\.so\.2|libva-drm\.so\.2|libdrm\.so\.2|libpulse\.so\.0|libpulse-simple\.so\.0)$'
+    FF_UNEXPECTED="$(printf '%s\n' "$FF_NEEDED" | grep -Ev "$FF_ALLOWED_RE" || true)"
+    if [ -n "$FF_UNEXPECTED" ]; then
+        echo "[!] ERROR: Unexpected DT_NEEDED dependencies in fpshud-ffmpeg (outside allowlist):" >&2
+        printf '%s\n' "$FF_UNEXPECTED" >&2
+        exit 1
+    fi
+    echo "[✓] Bundled fpshud-ffmpeg DT_NEEDED allowlist gate PASSED (0 libstdc++, 0 libx264.so, 0 libav*.so)."
+
+    BAD_FF="$(objdump -T "$FFMPEG_BIN" | grep -E 'GLIBC_2\.(3[6-9]|[4-9][0-9])' || true)"
+    if [ -n "$BAD_FF" ]; then
+        if [ "$STRICT_GLIBC" = "1" ] || [ -n "${CI:-}" ]; then
+            echo "[!] ERROR: fpshud-ffmpeg has GLIBC >= 2.36 symbol versions under strict gate:" >&2
+            printf '%s\n' "$BAD_FF" >&2
+            exit 1
+        fi
+        echo "[i] Host glibc=$HOST_GLIBC linked newer symbols in fpshud-ffmpeg (host non-strict mode)."
+    else
+        echo "[✓] Bundled fpshud-ffmpeg GLIBC <= 2.35 portability gate PASSED."
+    fi
 fi

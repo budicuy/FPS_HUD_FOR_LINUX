@@ -23,6 +23,7 @@ echo "[1/4] Testing root install.sh (release tarball + SHA256 check)..."
 
 test -x "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: libfpshud.so missing"; exit 1; }
 test -x "${TEST_HOME}/.local/lib/fpshud/fpshud-ui" || { echo "FAIL: fpshud-ui missing"; exit 1; }
+test -x "${TEST_HOME}/.local/lib/fpshud/fpshud-ffmpeg" || { echo "FAIL: fpshud-ffmpeg missing"; exit 1; }
 test -x "${TEST_HOME}/.local/lib/fpshud/uninstall.sh" || { echo "FAIL: uninstall.sh missing"; exit 1; }
 test -f "${TEST_HOME}/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json" || { echo "FAIL: Vulkan manifest missing"; exit 1; }
 grep -q "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" "${TEST_HOME}/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
@@ -43,6 +44,7 @@ rm -rf "${TEST_HOME}/.local"
 (cd "${ROOT_DIR}" && ./scripts/install.sh >/dev/null)
 test -x "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" || { echo "FAIL: dev libfpshud.so missing"; exit 1; }
 test -x "${TEST_HOME}/.local/lib/fpshud/fpshud-ui" || { echo "FAIL: dev fpshud-ui missing"; exit 1; }
+test -x "${TEST_HOME}/.local/lib/fpshud/fpshud-ffmpeg" || { echo "FAIL: dev fpshud-ffmpeg missing"; exit 1; }
 grep -q "${TEST_HOME}/.local/lib/fpshud/libfpshud.so" "${TEST_HOME}/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"
 if grep -q "/target/release/" "${TEST_HOME}/.local/share/vulkan/implicit_layer.d/VkLayer_FPSHUD_overlay.json"; then
     echo "FAIL: Vulkan manifest leaked build directory path!"

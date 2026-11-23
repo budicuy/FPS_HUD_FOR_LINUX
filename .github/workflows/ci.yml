@@ -48,11 +48,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Headless Vulkan & Xvfb Tools
+      - name: Install Headless Vulkan, Xvfb & FFmpeg Build Deps
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers vulkan-tools xvfb binutils file
+            mesa-vulkan-drivers vulkan-tools xvfb binutils file \
+            nasm pkg-config libva-dev libdrm-dev libpulse-dev curl xz-utils
+
+      - name: Cache Bundled FFmpeg Build
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/ffmpeg-build
+            target/release/fpshud-ffmpeg
+            target/release/LICENSE.ffmpeg-gpl
+          key: ubuntu-22.04-ffmpeg-${{ hashFiles('scripts/build_bundled_ffmpeg.sh') }}
 
       - name: Install Rust Toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -93,19 +103,19 @@ jobs:
         distro:
           - name: Arch Linux
             image: archlinux:latest
-            cmd: "pacman -Syu --noconfirm --needed tar gzip vulkan-icd-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && (! ./fpshud-ui --bad-arg 2>/dev/null)"
+            cmd: "pacman -Syu --noconfirm --needed tar gzip vulkan-icd-loader libva libdrm libpulse binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ldd fpshud-ffmpeg && ./fpshud-ffmpeg -version | head -n 1 && (! ./fpshud-ui --bad-arg 2>/dev/null)"
           - name: Fedora Latest
             image: fedora:latest
-            cmd: "dnf install -y tar gzip vulkan-loader binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
+            cmd: "dnf install -y tar gzip vulkan-loader libva libdrm pulseaudio-libs binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ldd fpshud-ffmpeg && ./fpshud-ffmpeg -version | head -n 1"
           - name: Debian 12 (Bookworm)
             image: debian:bookworm-slim
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 libva2 libva-drm2 libdrm2 libpulse0 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ldd fpshud-ffmpeg && ./fpshud-ffmpeg -version | head -n 1"
           - name: Ubuntu 22.04 LTS
             image: ubuntu:22.04
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 libva2 libva-drm2 libdrm2 libpulse0 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ldd fpshud-ffmpeg && ./fpshud-ffmpeg -version | head -n 1"
           - name: Ubuntu 24.04 LTS
             image: ubuntu:24.04
-            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui"
+            cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tar gzip libvulkan1 libva2 libva-drm2 libdrm2 libpulse0 binutils && tar -xzf fpshud-linux-x86_64.tar.gz && ldd libfpshud.so && ldd fpshud-ui && ldd fpshud-ffmpeg && ./fpshud-ffmpeg -version | head -n 1"
     steps:
       - name: Download Portable Artifact
         uses: actions/download-artifact@v4

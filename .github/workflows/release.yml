@@ -22,11 +22,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Headless Vulkan & Xvfb Tools
+      - name: Install Headless Vulkan, Xvfb & FFmpeg Build Deps
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers vulkan-tools xvfb binutils file
+            mesa-vulkan-drivers vulkan-tools xvfb binutils file \
+            nasm pkg-config libva-dev libdrm-dev libpulse-dev curl xz-utils
+
+      - name: Cache Bundled FFmpeg Build
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/ffmpeg-build
+            target/release/fpshud-ffmpeg
+            target/release/LICENSE.ffmpeg-gpl
+          key: ubuntu-22.04-ffmpeg-${{ hashFiles('scripts/build_bundled_ffmpeg.sh') }}
 
       - name: Install Rust Toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
@@ -70,3 +80,4 @@ jobs:
           files: |
             dist/fpshud-linux-x86_64.tar.gz
             dist/fpshud-linux-x86_64.tar.gz.sha256
+            dist/fpshud-ffmpeg-sources.tar.gz
