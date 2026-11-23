@@ -291,8 +291,8 @@ impl DaemonState {
 
     fn release_dashboard_resources(&mut self) {
         self.player_session = None;
-        self.player_frame_scratch.rgba.clear();
-        self.player_frame_scratch.rgba.shrink_to_fit();
+        self.player_frame_scratch.data.clear();
+        self.player_frame_scratch.data.shrink_to_fit();
         self.dashboard = None;
         self.overlay_rgba_scratch = Vec::new();
     }
@@ -434,8 +434,8 @@ impl DaemonState {
             }
             RecorderUiAction::ClosePlayer => {
                 self.player_session = None;
-                self.player_frame_scratch.rgba.clear();
-                self.player_frame_scratch.rgba.shrink_to_fit();
+                self.player_frame_scratch.data.clear();
+                self.player_frame_scratch.data.shrink_to_fit();
                 if let Some(portal) = &mut self.overlay_portal {
                     portal.set_fullscreen(false);
                 }
@@ -556,7 +556,14 @@ impl DaemonState {
                 p.current_sec = snap.current_sec;
                 p.error = snap.error;
                 if got_frame {
-                    std::mem::swap(&mut p.frame_rgba, &mut self.player_frame_scratch.rgba);
+                    fpshud_recorder::yuv::yuv_frame_to_rgba(
+                        self.player_frame_scratch.width,
+                        self.player_frame_scratch.height,
+                        self.player_frame_scratch.pixel_format,
+                        self.player_frame_scratch.color_space,
+                        &self.player_frame_scratch.data,
+                        &mut p.frame_rgba,
+                    );
                     p.frame_w = self.player_frame_scratch.width;
                     p.frame_h = self.player_frame_scratch.height;
                 }

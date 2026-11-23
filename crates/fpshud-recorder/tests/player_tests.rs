@@ -2,8 +2,10 @@ use fpshud_core::{RecordAudioMode, RecordBitrate, RecordCodec, RecordFps, Record
 use fpshud_recorder::capture::{ColorTransfer, RecorderPixelFormat};
 use fpshud_recorder::locate::locate_bundled_ffmpeg;
 use fpshud_recorder::player::{
-    PlayerFrame, VideoPlayerSession, build_player_ffmpeg_args, compute_player_target_size,
+    HwDecodeBackend, PlayerFrame, PlayerOutputMode, VideoPlayerSession, build_player_ffmpeg_args,
+    build_player_video_ffmpeg_args, compute_player_target_size,
 };
+use fpshud_recorder::yuv::PlayerPixelFormat;
 use fpshud_recorder::session::{FramePayload, RecorderConfig, RecorderSession, SubmittedFrame};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -30,6 +32,71 @@ fn test_build_player_ffmpeg_args_live_and_single_frame_and_muted() {
 
     assert_eq!(compute_player_target_size(1920, 1080, 960, 540), (960, 540));
     assert_eq!(compute_player_target_size(1920, 1080, 800, 600), (800, 450));
+}
+
+#[test]
+fn test_build_player_video_ffmpeg_args_hw_sw_and_odd_crop() {
+    let p = Path::new("/tmp/sample.mp4");
+
+    let (cuda_args, cw, ch, cfmt) = build_player_video_ffmpeg_args(
+        p,
+        0.0,
+        1920,
+        1080,
+        (960, 540),
+        60.0,
+        PlayerOutputMode::NativeYuv,
+        HwDecodeBackend::CudaNvdec,
+        false,
+    );
+    assert_eq!((cw, ch, cfmt), (1920, 1080, PlayerPixelFormat::Nv12));
+    assert!(cuda_args.iter().any(|a| a == "-hwaccel"));
+    assert!(cuda_args.iter().any(|a| a == "cuda"));
+    assert!(cuda_args.iter().any(|a| a == "nv12"));
+    assert!(!cuda_args.iter().any(|a| a.contains("scale=")));
+
+    let (odd_args, ow, oh, ofmt) = build_player_video_ffmpeg_args(
+        p,
+        0.0,
+        853,
+        481,
+        (960, 540),
+        30.0,
+        PlayerOutputMode::NativeYuv,
+        HwDecodeBackend::Software,
+        false,
+    );
+    assert_eq!((ow, oh, ofmt), (852, 480, PlayerPixelFormat::Yuv420p));
+    assert!(odd_args.iter().any(|a| a.contains("crop=852:480")));
+    assert!(odd_args.iter().any(|a| a == "yuv420p"));
+
+    let (scaled_args, sw, sh, sfmt) = build_player_video_ffmpeg_args(
+        p,
+        0.0,
+        1920,
+        1080,
+        (960, 540),
+        60.0,
+        PlayerOutputMode::ViewportScaledYuv,
+        HwDecodeBackend::Software,
+        false,
+    );
+    assert_eq!((sw, sh, sfmt), (960, 540, PlayerPixelFormat::Yuv420p));
+    assert!(scaled_args.iter().any(|a| a.contains("scale=960:540:flags=bicubic")));
+
+    let (vaapi_args, _, _, vfmt) = build_player_video_ffmpeg_args(
+        p,
+        0.0,
+        1920,
+        1080,
+        (1920, 1080),
+        60.0,
+        PlayerOutputMode::NativeYuv,
+        HwDecodeBackend::Vaapi,
+        false,
+    );
+    assert_eq!(vfmt, PlayerPixelFormat::Nv12);
+    assert!(vaapi_args.iter().any(|a| a.contains("hwdownload")));
 }
 
 #[test]
@@ -68,7 +135,9 @@ fn test_player_open_play_pause_seek_eof_restart_and_clean_drop() {
     let paths = rec.wait_finished();
     assert!(!paths.is_empty());
 
-    let player = VideoPlayerSession::open(paths[0].clone()).expect("open player");
+    let player =
+        VideoPlayerSession::open_with_mode(paths[0].clone(), PlayerOutputMode::ViewportScaledYuv)
+            .expect("open player");
     player.set_viewport_size(320, 180);
 
     // Wait for first decoded frame
@@ -76,14 +145,18 @@ fn test_player_open_play_pause_seek_eof_restart_and_clean_drop() {
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut got_frame = false;
     while Instant::now() < deadline {
-        if player.take_latest_frame(&mut frame) && !frame.rgba.is_empty() {
+        if player.take_latest_frame(&mut frame) && !frame.data.is_empty() {
             got_frame = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(15));
     }
-    assert!(got_frame, "player must deliver decoded RGBA frame");
-    assert_eq!(frame.rgba.len(), (frame.width * frame.height * 4) as usize);
+    assert!(got_frame, "player must deliver decoded YUV/NV12 frame");
+    assert_eq!(frame.data.len(), (frame.width * frame.height * 3 / 2) as usize);
+    assert!(matches!(
+        frame.pixel_format,
+        PlayerPixelFormat::Nv12 | PlayerPixelFormat::Yuv420p
+    ));
 
     // Pause + resize triggers single-frame shot at new resolution
     player.pause();
@@ -192,7 +265,7 @@ fn test_player_headless_pulse_failure_falls_back_to_video_only() {
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut got = false;
     while Instant::now() < deadline {
-        if player.take_latest_frame(&mut frame) && !frame.rgba.is_empty() {
+        if player.take_latest_frame(&mut frame) && !frame.data.is_empty() {
             got = true;
             break;
         }

@@ -1,19 +1,38 @@
 use crate::library::parse_ffmpeg_probe_output;
 use crate::locate::{bundled_ffmpeg_command, locate_bundled_ffmpeg, tune_pipe_capacity};
+pub use crate::yuv::{PlayerColorSpace, PlayerPixelFormat, expected_frame_byte_len};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HwDecodeBackend {
+    CudaNvdec,
+    Vaapi,
+    Vulkan,
+    #[default]
+    Software,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerOutputMode {
+    #[default]
+    NativeYuv,
+    ViewportScaledYuv,
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct PlayerFrame {
     pub width: u32,
     pub height: u32,
+    pub pixel_format: PlayerPixelFormat,
+    pub color_space: PlayerColorSpace,
     pub pts_sec: f64,
-    pub rgba: Vec<u8>,
+    pub data: Vec<u8>,
     pub generation: u64,
 }
 
@@ -28,6 +47,8 @@ pub struct PlayerSnapshot {
     pub current_sec: f64,
     pub src_width: u32,
     pub src_height: u32,
+    pub color_space: PlayerColorSpace,
+    pub hw_backend: HwDecodeBackend,
     pub error: Option<String>,
 }
 
@@ -114,6 +135,200 @@ pub fn build_player_ffmpeg_args(
     args
 }
 
+/// Probes the best working hardware video decoder backend once per process (`OnceLock`).
+pub fn probe_hw_decoder(ffmpeg_bin: &Path) -> HwDecodeBackend {
+    static CACHED: OnceLock<HwDecodeBackend> = OnceLock::new();
+    *CACHED.get_or_init(|| probe_hw_decoder_uncached(ffmpeg_bin))
+}
+
+fn probe_hw_decoder_uncached(ffmpeg_bin: &Path) -> HwDecodeBackend {
+    let tmp = std::env::temp_dir().join(format!("fpshud_hwdec_probe_{}.mp4", std::process::id()));
+    let enc_ok = bundled_ffmpeg_command(ffmpeg_bin)
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:r=30:d=0.1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-frames:v",
+            "2",
+        ])
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !enc_ok {
+        let _ = std::fs::remove_file(&tmp);
+        return HwDecodeBackend::Software;
+    }
+
+    let candidates = [
+        HwDecodeBackend::CudaNvdec,
+        HwDecodeBackend::Vaapi,
+        HwDecodeBackend::Vulkan,
+    ];
+    let mut chosen = HwDecodeBackend::Software;
+    for backend in candidates {
+        if backend == HwDecodeBackend::Vaapi && !Path::new("/dev/dri/renderD128").exists() {
+            continue;
+        }
+        let (args, _, _, _) = build_player_video_ffmpeg_args(
+            &tmp,
+            0.0,
+            64,
+            64,
+            (64, 64),
+            30.0,
+            PlayerOutputMode::NativeYuv,
+            backend,
+            true,
+        );
+        let ok = bundled_ffmpeg_command(ffmpeg_bin)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success() && o.stdout.len() >= 64 * 64 * 3 / 2);
+        if ok {
+            chosen = backend;
+            break;
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+    chosen
+}
+
+/// Builds the video-only `fpshud-ffmpeg` CLI argument vector for HW/SW decode to native `NV12` or `YUV420p`.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn build_player_video_ffmpeg_args(
+    path: &Path,
+    start_sec: f64,
+    src_w: u32,
+    src_h: u32,
+    viewport: (u32, u32),
+    playback_fps: f32,
+    mode: PlayerOutputMode,
+    backend: HwDecodeBackend,
+    single_frame: bool,
+) -> (Vec<String>, u32, u32, PlayerPixelFormat) {
+    let even_src_w = (src_w.max(2)) & !1;
+    let even_src_h = (src_h.max(2)) & !1;
+    let (out_w, out_h) = match mode {
+        PlayerOutputMode::NativeYuv => (even_src_w, even_src_h),
+        PlayerOutputMode::ViewportScaledYuv => {
+            compute_player_target_size(even_src_w, even_src_h, viewport.0, viewport.1)
+        }
+    };
+    let pix_fmt = match backend {
+        HwDecodeBackend::CudaNvdec | HwDecodeBackend::Vaapi | HwDecodeBackend::Vulkan => {
+            PlayerPixelFormat::Nv12
+        }
+        HwDecodeBackend::Software => PlayerPixelFormat::Yuv420p,
+    };
+    let pix_fmt_str = match pix_fmt {
+        PlayerPixelFormat::Nv12 => "nv12",
+        PlayerPixelFormat::Yuv420p => "yuv420p",
+        PlayerPixelFormat::Rgba8 => "rgba",
+    };
+
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+    ];
+    if !single_frame {
+        args.push("-re".to_string());
+    }
+    match backend {
+        HwDecodeBackend::CudaNvdec => {
+            args.extend([
+                "-hwaccel".to_string(),
+                "cuda".to_string(),
+                "-hwaccel_output_format".to_string(),
+                "nv12".to_string(),
+            ]);
+        }
+        HwDecodeBackend::Vaapi => {
+            args.extend([
+                "-hwaccel".to_string(),
+                "vaapi".to_string(),
+                "-hwaccel_device".to_string(),
+                "/dev/dri/renderD128".to_string(),
+                "-hwaccel_output_format".to_string(),
+                "vaapi".to_string(),
+            ]);
+        }
+        HwDecodeBackend::Vulkan => {
+            args.extend([
+                "-hwaccel".to_string(),
+                "vulkan".to_string(),
+                "-hwaccel_output_format".to_string(),
+                "vulkan".to_string(),
+            ]);
+        }
+        HwDecodeBackend::Software => {}
+    }
+
+    if start_sec > 0.001 {
+        args.push("-ss".to_string());
+        args.push(format!("{start_sec:.3}"));
+    }
+    args.push("-i".to_string());
+    args.push(path.to_string_lossy().into_owned());
+    args.extend(["-an".to_string(), "-map".to_string(), "0:v:0".to_string()]);
+
+    let mut vf_parts: Vec<String> = Vec::new();
+    if matches!(backend, HwDecodeBackend::Vaapi | HwDecodeBackend::Vulkan) {
+        vf_parts.push("hwdownload".to_string());
+        vf_parts.push("format=nv12".to_string());
+    }
+    if even_src_w != src_w || even_src_h != src_h {
+        vf_parts.push(format!("crop={even_src_w}:{even_src_h}:0:0"));
+    }
+    if mode == PlayerOutputMode::ViewportScaledYuv && (out_w != even_src_w || out_h != even_src_h) {
+        vf_parts.push(format!("scale={out_w}:{out_h}:flags=bicubic"));
+    }
+    if !vf_parts.is_empty() {
+        args.push("-vf".to_string());
+        args.push(vf_parts.join(","));
+    }
+
+    args.extend(["-pix_fmt".to_string(), pix_fmt_str.to_string()]);
+    if single_frame {
+        args.extend([
+            "-frames:v".to_string(),
+            "1".to_string(),
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "pipe:1".to_string(),
+        ]);
+    } else {
+        let fps = playback_fps.clamp(1.0, 60.0);
+        args.extend([
+            "-fps_mode".to_string(),
+            "cfr".to_string(),
+            "-r".to_string(),
+            format!("{fps:.3}"),
+            "-f".to_string(),
+            "rawvideo".to_string(),
+            "pipe:1".to_string(),
+        ]);
+    }
+
+    (args, out_w, out_h, pix_fmt)
+}
+
 /// Builds the lightweight audio-only `fpshud-ffmpeg` CLI argument vector so PulseAudio
 /// buffering never blocks rawvideo frame delivery on `pipe:1`.
 #[must_use]
@@ -162,6 +377,7 @@ struct LatestFrameSlot {
 
 pub struct VideoPlayerSession {
     path: PathBuf,
+    mode: PlayerOutputMode,
     generation: Arc<AtomicU64>,
     state: Arc<(Mutex<SharedPlayerState>, Condvar)>,
     latest: Arc<Mutex<LatestFrameSlot>>,
@@ -171,11 +387,23 @@ pub struct VideoPlayerSession {
 
 impl VideoPlayerSession {
     pub fn open(path: PathBuf) -> io::Result<Self> {
-        Self::open_with_pulse_server(path, None)
+        Self::open_with_mode(path, PlayerOutputMode::NativeYuv)
+    }
+
+    pub fn open_with_mode(path: PathBuf, mode: PlayerOutputMode) -> io::Result<Self> {
+        Self::open_with_options(path, mode, None)
     }
 
     pub fn open_with_pulse_server(
         path: PathBuf,
+        pulse_server_override: Option<String>,
+    ) -> io::Result<Self> {
+        Self::open_with_options(path, PlayerOutputMode::NativeYuv, pulse_server_override)
+    }
+
+    fn open_with_options(
+        path: PathBuf,
+        mode: PlayerOutputMode,
         pulse_server_override: Option<String>,
     ) -> io::Result<Self> {
         let ffmpeg_bin = locate_bundled_ffmpeg().ok_or_else(|| {
@@ -219,6 +447,7 @@ impl VideoPlayerSession {
                 run_player_worker(
                     ffmpeg_bin,
                     path_w,
+                    mode,
                     pulse_server_override,
                     gen_w,
                     state_w,
@@ -229,6 +458,7 @@ impl VideoPlayerSession {
 
         Ok(Self {
             path,
+            mode,
             generation,
             state,
             latest,
@@ -266,6 +496,11 @@ impl VideoPlayerSession {
                 return;
             }
             st.viewport = next;
+            // In NativeYuv mode, GPU compositor (wp_viewporter) scales the native frame:
+            // never kill/restart fpshud-ffmpeg on window resize or fullscreen toggle!
+            if self.mode == PlayerOutputMode::NativeYuv {
+                return;
+            }
             if !st.snapshot.playing {
                 st.single_frame_requested = true;
             }
@@ -400,16 +635,18 @@ impl Drop for VideoPlayerSession {
             let _ = handle.join();
         }
         if let Ok(mut slot) = self.latest.lock() {
-            slot.frame.rgba.clear();
-            slot.frame.rgba.shrink_to_fit();
+            slot.frame.data.clear();
+            slot.frame.data.shrink_to_fit();
             slot.dirty = false;
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_player_worker(
     ffmpeg_bin: PathBuf,
     path: PathBuf,
+    mode: PlayerOutputMode,
     pulse_server_override: Option<String>,
     generation: Arc<AtomicU64>,
     state: Arc<(Mutex<SharedPlayerState>, Condvar)>,
@@ -425,7 +662,7 @@ fn run_player_worker(
         .stderr(Stdio::piped())
         .output();
 
-    let (src_w, src_h, duration_sec, src_fps, has_audio) = match probe_out {
+    let (src_w, src_h, duration_sec, src_fps, has_audio, color_space) = match probe_out {
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let meta = parse_ffmpeg_probe_output(&stderr);
@@ -443,6 +680,7 @@ fn run_player_worker(
                 meta.duration_sec,
                 if meta.fps > 0.5 { meta.fps } else { 30.0 },
                 meta.audio_codec.is_some(),
+                meta.color_space,
             )
         }
         Err(err) => {
@@ -455,6 +693,7 @@ fn run_player_worker(
         }
     };
 
+    let probed_hw = probe_hw_decoder(&ffmpeg_bin);
     let (lock, cvar) = &*state;
     if let Ok(mut st) = lock.lock() {
         st.snapshot.ready = true;
@@ -462,9 +701,12 @@ fn run_player_worker(
         st.snapshot.src_height = src_h;
         st.snapshot.duration_sec = duration_sec;
         st.snapshot.has_audio = has_audio;
+        st.snapshot.color_space = color_space;
+        st.snapshot.hw_backend = probed_hw;
     }
 
     let mut audio_fallback_disabled = false;
+    let mut clip_force_software = false;
     let mut read_buf: Vec<u8> = Vec::new();
 
     loop {
@@ -498,22 +740,28 @@ fn run_player_worker(
             )
         };
 
-        let (out_w, out_h) = compute_player_target_size(src_w, src_h, viewport.0, viewport.1);
         let playback_fps = src_fps.clamp(1.0, 60.0);
         let eff_start = if single_frame && duration_sec > 0.05 {
             start_sec.min(duration_sec - 0.05).max(0.0)
         } else {
             start_sec.max(0.0)
         };
+        let active_backend = if clip_force_software {
+            HwDecodeBackend::Software
+        } else {
+            probed_hw
+        };
         // Always run video decoding without PulseAudio muxing in the same process:
         // mixing `-f pulse` with `rawvideo pipe:1` causes ~1000ms stalls in FFmpeg.
-        let args = build_player_ffmpeg_args(
+        let (args, out_w, out_h, pix_fmt) = build_player_video_ffmpeg_args(
             &path,
             eff_start,
-            out_w,
-            out_h,
+            src_w,
+            src_h,
+            viewport,
             playback_fps,
-            false,
+            mode,
+            active_backend,
             single_frame,
         );
 
@@ -575,7 +823,7 @@ fn run_player_worker(
             st.active_audio_child = audio_child;
         }
 
-        let frame_bytes = (out_w as usize) * (out_h as usize) * 4;
+        let frame_bytes = expected_frame_byte_len(out_w, out_h, pix_fmt);
         read_buf.resize(frame_bytes, 0);
         let mut frame_idx: u64 = 0;
 
@@ -594,9 +842,11 @@ fn run_player_worker(
             frame_idx += 1;
 
             if let Ok(mut slot) = latest.lock() {
-                std::mem::swap(&mut slot.frame.rgba, &mut read_buf);
+                std::mem::swap(&mut slot.frame.data, &mut read_buf);
                 slot.frame.width = out_w;
                 slot.frame.height = out_h;
+                slot.frame.pixel_format = pix_fmt;
+                slot.frame.color_space = color_space;
                 slot.frame.pts_sec = pts_sec;
                 slot.frame.generation = my_gen;
                 slot.dirty = true;
@@ -639,6 +889,19 @@ fn run_player_worker(
             };
             (v_ok, a_failed)
         };
+
+        // Per-clip automatic fallback: if HW decoder produced 0 frames (unsupported codec/profile),
+        // seamlessly retry this clip with Software yuv420p!
+        if frame_idx == 0
+            && active_backend != HwDecodeBackend::Software
+            && generation.load(Ordering::Acquire) == my_gen
+        {
+            clip_force_software = true;
+            if let Ok(mut st) = lock.lock() {
+                st.snapshot.hw_backend = HwDecodeBackend::Software;
+            }
+            continue;
+        }
 
         // If audio sidecar failed (e.g. headless CI without PulseAudio), disable audio for future seeks.
         if audio_failed_early && generation.load(Ordering::Acquire) == my_gen {

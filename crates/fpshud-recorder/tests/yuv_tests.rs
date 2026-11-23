@@ -74,7 +74,7 @@ fn test_nv12_and_yuv420p_bt709_limited_black_white_and_primary_colors() {
         &mut rgba,
     );
     assert_eq!(rgba.len(), 16);
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         assert!(px[0] <= 2 && px[1] <= 2 && px[2] <= 2 && px[3] == 255, "got {px:?}");
     }
 
@@ -88,7 +88,7 @@ fn test_nv12_and_yuv420p_bt709_limited_black_white_and_primary_colors() {
         &yuv420_white,
         &mut rgba,
     );
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         assert!(px[0] >= 253 && px[1] >= 253 && px[2] >= 253 && px[3] == 255, "got {px:?}");
     }
 
@@ -102,7 +102,7 @@ fn test_nv12_and_yuv420p_bt709_limited_black_white_and_primary_colors() {
         &nv12_red,
         &mut rgba,
     );
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         assert!(px[0] >= 245 && px[1] <= 10 && px[2] <= 10 && px[3] == 255, "got {px:?}");
     }
 
@@ -117,7 +117,7 @@ fn test_nv12_and_yuv420p_bt709_limited_black_white_and_primary_colors() {
         &mut argb,
     );
     assert_eq!(argb.len(), rgba.len());
-    for (r_px, a_px) in rgba.chunks_exact(4).zip(argb.chunks_exact(4)) {
+    for (r_px, a_px) in rgba.as_chunks::<4>().0.iter().zip(argb.as_chunks::<4>().0.iter()) {
         assert_eq!(a_px, &[r_px[2], r_px[1], r_px[0], r_px[3]]);
     }
 }
